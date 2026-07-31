@@ -142,6 +142,26 @@ func RegisterWorkspacePlainHTTP(mux *http.ServeMux, logger *slog.Logger, auth Us
 	mux.HandleFunc("/readyz", ReadinessHandler(logger, db))
 }
 
+// RegisterWorkspaceBootstrap mounts the pre-authentication discovery document.
+//
+// Separate from RegisterWorkspacePlainHTTP, and additive on purpose: only a
+// deployment that serves exactly ONE workspace can answer this. Central serves
+// many, so answering there would mean choosing a tenant before the caller has
+// authenticated — the very question this document exists to let the caller
+// resolve. Central therefore does not call this, and keeping it a separate
+// function says so without a nil argument at a call site that would otherwise
+// have to be edited in lockstep with every module bump.
+//
+// Unauthenticated by design (see WorkspaceBootstrap), and mounted beside the
+// probes for the same reason they are: a caller must be able to ask before it
+// holds a token.
+func RegisterWorkspaceBootstrap(mux *http.ServeMux, logger *slog.Logger, doc *WorkspaceBootstrap) {
+	if doc == nil {
+		return
+	}
+	mux.HandleFunc("GET /.well-known/fairtier-workspace", WorkspaceBootstrapHandler(logger, doc))
+}
+
 // WorkspaceServiceNames lists the workspace plane's Connect service names for
 // gRPC health/reflection. BoxCredentialServiceName is part of the central
 // deployment only — callers that skip its registration (the box binary)

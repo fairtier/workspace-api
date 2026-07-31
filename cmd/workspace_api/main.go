@@ -278,6 +278,9 @@ func run() error {
 		Query:           &server.QueryServer{Workspaces: resolver, Executor: duckflight.NewClient()},
 	}, authOpts)
 	server.RegisterWorkspacePlainHTTP(mux, logger, userAuth, db, nil, nil, fileDropSvc, nil, firstCORSOrigin())
+	// The pre-authentication discovery document.
+	server.RegisterWorkspaceBootstrap(mux, logger,
+		server.BootstrapFromWorkspace(ws, consoleClientID(logger), fileDropSvc != nil, false))
 
 	// Internal mux (:8081): the local dlt-worker's poll + run reporting.
 	// The worker authenticates with a token from the box's own Casdoor;
@@ -676,6 +679,20 @@ func firstCORSOrigin() string {
 		return origins[0]
 	}
 	return ""
+}
+
+// consoleClientID returns the box Casdoor app the Console signs in with.
+//
+// It is seeded by the box's console-seed job, so it is legitimately empty on a
+// box deployed before that job existed — the bootstrap document then advertises
+// no sign-in and the Console reports that, rather than starting a PKCE flow
+// that cannot complete.
+func consoleClientID(logger *slog.Logger) string {
+	id := os.Getenv("WORKSPACE_CONSOLE_CLIENT_ID")
+	if id == "" {
+		logger.Warn("WORKSPACE_CONSOLE_CLIENT_ID not set; the Console cannot sign in to this workspace")
+	}
+	return id
 }
 
 // wrapPublicHandler wraps the public mux with OTel HTTP tracing and CORS for

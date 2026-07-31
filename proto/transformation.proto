@@ -1,0 +1,239 @@
+syntax = "proto3";
+
+package transformation.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/transformation/v1;transformationv1";
+
+// TransformationService manages git-backed dbt transformation projects that
+// turn raw ingested tables into staging/marts models. The dbt project is
+// customer-authored code in a git repo — either the box-hosted Gitea repo
+// seeded at deploy time (repo_url empty) or a customer-connected repo
+// (repo_url + deploy token).
+// Execution happens on the box: the dlt-worker clones the repo at the pinned
+// ref, generates profiles.yml from box credentials, runs dbt against the
+// tenant's Lakekeeper warehouse, and reports per-model results.
+//
+// User-facing RPCs (require JWT auth, available on public port):
+//   CreateTransformation, ListTransformations, GetTransformation,
+//   UpdateTransformation, DeleteTransformation, TriggerTransformation
+//
+// Worker-facing RPCs (served on the authenticated internal port, not the
+// public one; tenant-bound service tokens):
+//   GetTransformationConfigs, ReportTransformationRun
+// They are served on the internal port only — the public mux denies them,
+// whatever customer_slug the request carries.
+service TransformationService {
+  // --- User-facing ---
+
+  // CreateTransformation defines a new dbt transformation: which repo/ref to
+  // run, and when (cron and/or after a pipeline succeeds).
+  rpc CreateTransformation(CreateTransformationRequest) returns (CreateTransformationResponse) {}
+
+  // ListTransformations returns all transformations for the authenticated
+  // user's tenant.
+  rpc ListTransformations(ListTransformationsRequest) returns (ListTransformationsResponse) {}
+
+  // GetTransformation returns a single transformation with its recent runs.
+  rpc GetTransformation(GetTransformationRequest) returns (GetTransformationResponse) {}
+
+  // UpdateTransformation modifies an existing transformation's configuration.
+  rpc UpdateTransformation(UpdateTransformationRequest) returns (UpdateTransformationResponse) {}
+
+  // DeleteTransformation permanently removes a transformation and its run
+  // history. The git repo itself is never touched.
+  rpc DeleteTransformation(DeleteTransformationRequest) returns (DeleteTransformationResponse) {}
+
+  // TriggerTransformation manually starts a run outside the schedule.
+  rpc TriggerTransformation(TriggerTransformationRequest) returns (TriggerTransformationResponse) {}
+
+  // --- Worker-facing (internal only) ---
+
+  // GetTransformationConfigs returns all enabled transformations for a
+  // customer, including the git deploy token. Called by the dlt-worker poll
+  // loop alongside GetPipelineConfigs.
+  rpc GetTransformationConfigs(GetTransformationConfigsRequest) returns (GetTransformationConfigsResponse) {}
+
+  // ReportTransformationRun records the result of a dbt run from the
+  // dlt-worker, pinned to the commit SHA that produced it.
+  rpc ReportTransformationRun(ReportTransformationRunRequest) returns (ReportTransformationRunResponse) {}
+}
+
+// --- Messages ---
+
+// Transformation represents a git-backed dbt project execution config.
+message Transformation {
+  // Unique transformation identifier (UUID).
+  string id = 1;
+  // Tenant slug this transformation belongs to.
+  string customer_slug = 2;
+  // Human-readable name.
+  string name = 3;
+  // HTTPS clone URL of the dbt project repo. Empty = the box-hosted Gitea
+  // repo (fairtier-admin/transformations), whose URL and read token live on
+  // the box only — central never stores box credentials.
+  string repo_url = 4;
+  // Branch or tag to run; resolved to a commit SHA at run time. Default "main".
+  string repo_ref = 5;
+  // Cron expression, or empty.
+  string schedule = 6;
+  // Run after this pipeline reports a successful run (UUID), or empty. The
+  // chaining happens inside the dlt-worker, which executes both.
+  string trigger_after_pipeline_id = 7;
+  // Optional dbt node selector passed as `--select` (e.g. "tag:daily").
+  string dbt_selector = 8;
+  bool enabled = 9;
+  // RFC 3339 timestamps.
+  string created_at = 10;
+  string updated_at = 11;
+  // RFC 3339 timestamp of the most recent run (any status), empty if never
+  // run. Populated by List/Get to avoid N+1 run lookups.
+  string last_run_at = 12;
+  // Status of the most recent run ("pending", "running", "success", "failed"),
+  // empty if never run.
+  string last_run_status = 13;
+}
+
+// TransformationRun records a single dbt execution, attributable to an exact
+// (code version, data state) pair via commit_sha.
+message TransformationRun {
+  // Unique run identifier (UUID).
+  string id = 1;
+  // Transformation this run belongs to.
+  string transformation_id = 2;
+  // "pending", "running", "success", or "failed".
+  string status = 3;
+  // RFC 3339 timestamps.
+  string started_at = 4;
+  string completed_at = 5;
+  // Commit SHA the repo ref resolved to for this run.
+  string commit_sha = 6;
+  // dbt node counts: models (and seeds/snapshots) executed / failed, tests
+  // executed / failed.
+  int32 models_total = 7;
+  int32 models_failed = 8;
+  int32 tests_total = 9;
+  int32 tests_failed = 10;
+  // JSON array of per-node results:
+  //   [{"name", "status", "execution_time", "message"}, ...]
+  string model_results = 11;
+  string error_message = 12;
+  string created_at = 13;
+}
+
+// --- User-facing requests/responses ---
+
+message CreateTransformationRequest {
+  string name = 1;
+  // Empty = hosted box repo.
+  string repo_url = 2;
+  string repo_ref = 3;
+  // JSON string: git deploy credentials for a connected repo, e.g.
+  // {"username": "...", "token": "..."}. Ignored (and unnecessary) for the
+  // hosted repo. Stored encrypted, only ever sent to the box worker.
+  string git_credentials = 4;
+  string schedule = 5;
+  string trigger_after_pipeline_id = 6;
+  string dbt_selector = 7;
+}
+
+message CreateTransformationResponse {
+  Transformation transformation = 1;
+}
+
+message ListTransformationsRequest {}
+
+message ListTransformationsResponse {
+  repeated Transformation transformations = 1;
+}
+
+message GetTransformationRequest {
+  string id = 1;
+}
+
+message GetTransformationResponse {
+  Transformation transformation = 1;
+  repeated TransformationRun recent_runs = 2;
+}
+
+message UpdateTransformationRequest {
+  string id = 1;
+  string name = 2;
+  string repo_url = 3;
+  string repo_ref = 4;
+  // JSON string: git deploy credentials. Empty string = keep existing.
+  string git_credentials = 5;
+  string schedule = 6;
+  string trigger_after_pipeline_id = 7;
+  string dbt_selector = 8;
+  bool enabled = 9;
+}
+
+message UpdateTransformationResponse {
+  Transformation transformation = 1;
+}
+
+message DeleteTransformationRequest {
+  string id = 1;
+}
+
+message DeleteTransformationResponse {}
+
+message TriggerTransformationRequest {
+  string id = 1;
+}
+
+message TriggerTransformationResponse {
+  TransformationRun run = 1;
+}
+
+// --- Worker-facing requests/responses ---
+
+message GetTransformationConfigsRequest {
+  string customer_slug = 1;
+}
+
+message GetTransformationConfigsResponse {
+  repeated TransformationConfigItem transformations = 1;
+}
+
+// TransformationConfigItem includes git_credentials (only sent to workers).
+message TransformationConfigItem {
+  string id = 1;
+  string name = 2;
+  // Empty = hosted box repo: the worker falls back to its TRANSFORM_REPO_URL
+  // env (the box-local Gitea URL + token minted by the dlt seed Job).
+  string repo_url = 3;
+  string repo_ref = 4;
+  // JSON string: git deploy credentials for a connected repo.
+  string git_credentials = 5;
+  string schedule = 6;
+  string trigger_after_pipeline_id = 7;
+  string dbt_selector = 8;
+  bool enabled = 9;
+  // True when a pending run exists (manual trigger).
+  bool trigger_now = 10;
+  // UUID of the pending run to update (instead of creating a new one).
+  string pending_run_id = 11;
+  // RFC 3339 timestamp of last successful run, empty if never run.
+  string last_run_at = 12;
+}
+
+message ReportTransformationRunRequest {
+  string transformation_id = 1;
+  // "success" or "failed".
+  string status = 2;
+  // RFC 3339 timestamps.
+  string started_at = 3;
+  string completed_at = 4;
+  string commit_sha = 5;
+  int32 models_total = 6;
+  int32 models_failed = 7;
+  int32 tests_total = 8;
+  int32 tests_failed = 9;
+  // JSON array of per-node results.
+  string model_results = 10;
+  string error_message = 11;
+  string run_id = 12; // Update existing run if set.
+}
+
+message ReportTransformationRunResponse {}

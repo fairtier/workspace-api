@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package query.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/query/v1;queryv1";
+
+// QueryService proxies SQL to the tenant's DuckFlight (FlightSQL) engine.
+// The target engine is always resolved server-side from the caller's own
+// workspace — requests cannot address another tenant's box. All RPCs require
+// JWT authentication.
+service QueryService {
+  // ExecuteQuery runs a single SQL statement and returns up to max_rows rows.
+  // The statement runs with the engine's own privileges (catalog access is
+  // read-only at the Lakekeeper level; session-local temp objects are fine).
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse) {}
+
+  // ListTables returns every namespace/table visible to the engine, for the
+  // Console catalog tree. Backed by a constant information_schema query.
+  rpc ListTables(ListTablesRequest) returns (ListTablesResponse) {}
+
+  // DescribeTable returns the column schema of a single table.
+  rpc DescribeTable(DescribeTableRequest) returns (DescribeTableResponse) {}
+}
+
+message ExecuteQueryRequest {
+  // The SQL statement to execute, verbatim.
+  string sql = 1;
+  // Row cap requested by the client. The server clamps to [1, 1000];
+  // 0 means the server default (500).
+  int32 max_rows = 2;
+}
+
+// ColumnInfo describes one result column.
+message ColumnInfo {
+  string name = 1;
+  // Human-readable engine type, e.g. "int64", "utf8", "decimal(18, 2)".
+  // The Console uses it for display alignment only.
+  string type = 2;
+}
+
+message ExecuteQueryResponse {
+  repeated ColumnInfo columns = 1;
+  // Each row is a JSON array with one element per column, e.g.
+  // `[1,"alice",null,"2026-01-01T00:00:00Z"]`. int64/uint64/decimal values
+  // are JSON strings to survive the double-precision boundary; timestamps
+  // are RFC 3339; nested list/struct/map values are nested JSON.
+  repeated string rows = 2;
+  // Number of rows returned (== len(rows)).
+  int64 row_count = 3;
+  // True when the result was cut off at the row cap.
+  bool truncated = 4;
+  // Engine round-trip time as measured by the platform, milliseconds.
+  int64 duration_ms = 5;
+}
+
+message ListTablesRequest {}
+
+// TableRef identifies a table in the engine's catalog.
+message TableRef {
+  // Schema/namespace the table lives in (dotted for nested namespaces).
+  string namespace = 1;
+  string name = 2;
+}
+
+message ListTablesResponse {
+  repeated TableRef tables = 1;
+}
+
+message DescribeTableRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// ColumnSchema describes one column of a described table.
+message ColumnSchema {
+  string name = 1;
+  // Engine type as reported by information_schema, e.g. "BIGINT".
+  string type = 2;
+  bool nullable = 3;
+}
+
+message DescribeTableResponse {
+  repeated ColumnSchema columns = 1;
+}

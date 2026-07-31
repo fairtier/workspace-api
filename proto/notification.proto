@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package notification.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/notification/v1;notificationv1";
+
+// NotificationService backs the Console's top-bar bell. Notifications are
+// tenant-scoped and resolved from the authenticated JWT subject.
+//
+// StreamNotifications is the push channel (Connect server-streaming — the
+// project's existing typed RPC transport, which carries the same Bearer auth
+// as every other RPC; functionally the SSE push decided for D5). The unary
+// ListNotifications/GetUnreadCount power the bell's initial load + history and
+// backfill anything a dropped stream missed.
+//
+// All RPCs require JWT auth (public port only).
+service NotificationService {
+  // ListNotifications returns the caller's recent notifications (newest first)
+  // plus the current unread count.
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse) {}
+
+  // GetUnreadCount returns just the unread badge count.
+  rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse) {}
+
+  // MarkRead marks one notification read.
+  rpc MarkRead(MarkReadRequest) returns (MarkReadResponse) {}
+
+  // MarkAllRead marks all of the caller's notifications read.
+  rpc MarkAllRead(MarkAllReadRequest) returns (MarkAllReadResponse) {}
+
+  // StreamNotifications pushes new notifications for the caller's tenant as
+  // they are raised, until the client disconnects.
+  rpc StreamNotifications(StreamNotificationsRequest) returns (stream Notification) {}
+}
+
+message Notification {
+  string id = 1;
+  // "pipeline_run" | "provisioning" | "snapshot" | "info"
+  string type = 2;
+  string title = 3;
+  string body = 4;
+  // Optional Console route name to deep-link to (e.g. "pipelines").
+  string link = 5;
+  bool read = 6;
+  // RFC 3339 timestamp.
+  string created_at = 7;
+  // heartbeat marks a keep-alive frame, not a real notification. The server
+  // emits one on connect and then periodically, so the streaming response
+  // keeps flushing bytes and never trips the Envoy/Cloudflare idle timeout
+  // (an idle stream otherwise 504s). Clients MUST ignore heartbeat frames —
+  // all other fields are unset on them.
+  bool heartbeat = 8;
+}
+
+message ListNotificationsRequest {}
+
+message ListNotificationsResponse {
+  repeated Notification notifications = 1;
+  int32 unread_count = 2;
+}
+
+message GetUnreadCountRequest {}
+
+message GetUnreadCountResponse {
+  int32 unread_count = 1;
+}
+
+message MarkReadRequest {
+  string id = 1;
+}
+
+message MarkReadResponse {}
+
+message MarkAllReadRequest {}
+
+message MarkAllReadResponse {}
+
+message StreamNotificationsRequest {}

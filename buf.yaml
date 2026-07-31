@@ -1,0 +1,16 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # The flat proto/ layout (one directory, one file per package) is
+    # deliberate: a small module with committed stubs, no per-package trees.
+    - DIRECTORY_SAME_PACKAGE
+    - PACKAGE_DIRECTORY_MATCH
+  ignore_only:
+    # StreamNotifications streams bare Notification messages; renaming the
+    # response would be a wire-breaking change for existing clients.
+    RPC_RESPONSE_STANDARD_NAME:
+      - proto/notification.proto

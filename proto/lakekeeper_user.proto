@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package lakekeeper_user.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/lakekeeper_user/v1;lakekeeperuserv1";
+
+// LakekeeperUserService manages data platform service accounts. Each service
+// account is backed by a Casdoor OIDC application and granted access to the
+// customer's Lakekeeper warehouse. All RPCs require JWT authentication.
+service LakekeeperUserService {
+  // AddUser creates a new data platform service account with the specified role
+  // and warehouse access. Returns OAuth2 client credentials (the client_secret
+  // is shown only once).
+  rpc AddUser(AddUserRequest) returns (AddUserResponse) {}
+
+  // RemoveUser deletes a data platform service account and revokes its
+  // Lakekeeper access.
+  rpc RemoveUser(RemoveUserRequest) returns (RemoveUserResponse) {}
+
+  // ListUsers returns all data platform service accounts for the tenant.
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {}
+}
+
+message AddUserRequest {
+  // Human-readable name for the service account.
+  string name = 1;
+  // Access role: "reader", "writer", or "admin".
+  string role = 2;
+  // Lakekeeper warehouse name to grant access to.
+  string warehouse_name = 3;
+}
+
+message AddUserResponse {
+  // The created service account.
+  LakekeeperUser user = 1;
+  // OAuth2 client ID for the client_credentials grant flow.
+  string client_id = 2;
+  // OAuth2 client secret. Shown only once at creation — store it securely.
+  string client_secret = 3;
+}
+
+message RemoveUserRequest {
+  // ID of the service account to remove (Casdoor app name).
+  string user_id = 1;
+}
+
+message RemoveUserResponse {}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  repeated LakekeeperUser users = 1;
+}
+
+// LakekeeperUser represents a data platform service account.
+message LakekeeperUser {
+  // Service account ID (Casdoor app name).
+  string id = 1;
+  // Human-readable name.
+  string name = 2;
+  // Access role: "reader", "writer", or "admin".
+  string role = 3;
+  // Lakekeeper warehouse the service account has access to. Empty if the
+  // warehouse could not be resolved.
+  string warehouse = 4;
+}

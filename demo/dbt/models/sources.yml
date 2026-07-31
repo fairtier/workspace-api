@@ -1,0 +1,8 @@
+version: 2
+sources:
+  - name: nyc_taxi
+    database: lake
+    schema: nyc_taxi
+    tables:
+      - name: yellow_trips
+      - name: taxi_zones

@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package snapshot.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/snapshot/v1;snapshotv1";
+
+// SnapshotService manages project directory snapshots for Rill and Cube
+// configurations. Snapshots capture the current state of an app's project
+// files and store them in S3. The FairTier API proxies requests to the
+// in-cluster snapshot sidecar. All RPCs require JWT authentication.
+//
+// NOTE: This proto is a SUPERSET of the snapshot sidecar's own proto. The
+// sidecar proto has empty request messages (no "app" field) because each
+// sidecar instance serves a single app. This proto adds the "app" field so the
+// FairTier API can route to the correct sidecar. Protobuf
+// forward-compatibility ensures the sidecar ignores the extra field.
+service SnapshotService {
+  // TriggerSnapshot creates a new snapshot of the target app's project directory.
+  // Returns "unchanged" if the directory hasn't changed since the last snapshot.
+  rpc TriggerSnapshot(TriggerSnapshotRequest) returns (TriggerSnapshotResponse) {}
+
+  // ListSnapshots returns all available snapshots for the target app,
+  // ordered by timestamp descending.
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse) {}
+}
+
+message TriggerSnapshotRequest {
+  // Target app: "rill" or "cube".
+  string app = 1;
+}
+
+message TriggerSnapshotResponse {
+  // Result status: "created", "unchanged", or "busy".
+  string status = 1;
+  // S3 object key of the snapshot archive.
+  string key = 2;
+  // Content hash (SHA-256) of the snapshot.
+  string hash = 3;
+}
+
+message ListSnapshotsRequest {
+  // Target app: "rill" or "cube".
+  string app = 1;
+}
+
+message ListSnapshotsResponse {
+  repeated Snapshot snapshots = 1;
+}
+
+// Snapshot represents a point-in-time capture of an app's project directory.
+message Snapshot {
+  // S3 object key of the snapshot archive.
+  string key = 1;
+  // Content hash (SHA-256) of the snapshot.
+  string hash = 2;
+  // RFC 3339 timestamp when the snapshot was created.
+  string timestamp = 3;
+}

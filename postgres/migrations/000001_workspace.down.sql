@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS demo_seeds;
+DROP TABLE IF EXISTS google_oauth_grants;
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS transformation_definition_renders;
+DROP TABLE IF EXISTS pipeline_definition_renders;
+DROP TABLE IF EXISTS pipeline_credential_renders;
+DROP TABLE IF EXISTS transformation_runs;
+DROP TABLE IF EXISTS transformations;
+DROP TABLE IF EXISTS pipeline_runs;
+DROP TABLE IF EXISTS pipelines;

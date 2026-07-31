@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package health.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/health/v1;healthv1";
+
+// HealthService provides application-level health checks. For standard gRPC
+// health checking (used by Kubernetes probes), use the grpc.health.v1 service.
+service HealthService {
+  // Check verifies that the FairTier API and its database are healthy.
+  rpc Check(CheckRequest) returns (CheckResponse) {}
+}
+
+message CheckRequest {}
+
+message CheckResponse {
+  // True if the service and all dependencies are operational.
+  bool healthy = 1;
+  // Human-readable status message (e.g. "ok" or error details).
+  string message = 2;
+}

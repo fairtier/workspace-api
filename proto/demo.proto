@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package demo.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/demo/v1;demov1";
+
+// DemoService seeds (and removes) the "NYC Taxi Pulse" starter demo in a
+// workspace with one click, reusing the existing pipeline / file-drop /
+// box-repo / transformation machinery — no new box-side components.
+//
+// A load creates two pipelines (a filesystem backfill of the public NYC TLC
+// parquet from a platform-held demo bucket, and a file-drop of the zone
+// lookup), commits the dbt models to the box `transformations` repo and the
+// Rill files to the box `rill` repo, then triggers the ingest — on whose
+// success the dlt-worker runs the chained dbt build. The customer never sees
+// the demo bucket credential (injected server-side).
+//
+// All RPCs are user-facing (JWT auth on the public port). The demo requires a
+// dedicated-VM box (box repos) and a configured demo bucket; where either is
+// missing, LoadDemoProject returns FAILED_PRECONDITION/UNIMPLEMENTED and
+// GetDemoStatus reports available=false so the Console hides the button.
+service DemoService {
+  // GetDemoStatus reports whether the demo can be loaded here and whether it
+  // already has been (drives the Console "Load / Remove demo project" button).
+  rpc GetDemoStatus(GetDemoStatusRequest) returns (GetDemoStatusResponse) {}
+
+  // LoadDemoProject seeds the demo into the caller's workspace. Idempotent by
+  // rejection: a second call while a demo is already loaded returns
+  // ALREADY_EXISTS. On partial failure it unwinds what it created so the load
+  // can be retried from a clean slate.
+  rpc LoadDemoProject(LoadDemoProjectRequest) returns (LoadDemoProjectResponse) {}
+
+  // RemoveDemoProject deletes the two demo pipelines (their files pruned from
+  // the pipelines repo by the mirror), the demo transformation, and the seed
+  // commits' files from the transformations/rill repos — keyed strictly by
+  // what the load recorded, so mixed-in customer work is left intact.
+  //
+  // Warehouse data (the lake.nyc_taxi / staging / marts tables) is NOT dropped
+  // here: dropping Iceberg namespaces needs a validated DDL path (the same
+  // constraint the manual customer-erasure procedure runs into).
+  // removed_warehouse stays false and the tables are left for a manual sweep.
+  rpc RemoveDemoProject(RemoveDemoProjectRequest) returns (RemoveDemoProjectResponse) {}
+}
+
+// DemoStatus summarizes the demo state of a workspace.
+message DemoStatus {
+  // available is true when the demo can be loaded here: a demo bucket is
+  // configured on the server and the workspace is on a substrate that supports
+  // it (dedicated-VM box repos).
+  bool available = 1;
+  // loaded is true when a demo has been fully seeded and not removed.
+  bool loaded = 2;
+  // loading is true while a background load is in progress. The load runs off
+  // the request (it does too much serial box I/O for an HTTP timeout), so
+  // LoadDemoProject returns with loading=true and the Console polls
+  // GetDemoStatus until loaded flips true.
+  bool loading = 8;
+  // sizing tier the load used ("minimal" | "default" | "full"), empty if not
+  // loaded.
+  string tier = 3;
+  // IDs of the seeded artifacts (empty if not loaded), for deep-linking.
+  string trips_pipeline_id = 4;
+  string zones_pipeline_id = 5;
+  string transformation_id = 6;
+  // RFC 3339 timestamp of the load, empty if not loaded.
+  string loaded_at = 7;
+}
+
+message GetDemoStatusRequest {}
+
+message GetDemoStatusResponse {
+  DemoStatus status = 1;
+}
+
+message LoadDemoProjectRequest {
+  // Sizing tier: "minimal" (default, ~41M rows), "default" (~118M), or "full"
+  // (~255M). Empty picks the server default (minimal). The pipeline is the
+  // customer's own after seeding — widening the glob is a one-field edit.
+  string tier = 1;
+}
+
+message LoadDemoProjectResponse {
+  DemoStatus status = 1;
+}
+
+message RemoveDemoProjectRequest {}
+
+message RemoveDemoProjectResponse {
+  // False: warehouse tables are intentionally left (see RemoveDemoProject doc).
+  bool removed_warehouse = 1;
+}

@@ -1,0 +1,24 @@
+type: metrics_view
+title: NYC Taxi Pulse
+model: daily_zone
+timeseries: pickup_date
+dimensions:
+  - name: pickup_borough
+    column: pickup_borough
+  - name: pickup_zone
+    column: pickup_zone
+measures:
+  - name: trips
+    expression: sum(trips)
+    format_preset: humanize
+  - name: revenue
+    expression: sum(revenue)
+    format_preset: currency_usd
+  - name: avg_fare
+    expression: sum(revenue) / sum(trips)
+    format_preset: currency_usd
+  - name: avg_tip_ratio
+    expression: avg(avg_tip_ratio)
+    format_preset: percentage
+  - name: avg_speed_mph
+    expression: avg(avg_speed_mph)

@@ -44,8 +44,15 @@ WORKSPACE_CASDOOR_ISSUER=https://auth.customer-acme.example.com \
 2. `make proto` (needs `buf`, `protoc-gen-go`, `protoc-gen-connect-go`).
 3. Commit the generated files — CI does not run codegen.
 
+This module generates **Go only**. Clients in other languages generate from
+these `.proto` files directly — `buf` accepts this module as an input, including
+the copy in a Go module cache (`go list -m -f '{{.Dir}}'`), which pins the stubs
+to the same version the Go build uses. Any wire change therefore needs a tagged
+release before downstream clients can pick it up.
+
 Comments in `.proto` files are copied verbatim into the generated stubs that
-clients read, so keep them accurate and publishable.
+clients read, and the full descriptor — `go_package` included — is embedded in
+some generators' output, so keep them accurate and publishable.
 
 ## Database
 

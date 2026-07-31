@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package workspace_health.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/workspace_health/v1;workspacehealthv1";
+
+// HealthService reports whether this workspace plane and the dependencies it
+// owns are serving. It is deliberately its own proto package rather than a
+// generic "health.v1": a control plane that mounts the workspace plane inside
+// its own process has a health service of its own, and two files claiming the
+// same package cannot both be linked into one binary.
+//
+// This is an application-level check meant for operators and dashboards. For
+// container probes use the plain HTTP /healthz and /readyz endpoints, and for
+// standard gRPC health checking use grpc.health.v1.
+service HealthService {
+  // Check verifies that the workspace plane and its database are healthy.
+  // It always returns OK — an unhealthy plane is reported in the payload, not
+  // as an RPC error, so callers can tell "unhealthy" from "unreachable".
+  rpc Check(CheckRequest) returns (CheckResponse) {}
+}
+
+message CheckRequest {}
+
+message CheckResponse {
+  // True if the workspace plane and all dependencies are operational.
+  bool healthy = 1;
+  // Human-readable status message (e.g. "ok" or error details).
+  string message = 2;
+  // Build version of the running workspace plane, for confirming which
+  // revision answered. Empty in development builds.
+  string version = 3;
+}

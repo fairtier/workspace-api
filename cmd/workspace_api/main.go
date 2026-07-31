@@ -262,6 +262,7 @@ func run() error {
 
 	mux := http.NewServeMux()
 	server.RegisterWorkspacePlane(mux, server.WorkspacePlaneServers{
+		Health:          &server.HealthServer{DB: db},
 		LakekeeperUsers: &server.LakekeeperUserServer{Service: lakekeeperUserSvc},
 		Warehouses:      &server.WarehouseServer{Service: warehouseSvc},
 		Snapshots:       &server.SnapshotServer{Workspaces: resolver, Snapshots: boxCreds, HTTPClient: http.DefaultClient},

@@ -12,6 +12,8 @@ services that run against a single data workspace:
   [Lakekeeper](https://lakekeeper.io) principals.
 - **Snapshots**, **notifications**, **file drop**, a loadable starter project,
   and an editor for the workspace's own git repositories.
+- **Health** — an unauthenticated `workspace_health.v1.HealthService`
+  alongside the plain HTTP `/healthz` and `/readyz` probes.
 
 Everything is exposed over [ConnectRPC](https://connectrpc.com), so the same
 service definitions serve gRPC, gRPC-Web, and plain HTTP/JSON clients.

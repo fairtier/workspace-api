@@ -20,6 +20,7 @@ import (
 	"github.com/fairtier/workspace-api/proto/snapshot/v1/snapshotv1connect"
 	"github.com/fairtier/workspace-api/proto/transformation/v1/transformationv1connect"
 	"github.com/fairtier/workspace-api/proto/warehouse/v1/warehousev1connect"
+	"github.com/fairtier/workspace-api/proto/workspace_health/v1/workspacehealthv1connect"
 	"github.com/fairtier/workspace-api/workspace"
 )
 
@@ -31,6 +32,10 @@ import (
 
 // WorkspacePlaneServers bundles the workspace plane's public-mux handlers.
 type WorkspacePlaneServers struct {
+	// Health answers workspace_health.v1.HealthService. Every deployment of
+	// this plane has one — it is mounted without the auth interceptor, so a
+	// probe never needs a token.
+	Health          *HealthServer
 	LakekeeperUsers *LakekeeperUserServer
 	Warehouses      *WarehouseServer
 	Snapshots       *SnapshotServer
@@ -60,6 +65,12 @@ func RegisterWorkspacePlane(mux *http.ServeMux, s WorkspacePlaneServers, opts co
 	if s.Transformations == nil || s.Transformations.worker.internal {
 		panic("RegisterWorkspacePlane: Transformations must be a public-mux TransformationServer")
 	}
+	if s.Health == nil {
+		panic("RegisterWorkspacePlane: Health must be set")
+	}
+	// Deliberately without opts: a health check that needs a JWT is useless to
+	// the operator asking whether auth itself is up.
+	mux.Handle(workspacehealthv1connect.NewHealthServiceHandler(s.Health))
 	mux.Handle(lakekeeperuserv1connect.NewLakekeeperUserServiceHandler(s.LakekeeperUsers, opts))
 	mux.Handle(warehousev1connect.NewWarehouseServiceHandler(s.Warehouses, opts))
 	mux.Handle(snapshotv1connect.NewSnapshotServiceHandler(s.Snapshots, opts))
@@ -136,6 +147,7 @@ func RegisterWorkspacePlainHTTP(mux *http.ServeMux, logger *slog.Logger, auth Us
 // deployment only — callers that skip its registration (the box binary)
 // filter it out.
 var WorkspaceServiceNames = []string{
+	workspacehealthv1connect.HealthServiceName,
 	lakekeeperuserv1connect.LakekeeperUserServiceName,
 	warehousev1connect.WarehouseServiceName,
 	snapshotv1connect.SnapshotServiceName,

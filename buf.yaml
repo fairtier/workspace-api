@@ -14,13 +14,3 @@ lint:
     # response would be a wire-breaking change for existing clients.
     RPC_RESPONSE_STANDARD_NAME:
       - proto/notification.proto
-breaking:
-  use:
-    - FILE
-  ignore:
-    # health.v1.HealthService was never served by this repo — the workspace
-    # plane's probes are HTTP /healthz, /readyz and grpc.health.v1 — and has
-    # moved to the control plane under the same proto package, so the wire
-    # path /health.v1.HealthService/Check is unchanged for clients. Remove
-    # this entry once the deletion has landed on the default branch.
-    - proto/health.proto

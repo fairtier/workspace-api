@@ -10,7 +10,7 @@ replace github.com/casdoor/casdoor-go-sdk v1.44.0 => github.com/prochac/casdoor-
 require (
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/cors v0.1.0
-	connectrpc.com/grpchealth v1.4.0
+	connectrpc.com/grpchealth v1.5.0
 	connectrpc.com/grpcreflect v1.3.0
 	connectrpc.com/otelconnect v0.9.0
 	filippo.io/age v1.3.1

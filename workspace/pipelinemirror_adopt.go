@@ -40,29 +40,51 @@ func (m *PipelineMirror) AdoptCustomer(ctx context.Context, customerSlug string)
 		return nil // no bookkeeping — cannot tell foreign commits apart
 	}
 
-	tree, err := client.ListTree(ctx, pipelinesRepo)
+	st, err := m.loadAdoptState(ctx, client, customerSlug)
 	if err != nil {
-		return fmt.Errorf("list %s tree: %w", pipelinesRepo, err)
+		return err
 	}
-	yamlTree, ageTree := partitionPipelineTree(tree)
-
-	pipelines, err := m.Pipelines.ListPipelinesByCustomer(ctx, customerSlug)
-	if err != nil {
-		return fmt.Errorf("list pipelines: %w", err)
-	}
-	defRenders, err := m.DefinitionRenders.GetPipelineDefinitionRenders(ctx, customerSlug)
-	if err != nil {
-		return fmt.Errorf("get definition renders: %w", err)
+	// Hydration first (Phase 3B): rows created here match the tree exactly,
+	// so the adopt loop below has nothing left to do for them — and working
+	// off the same snapshot keeps the pass at one tree listing.
+	if err := m.importUnrendered(ctx, client, customerSlug, st); err != nil {
+		return err
 	}
 
-	for i := range pipelines {
-		p := &pipelines[i]
-		if err := m.adoptDefinition(ctx, client, p, defRenders, yamlTree); err != nil {
+	for i := range st.pipelines {
+		p := &st.pipelines[i]
+		if err := m.adoptDefinition(ctx, client, p, st.renders, st.yamlTree); err != nil {
 			return err
 		}
 	}
-	m.flagForeignCredentialFiles(ctx, customerSlug, pipelines, ageTree)
+	m.flagForeignCredentialFiles(ctx, customerSlug, st.pipelines, st.ageTree)
 	return nil
+}
+
+// pipelineAdoptState is the snapshot one adopt pass works from: the two
+// managed file sets in the repo tree, and the rows they map onto.
+type pipelineAdoptState struct {
+	pipelines []Pipeline
+	renders   map[PipelineID]PipelineDefinitionRender
+	yamlTree  map[string]string
+	ageTree   map[string]string
+}
+
+func (m *PipelineMirror) loadAdoptState(ctx context.Context, client RepoFileClient, customerSlug string) (*pipelineAdoptState, error) {
+	tree, err := client.ListTree(ctx, pipelinesRepo)
+	if err != nil {
+		return nil, fmt.Errorf("list %s tree: %w", pipelinesRepo, err)
+	}
+	st := &pipelineAdoptState{}
+	st.yamlTree, st.ageTree = partitionPipelineTree(tree)
+
+	if st.pipelines, err = m.Pipelines.ListPipelinesByCustomer(ctx, customerSlug); err != nil {
+		return nil, fmt.Errorf("list pipelines: %w", err)
+	}
+	if st.renders, err = m.DefinitionRenders.GetPipelineDefinitionRenders(ctx, customerSlug); err != nil {
+		return nil, fmt.Errorf("get definition renders: %w", err)
+	}
+	return st, nil
 }
 
 // adoptDefinition inspects one pipeline's rendered definition for a foreign

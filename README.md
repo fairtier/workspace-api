@@ -18,6 +18,11 @@ services that run against a single data workspace:
 Everything is exposed over [ConnectRPC](https://connectrpc.com), so the same
 service definitions serve gRPC, gRPC-Web, and plain HTTP/JSON clients.
 
+The git repositories are not a backup of the database — they are where pipeline
+and transformation definitions live. A workspace pointed at repositories that
+already hold definitions loads them on its first sweep, ids intact, so the
+database can be rebuilt from the repositories alone.
+
 ## Why this is a separate project
 
 This module **never depends on FairTier's hosted control plane** — billing,
@@ -87,6 +92,7 @@ for co-located workers and should not be published.
 | `CORS_ALLOWED_ORIGINS` | | Comma-separated browser origins allowed to call the API (your Console's origin). Unset disables cross-origin browser access entirely. |
 | `FILEDROP_MAX_BYTES` | | Upload size ceiling for file drop. |
 | `PIPELINES_GIT_PRIMARY`, `TRANSFORMATIONS_GIT_PRIMARY` | | Treat the git repository as the source of truth for definitions. |
+| `WORKSPACE_IMPORT_FROM_REPO` | | On by default: definitions already in the repositories are loaded into an empty database on the first sweep, keeping their ids. Set it to `off` to start with whatever the database holds instead. |
 | `GOOGLE_OAUTH_CLIENT_ID` | | Enables the Google Sheets "Sign in with Google" source flow. |
 | `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` (plus `ANTHROPIC_MODEL` / `DEEPSEEK_MODEL`) | | Enables the optional AI drafting assists. Without a key those endpoints stay unavailable. |
 | `DEMO_R2_*` | | Object storage holding the sample dataset for the starter project. |

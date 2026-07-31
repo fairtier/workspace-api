@@ -63,6 +63,12 @@ type PipelineMirror struct {
 	// is left to the box until a Console credential edit reclaims it.
 	// Optional: nil keeps the pre-2B re-render behavior.
 	Ownership PipelineCredentialOwnershipStore
+	// Importer, when set, lets the adopt pass CREATE rows for definition
+	// files this database does not track yet — hydration for a box whose
+	// workspace database starts empty (Phase 3B, see
+	// pipelinemirror_import.go). Optional, and deliberately left nil
+	// centrally, where the Console is the only create path.
+	Importer PipelineImporter
 	// OAuthClientID/OAuthClientSecret mirror PipelineService's serve-time
 	// injection for OAuth google_sheets credentials: the stored row lacks
 	// the central client pair, but the worker needs it to refresh tokens,
@@ -75,6 +81,10 @@ type PipelineMirror struct {
 	// BoxRepoService.NewClient).
 	NewClient func(baseURL, username, token string) RepoFileClient
 	Logger    *slog.Logger
+
+	// importSkips dedupes the import pass's "could not import" warnings
+	// across sweeps.
+	importSkips importSkips
 }
 
 // credentialFingerprintContext domain-separates the mirror's fingerprints

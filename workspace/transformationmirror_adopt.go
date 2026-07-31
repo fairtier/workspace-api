@@ -40,27 +40,46 @@ func (m *TransformationMirror) AdoptCustomer(ctx context.Context, customerSlug s
 		return nil // no bookkeeping — cannot tell foreign commits apart
 	}
 
-	tree, err := client.ListTree(ctx, transformationsRepo)
+	st, err := m.loadAdoptState(ctx, client, customerSlug)
 	if err != nil {
-		return fmt.Errorf("list %s tree: %w", transformationsRepo, err)
+		return err
 	}
-	yamlTree := transformationTreeYAML(tree)
-
-	transformations, err := m.Transformations.ListTransformationsByCustomer(ctx, customerSlug)
-	if err != nil {
-		return fmt.Errorf("list transformations: %w", err)
-	}
-	defRenders, err := m.DefinitionRenders.GetTransformationDefinitionRenders(ctx, customerSlug)
-	if err != nil {
-		return fmt.Errorf("get definition renders: %w", err)
+	// Hydration first (Phase 3B): rows created here match the tree exactly,
+	// so the adopt loop below has nothing left to do for them.
+	if err := m.importUnrendered(ctx, client, customerSlug, st); err != nil {
+		return err
 	}
 
-	for i := range transformations {
-		if err := m.adoptDefinition(ctx, client, &transformations[i], defRenders, yamlTree); err != nil {
+	for i := range st.transformations {
+		if err := m.adoptDefinition(ctx, client, &st.transformations[i], st.renders, st.yamlTree); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// transformationAdoptState is the snapshot one adopt pass works from: the
+// managed transformations/*.yaml files, and the rows they map onto.
+type transformationAdoptState struct {
+	transformations []Transformation
+	renders         map[TransformationID]TransformationDefinitionRender
+	yamlTree        map[string]string
+}
+
+func (m *TransformationMirror) loadAdoptState(ctx context.Context, client RepoFileClient, customerSlug string) (*transformationAdoptState, error) {
+	tree, err := client.ListTree(ctx, transformationsRepo)
+	if err != nil {
+		return nil, fmt.Errorf("list %s tree: %w", transformationsRepo, err)
+	}
+	st := &transformationAdoptState{yamlTree: transformationTreeYAML(tree)}
+
+	if st.transformations, err = m.Transformations.ListTransformationsByCustomer(ctx, customerSlug); err != nil {
+		return nil, fmt.Errorf("list transformations: %w", err)
+	}
+	if st.renders, err = m.DefinitionRenders.GetTransformationDefinitionRenders(ctx, customerSlug); err != nil {
+		return nil, fmt.Errorf("get definition renders: %w", err)
+	}
+	return st, nil
 }
 
 // adoptDefinition inspects one transformation's rendered file for a foreign

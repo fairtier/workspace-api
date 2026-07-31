@@ -69,10 +69,20 @@ type TransformationMirror struct {
 	// Notifications, when set, raises the in-app notifications for
 	// overwritten, adopted, and refused out-of-band edits. Optional.
 	Notifications Notifier
+	// Importer, when set, lets the adopt pass CREATE rows for definition
+	// files this database does not track yet — hydration for a box whose
+	// workspace database starts empty (Phase 3B, see
+	// transformationmirror_import.go). Optional, and deliberately left nil
+	// centrally, where the Console is the only create path.
+	Importer TransformationImporter
 	// NewClient builds a Gitea client for a box (same factory shape as
 	// PipelineMirror.NewClient).
 	NewClient func(baseURL, username, token string) RepoFileClient
 	Logger    *slog.Logger
+
+	// importSkips dedupes the import pass's "could not import" warnings
+	// across sweeps.
+	importSkips importSkips
 }
 
 // transformationFile is the rendered YAML shape of one transformation

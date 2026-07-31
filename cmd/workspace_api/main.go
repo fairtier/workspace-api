@@ -197,6 +197,8 @@ func run() error {
 		NewClient:         gitea.NewClient,
 		Logger:            logger,
 	}
+	wireRepoImport(pipelineMirror, transformationMirror, repo, logger)
+
 	transformationSvc := &workspace.TransformationService{
 		Workspaces:      resolver,
 		Transformations: repo,
@@ -324,6 +326,23 @@ func run() error {
 	internalServer := &http.Server{Addr: ":" + internalPort, Handler: tracedInternalMux, Protocols: h2cProtocols}
 
 	return serveAndShutdown(ctx, cancel, logger, httpServer, internalServer, internalPort)
+}
+
+// wireRepoImport turns on hydration (control-plane/workspace-split Phase 3B).
+// This database starts empty on a new box, and adoption only ever looks at
+// files it holds a render row for — so without an import pass the box would
+// serve nothing until every pipeline and transformation had been saved through
+// it once. Wiring the importer lets the adopt sweep read the repo's untracked
+// definition files back into rows with their ids intact; the pass stays
+// read-only toward the repo. WORKSPACE_IMPORT_FROM_REPO=off disables it.
+// Central never wires this: there the Console is the only create path.
+func wireRepoImport(pipelines *workspace.PipelineMirror, transformations *workspace.TransformationMirror, repo *postgres.Repository, logger *slog.Logger) {
+	if os.Getenv("WORKSPACE_IMPORT_FROM_REPO") == "off" {
+		logger.Info("repo import disabled: definitions already in the workspace repositories will not be loaded into this database")
+		return
+	}
+	pipelines.Importer = repo
+	transformations.Importer = repo
 }
 
 // backgroundSweeps carries the wiring for the periodic sweeps.

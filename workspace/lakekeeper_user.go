@@ -60,6 +60,18 @@ func displayName(slug, casdoorAppName string) string {
 	return casdoorAppName
 }
 
+// isDataPlatformApp reports whether casdoorAppName is a data platform user
+// app that AddUser could have created for the given workspace — i.e. it lies
+// in the workspace's own "lk-<slug>-" namespace and has a non-empty user
+// name. It is the authorization boundary for RemoveUser: Casdoor deletes an
+// application by owner-qualified name alone, so any other name (the
+// workspace's OIDC app, the dlt-worker's service account, another tenant's
+// namespace on a shared Casdoor) must never reach the delete call.
+func isDataPlatformApp(slug, casdoorAppName string) bool {
+	name, ok := strings.CutPrefix(casdoorAppName, "lk-"+slug+"-")
+	return ok && name != ""
+}
+
 // lakekeeperID returns the Lakekeeper principal ID for a Casdoor application.
 // Casdoor client_credentials JWT has sub = "admin/<app_name>".
 func lakekeeperID(appName string) string {
@@ -161,6 +173,10 @@ func (s *LakekeeperUserService) RemoveUser(ctx context.Context, callerID core.Us
 		return ErrCustomerNotProvisioned
 	}
 
+	if !isDataPlatformApp(ws.Slug, userID) {
+		return core.ErrUserNotFound
+	}
+
 	token, err := s.Tokens.GetClientToken(ctx, ws.CasdoorIssuer, ws.OIDCClientID, ws.OIDCClientSecret)
 	if err != nil {
 		return fmt.Errorf("get lakekeeper token: %w", err)
@@ -168,15 +184,8 @@ func (s *LakekeeperUserService) RemoveUser(ctx context.Context, callerID core.Us
 
 	lkID := lakekeeperID(userID)
 
-	warehouses, err := s.Lakekeeper.ListWarehouses(ctx, ws.LakekeeperServiceURL(), token)
-	if err != nil {
-		return fmt.Errorf("list warehouses: %w", err)
-	}
-
-	for _, w := range warehouses {
-		if err := s.Lakekeeper.RemoveWarehouseRole(ctx, ws.LakekeeperServiceURL(), token, w.ID, lkID); err != nil {
-			return fmt.Errorf("remove warehouse role for %s: %w", w.Name, err)
-		}
+	if err := s.removeWarehouseRoles(ctx, ws, token, lkID); err != nil {
+		return err
 	}
 
 	if err := s.Lakekeeper.DeleteUser(ctx, ws.LakekeeperServiceURL(), token, lkID); err != nil {
@@ -194,6 +203,22 @@ func (s *LakekeeperUserService) RemoveUser(ctx context.Context, callerID core.Us
 		s.Logger.ErrorContext(ctx, "failed to sync audiences after user removal", "customer", ws.Slug, "error", err)
 	}
 
+	return nil
+}
+
+// removeWarehouseRoles strips the principal's role from every warehouse,
+// ensuring full cleanup before the principal itself is deleted.
+func (s *LakekeeperUserService) removeWarehouseRoles(ctx context.Context, ws *Workspace, token, lkID string) error {
+	warehouses, err := s.Lakekeeper.ListWarehouses(ctx, ws.LakekeeperServiceURL(), token)
+	if err != nil {
+		return fmt.Errorf("list warehouses: %w", err)
+	}
+
+	for _, w := range warehouses {
+		if err := s.Lakekeeper.RemoveWarehouseRole(ctx, ws.LakekeeperServiceURL(), token, w.ID, lkID); err != nil {
+			return fmt.Errorf("remove warehouse role for %s: %w", w.Name, err)
+		}
+	}
 	return nil
 }
 

@@ -34,10 +34,9 @@ type PipelineServer struct {
 }
 
 // NewInternalPipelineServer builds the worker-facing PipelineServer for the
-// internal mux, in the given INTERNAL_AUTH_MODE. No FileDrop: the worker only
-// polls configs and reports runs.
-func NewInternalPipelineServer(svc *workspace.PipelineService, internalAuthMode string) *PipelineServer {
-	return &PipelineServer{Service: svc, worker: newWorkerAuth(internalAuthMode)}
+// internal mux. No FileDrop: the worker only polls configs and reports runs.
+func NewInternalPipelineServer(svc *workspace.PipelineService) *PipelineServer {
+	return &PipelineServer{Service: svc, worker: newWorkerAuth()}
 }
 
 // --- User-facing RPCs ---
@@ -319,7 +318,7 @@ func (s *PipelineServer) GetPipelineConfigs(ctx context.Context, req *connect.Re
 	if err != nil {
 		return nil, err
 	}
-	if callerSlug != "" && callerSlug != req.Msg.CustomerSlug {
+	if callerSlug != req.Msg.CustomerSlug {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("token tenant does not match customer_slug"))
 	}
 

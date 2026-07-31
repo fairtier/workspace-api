@@ -132,7 +132,10 @@ type oauthResult struct {
 
 // oauthCallbackTmpl posts the result to the opener (restricted to the Console
 // origin) and closes the popup. json.Marshal HTML-escapes <, >, & so the
-// embedded payload cannot break out of the <script> block.
+// embedded payload cannot break out of the <script> block. With no known
+// Console origin (CORS_ALLOWED_ORIGINS unset) the message is not sent at
+// all — a "*" target would hand the grant ID to whatever page opened the
+// popup.
 var oauthCallbackTmpl = template.Must(template.New("cb").Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>Connecting…</title></head>
 <body style="font-family:system-ui;padding:2rem;color:#334155">
@@ -142,8 +145,8 @@ var oauthCallbackTmpl = template.Must(template.New("cb").Parse(`<!doctype html>
   var payload = {{.Payload}};
   var target = {{.Origin}};
   try {
-    if (window.opener) {
-      window.opener.postMessage({ type: "fairtier-google-oauth", result: payload }, target || "*");
+    if (window.opener && target) {
+      window.opener.postMessage({ type: "fairtier-google-oauth", result: payload }, target);
     }
   } catch (e) {}
   setTimeout(function () { window.close(); }, 300);

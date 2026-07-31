@@ -2,8 +2,10 @@ package workspace_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/fairtier/workspace-api/core"
@@ -25,14 +27,18 @@ func (m *mockResolver) GetWorkspaceByUser(context.Context, core.UserID) (*worksp
 
 // mockCasdoorAppManager satisfies workspace.CasdoorAppManager.
 type mockCasdoorAppManager struct {
-	listAppsFn func(ctx context.Context, org string) ([]core.CasdoorApp, error)
+	listAppsFn  func(ctx context.Context, org string) ([]core.CasdoorApp, error)
+	deletedApps []string
 }
 
 func (m *mockCasdoorAppManager) AddApp(context.Context, string, string) (*core.CasdoorApp, error) {
 	return &core.CasdoorApp{Name: "lk-acme-jane", ClientID: "app-cid", ClientSecret: "app-secret"}, nil
 }
 
-func (m *mockCasdoorAppManager) DeleteApp(context.Context, string, string) error { return nil }
+func (m *mockCasdoorAppManager) DeleteApp(_ context.Context, _, name string) error {
+	m.deletedApps = append(m.deletedApps, name)
+	return nil
+}
 
 func (m *mockCasdoorAppManager) ListApps(ctx context.Context, org string) ([]core.CasdoorApp, error) {
 	return m.listAppsFn(ctx, org)
@@ -49,6 +55,7 @@ func (m *mockTokenProvider) GetClientToken(context.Context, string, string, stri
 type mockLakekeeperClient struct {
 	listWarehousesFn          func(ctx context.Context, url, token string) ([]core.Warehouse, error)
 	getWarehouseAssignmentsFn func(ctx context.Context, url, token, warehouseID string) ([]core.WarehouseAssignment, error)
+	deletedUsers              []string
 }
 
 func (m *mockLakekeeperClient) CreateWarehouse(context.Context, string, string, string, core.S3Config) (string, error) {
@@ -67,7 +74,8 @@ func (m *mockLakekeeperClient) CreateUser(context.Context, string, string, strin
 	return nil
 }
 
-func (m *mockLakekeeperClient) DeleteUser(context.Context, string, string, string) error {
+func (m *mockLakekeeperClient) DeleteUser(_ context.Context, _, _, id string) error {
+	m.deletedUsers = append(m.deletedUsers, id)
 	return nil
 }
 
@@ -109,6 +117,84 @@ func TestAddUser_NilAudienceUpdater(t *testing.T) {
 	}
 	if got.ClientID != "app-cid" {
 		t.Errorf("ClientID = %q, want app-cid", got.ClientID)
+	}
+}
+
+// TestRemoveUser_RejectsForeignAppNames pins the RemoveUser authorization
+// boundary: the Casdoor app deletion is keyed on the name alone, so any
+// user_id outside the workspace's own "lk-<slug>-" namespace must be
+// rejected before Lakekeeper roles or the Casdoor app are touched.
+func TestRemoveUser_RejectsForeignAppNames(t *testing.T) {
+	for _, userID := range []string{
+		"dlt-worker-acme", // the pipeline worker's service account
+		"acme-console",    // the workspace's own OIDC application
+		"lk-other-jane",   // another tenant's namespace on a shared Casdoor
+		"lk-acme-",        // namespace prefix with an empty user name
+		"lk-acme",         // prefix without the trailing separator
+		"",
+	} {
+		t.Run(userID, func(t *testing.T) {
+			ws := &workspace.Workspace{
+				Slug:          "acme",
+				LakekeeperURL: "https://lk.example.com",
+				CasdoorOrg:    "customer-acme",
+			}
+			casdoor := &mockCasdoorAppManager{}
+			lakekeeper := &mockLakekeeperClient{
+				listWarehousesFn: func(context.Context, string, string) ([]core.Warehouse, error) {
+					return []core.Warehouse{{ID: "wh-default", Name: "default"}}, nil
+				},
+			}
+			svc := &workspace.LakekeeperUserService{
+				Workspaces:  &mockResolver{ws: ws},
+				CasdoorApps: casdoor,
+				Tokens:      &mockTokenProvider{},
+				Lakekeeper:  lakekeeper,
+				Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+			}
+
+			err := svc.RemoveUser(context.Background(), "caller", userID)
+			if !errors.Is(err, core.ErrUserNotFound) {
+				t.Errorf("RemoveUser(%q) = %v, want core.ErrUserNotFound", userID, err)
+			}
+			if len(casdoor.deletedApps) != 0 {
+				t.Errorf("Casdoor apps deleted: %v, want none", casdoor.deletedApps)
+			}
+			if len(lakekeeper.deletedUsers) != 0 {
+				t.Errorf("Lakekeeper users deleted: %v, want none", lakekeeper.deletedUsers)
+			}
+		})
+	}
+}
+
+func TestRemoveUser_OwnNamespace(t *testing.T) {
+	ws := &workspace.Workspace{
+		Slug:          "acme",
+		LakekeeperURL: "https://lk.example.com",
+		CasdoorOrg:    "customer-acme",
+	}
+	casdoor := &mockCasdoorAppManager{}
+	lakekeeper := &mockLakekeeperClient{
+		listWarehousesFn: func(context.Context, string, string) ([]core.Warehouse, error) {
+			return []core.Warehouse{{ID: "wh-default", Name: "default"}}, nil
+		},
+	}
+	svc := &workspace.LakekeeperUserService{
+		Workspaces:  &mockResolver{ws: ws},
+		CasdoorApps: casdoor,
+		Tokens:      &mockTokenProvider{},
+		Lakekeeper:  lakekeeper,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if err := svc.RemoveUser(context.Background(), "caller", "lk-acme-jane"); err != nil {
+		t.Fatalf("RemoveUser: %v", err)
+	}
+	if got, want := casdoor.deletedApps, []string{"lk-acme-jane"}; !slices.Equal(got, want) {
+		t.Errorf("Casdoor apps deleted = %v, want %v", got, want)
+	}
+	if got, want := lakekeeper.deletedUsers, []string{"oidc~admin/lk-acme-jane"}; !slices.Equal(got, want) {
+		t.Errorf("Lakekeeper users deleted = %v, want %v", got, want)
 	}
 }
 

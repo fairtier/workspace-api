@@ -44,7 +44,7 @@ func newTestPipelineService() *workspace.PipelineService {
 }
 
 func TestGetPipelineConfigs_TenantBinding(t *testing.T) {
-	srv := NewInternalPipelineServer(newTestPipelineService(), InternalAuthEnforce)
+	srv := NewInternalPipelineServer(newTestPipelineService())
 	req := connect.NewRequest(&pipelinev1.GetPipelineConfigsRequest{CustomerSlug: "acme"})
 
 	t.Run("matching dlt-worker token", func(t *testing.T) {
@@ -71,17 +71,10 @@ func TestGetPipelineConfigs_TenantBinding(t *testing.T) {
 		}
 	})
 
-	t.Run("unauthenticated denied under enforce", func(t *testing.T) {
+	t.Run("unauthenticated denied", func(t *testing.T) {
 		_, err := srv.GetPipelineConfigs(context.Background(), req)
 		if connect.CodeOf(err) != connect.CodeUnauthenticated {
 			t.Fatalf("GetPipelineConfigs() error = %v, want Unauthenticated", err)
-		}
-	})
-
-	t.Run("unauthenticated allowed under log mode", func(t *testing.T) {
-		logSrv := NewInternalPipelineServer(newTestPipelineService(), InternalAuthLog)
-		if _, err := logSrv.GetPipelineConfigs(context.Background(), req); err != nil {
-			t.Fatalf("GetPipelineConfigs() error = %v", err)
 		}
 	})
 

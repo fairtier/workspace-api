@@ -16,6 +16,7 @@ var (
 	ErrInvalidRole            = errors.New("invalid role: must be reader, writer, or admin")
 	ErrInvalidWarehouseName   = errors.New("invalid warehouse name: must be lowercase alphanumeric with hyphens, 1-63 characters")
 	ErrInvalidKeyPrefix       = errors.New("invalid key prefix: must be lowercase alphanumeric with hyphens, 1-63 characters")
+	ErrInvalidS3Endpoint      = errors.New("invalid S3 endpoint: must be an http(s) URL with a public host")
 
 	ErrPipelineNotFound            = errors.New("pipeline not found")
 	ErrPipelineAlreadyExists       = errors.New("pipeline already exists")

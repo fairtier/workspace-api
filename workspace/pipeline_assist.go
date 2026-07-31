@@ -133,6 +133,14 @@ func (l *MemoryRateLimiter) Allow(key string) bool {
 
 	b, ok := l.buckets[key]
 	if !ok || now.Sub(b.windowStart) >= l.window {
+		// Amortized eviction: drop every expired bucket whenever a new window
+		// starts, so the map stays bounded by the number of active keys
+		// instead of growing one entry per caller forever.
+		for k, old := range l.buckets {
+			if now.Sub(old.windowStart) >= l.window {
+				delete(l.buckets, k)
+			}
+		}
 		l.buckets[key] = &rateBucket{windowStart: now, count: 1}
 		return true
 	}

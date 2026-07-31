@@ -91,41 +91,31 @@ func TestNewInternalAuthInterceptor(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		mode       string
 		authHeader string
 		wantCode   connect.Code // 0 = expect success
 		wantCaller InternalCaller
 	}{
 		{
 			name:       "valid dlt-worker token",
-			mode:       InternalAuthEnforce,
 			authHeader: "Bearer " + sign(jwt.MapClaims{"sub": "admin/dlt-worker-acme", "exp": exp}),
 			wantCaller: InternalCaller{App: "dlt-worker-acme"},
 		},
 		{
-			name:     "missing header enforced",
-			mode:     InternalAuthEnforce,
+			name:     "missing header",
 			wantCode: connect.CodeUnauthenticated,
 		},
 		{
-			name: "missing header log mode passes without caller",
-			mode: InternalAuthLog,
-		},
-		{
 			name:       "expired token",
-			mode:       InternalAuthEnforce,
 			authHeader: "Bearer " + sign(jwt.MapClaims{"sub": "admin/dlt-worker-acme", "exp": time.Now().Add(-time.Hour).Unix()}),
 			wantCode:   connect.CodeUnauthenticated,
 		},
 		{
 			name:       "token without exp",
-			mode:       InternalAuthEnforce,
 			authHeader: "Bearer " + sign(jwt.MapClaims{"sub": "admin/dlt-worker-acme"}),
 			wantCode:   connect.CodeUnauthenticated,
 		},
 		{
 			name: "user token is not a service account",
-			mode: InternalAuthEnforce,
 			// Only "admin/<app>" subjects are service accounts; a
 			// human's subject is their own Casdoor user id.
 			authHeader: "Bearer " + sign(jwt.MapClaims{"sub": "customer-acme/alice", "exp": exp}),
@@ -133,20 +123,13 @@ func TestNewInternalAuthInterceptor(t *testing.T) {
 		},
 		{
 			name:       "missing subject",
-			mode:       InternalAuthEnforce,
 			authHeader: "Bearer " + sign(jwt.MapClaims{"exp": exp}),
 			wantCode:   connect.CodeUnauthenticated,
 		},
 		{
 			name:       "garbage token",
-			mode:       InternalAuthEnforce,
 			authHeader: "Bearer not.a.jwt",
 			wantCode:   connect.CodeUnauthenticated,
-		},
-		{
-			name:       "invalid token log mode passes without caller",
-			mode:       InternalAuthLog,
-			authHeader: "Bearer not.a.jwt",
 		},
 	}
 
@@ -154,7 +137,7 @@ func TestNewInternalAuthInterceptor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Box trust nil: the central path must behave identically with
 			// box-issuer trust disabled.
-			interceptor := NewInternalAuthInterceptor(jwks, nil, tt.mode, slog.Default())
+			interceptor := NewInternalAuthInterceptor(jwks, nil, slog.Default())
 
 			var gotCaller InternalCaller
 			next := func(ctx context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
@@ -322,7 +305,7 @@ func TestNewInternalAuthInterceptorBoxIssuer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			trust, fetches := testBoxTrust(t, "fairtier.com", &fakeCustomerChecker{vmSlugs: tt.vmSlugs}, boxJWKS)
-			interceptor := NewInternalAuthInterceptor(centralJWKS, trust, InternalAuthEnforce, slog.Default())
+			interceptor := NewInternalAuthInterceptor(centralJWKS, trust, slog.Default())
 
 			var gotCaller InternalCaller
 			next := func(ctx context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
@@ -360,7 +343,7 @@ func TestBoxIssuerTrustCachesKeyfunc(t *testing.T) {
 	const iss = "https://auth.customer-acme.fairtier.com"
 
 	trust, fetches := testBoxTrust(t, "fairtier.com", &fakeCustomerChecker{vmSlugs: map[string]bool{"acme": true}}, boxJWKS)
-	interceptor := NewInternalAuthInterceptor(centralJWKS, trust, InternalAuthEnforce, slog.Default())
+	interceptor := NewInternalAuthInterceptor(centralJWKS, trust, slog.Default())
 	next := func(ctx context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 		return connect.NewResponse(&pipelinev1.GetPipelineConfigsResponse{}), nil
 	}
@@ -428,7 +411,7 @@ func TestNewInternalAuthInterceptorPinnedBox(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			trust := NewPinnedBoxTrust(acmeIssuer, "acme", boxJWKS)
-			interceptor := NewInternalAuthInterceptor(fallthroughJWKS, trust, InternalAuthEnforce, slog.Default())
+			interceptor := NewInternalAuthInterceptor(fallthroughJWKS, trust, slog.Default())
 
 			var gotCaller InternalCaller
 			next := func(ctx context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {

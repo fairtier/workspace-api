@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -378,5 +380,6 @@ func (r *Repository) ListRecentRuns(ctx context.Context, pipelineID workspace.Pi
 
 // isUniqueViolation checks if a PostgreSQL error is a unique constraint violation (23505).
 func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "23505")
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation
 }

@@ -88,7 +88,6 @@ for co-located workers and should not be published.
 | `BOX_AGE_PUBLIC_KEY` | | age recipient that pipeline credential files are encrypted to. |
 | `BOX_SNAPSHOT_TOKEN` | | Token for the snapshot sidecar. |
 | `INTERNAL_PORT` | | Port for the worker-facing API. Defaults to `8081`. |
-| `INTERNAL_AUTH_MODE` | | `enforce` (default) or `log`. Leave it on `enforce`. |
 | `CORS_ALLOWED_ORIGINS` | | Comma-separated browser origins allowed to call the API (your Console's origin). Unset disables cross-origin browser access entirely. |
 | `FILEDROP_MAX_BYTES` | | Upload size ceiling for file drop. |
 | `PIPELINES_GIT_PRIMARY`, `TRANSFORMATIONS_GIT_PRIMARY` | | Treat the git repository as the source of truth for definitions. |

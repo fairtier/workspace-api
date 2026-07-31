@@ -73,7 +73,7 @@ func TestRegisterWorkspaceInternalRejectsPublicHandlers(t *testing.T) {
 	}()
 	RegisterWorkspaceInternal(http.NewServeMux(), WorkspaceInternalServers{
 		Pipelines:       &PipelineServer{Service: newTestPipelineService()},
-		Transformations: NewInternalTransformationServer(nil, InternalAuthEnforce),
+		Transformations: NewInternalTransformationServer(nil),
 	}, connect.WithInterceptors())
 }
 
@@ -87,7 +87,7 @@ func TestRegisterWorkspacePlaneRejectsInternalHandlers(t *testing.T) {
 		}
 	}()
 	RegisterWorkspacePlane(http.NewServeMux(), WorkspacePlaneServers{
-		Pipelines:       NewInternalPipelineServer(newTestPipelineService(), InternalAuthEnforce),
+		Pipelines:       NewInternalPipelineServer(newTestPipelineService()),
 		Transformations: &TransformationServer{},
 	}, connect.WithInterceptors())
 }

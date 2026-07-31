@@ -49,8 +49,9 @@ type InternalCaller struct {
 }
 
 // InternalCallerFromContext returns the authenticated internal caller. The
-// zero value means the request carried no valid service token — only
-// possible while the internal mux runs in log mode.
+// zero value means the request carried no valid service token, which the
+// internal auth interceptor never lets through — handlers treat it as a
+// denial.
 func InternalCallerFromContext(ctx context.Context) InternalCaller {
 	v, _ := ctx.Value(internalCallerKey).(InternalCaller)
 	return v
@@ -72,8 +73,21 @@ type UserAuth struct {
 	Audiences []string
 }
 
+// validSigningMethods pins every token verification in this package to
+// asymmetric algorithms. The trusted keys all come from a JWKS and are
+// asymmetric anyway — golang-jwt's HMAC verifier rejects a non-[]byte key —
+// but an explicit allowlist keeps algorithm confusion impossible by
+// construction rather than by that implementation detail.
+var validSigningMethods = []string{
+	"RS256", "RS384", "RS512",
+	"PS256", "PS384", "PS512",
+	"ES256", "ES384", "ES512",
+	"EdDSA",
+}
+
 func (a UserAuth) parserOptions() []jwt.ParserOption {
 	opts := []jwt.ParserOption{
+		jwt.WithValidMethods(validSigningMethods),
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuer(a.Issuer),
 	}
@@ -186,18 +200,6 @@ func NewOptionalAuthInterceptor(auth UserAuth) connect.UnaryInterceptorFunc {
 		}
 	}
 }
-
-// Internal-mux auth modes (INTERNAL_AUTH_MODE).
-const (
-	// InternalAuthEnforce rejects internal calls without a valid
-	// tenant-bound service token.
-	InternalAuthEnforce = "enforce"
-	// InternalAuthLog allows unauthenticated internal calls but logs them.
-	// Rollout mode only: it exists so the server can deploy ahead of the
-	// dlt-worker image that starts sending tokens, and must be flipped to
-	// enforce afterwards.
-	InternalAuthLog = "log"
-)
 
 // CustomerChecker gates per-box JWKS fetches: only slugs of existing
 // dedicated-VM customers get a trust anchor. Without it, any box-shaped
@@ -347,16 +349,11 @@ func (p *pinnedBoxTrust) keyfuncFor(_ context.Context, _, _ string) (keyfunc.Key
 //     *BoxIssuerTrust centrally, *pinnedBoxTrust on the box itself. Here the
 //     tenant binding is the issuer host; the app name is advisory because the
 //     customer controls their box's Casdoor.
-func NewInternalAuthInterceptor(jwks keyfunc.Keyfunc, box boxTrust, mode string, logger *slog.Logger) connect.UnaryInterceptorFunc {
+func NewInternalAuthInterceptor(jwks keyfunc.Keyfunc, box boxTrust, logger *slog.Logger) connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			caller, err := internalCallerFromRequest(ctx, jwks, box, req)
 			if err != nil {
-				if mode == InternalAuthLog {
-					logger.WarnContext(ctx, "unauthenticated internal API call allowed (INTERNAL_AUTH_MODE=log)",
-						"procedure", req.Spec().Procedure, "err", err)
-					return next(ctx, req)
-				}
 				return nil, connect.NewError(connect.CodeUnauthenticated, err)
 			}
 			if caller.Slug != "" {
@@ -395,6 +392,7 @@ func internalCallerFromRequest(ctx context.Context, jwks keyfunc.Keyfunc, box bo
 			return InternalCaller{}, errors.New("untrusted issuer")
 		}
 		parsed, err := jwt.Parse(token, kf.KeyfuncCtx(ctx),
+			jwt.WithValidMethods(validSigningMethods),
 			jwt.WithExpirationRequired(),
 			jwt.WithIssuer(iss),
 		)
@@ -409,6 +407,7 @@ func internalCallerFromRequest(ctx context.Context, jwks keyfunc.Keyfunc, box bo
 	}
 
 	parsed, err := jwt.Parse(token, jwks.KeyfuncCtx(ctx),
+		jwt.WithValidMethods(validSigningMethods),
 		jwt.WithExpirationRequired(),
 	)
 	if err != nil {

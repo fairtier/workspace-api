@@ -27,21 +27,11 @@ import (
 type workerAuth struct {
 	// internal marks the handler instance mounted on the internal mux.
 	internal bool
-	// allowUnauthenticated mirrors INTERNAL_AUTH_MODE=log: the interceptor
-	// lets token-less calls through, so the handler has no tenant to bind
-	// and falls back to trusting the request's customer_slug. Rollout
-	// escape hatch only — enforce has been the default since the worker
-	// started sending tokens.
-	allowUnauthenticated bool
 }
 
-// newWorkerAuth builds the gate for an internal-mux handler from the mux's
-// INTERNAL_AUTH_MODE (InternalAuthEnforce / InternalAuthLog).
-func newWorkerAuth(internalAuthMode string) workerAuth {
-	return workerAuth{
-		internal:             true,
-		allowUnauthenticated: internalAuthMode == InternalAuthLog,
-	}
+// newWorkerAuth builds the gate for an internal-mux handler.
+func newWorkerAuth() workerAuth {
+	return workerAuth{internal: true}
 }
 
 // callerSlug returns the tenant slug bound to the caller's service token.
@@ -50,9 +40,9 @@ func newWorkerAuth(internalAuthMode string) workerAuth {
 // and any other central service identity is rejected — only the dlt-worker
 // calls these RPCs.
 //
-// It fails closed. An empty return means the caller was *explicitly* allowed
-// through unauthenticated (log mode), in which case the handler falls back to
-// the request's customer_slug; a missing caller anywhere else is a denial.
+// It fails closed: a non-empty slug always comes back, so a missing or
+// tenant-less caller is a denial, never a fallback to the request's own
+// customer_slug field.
 func (w workerAuth) callerSlug(ctx context.Context) (string, error) {
 	if !w.internal {
 		return "", connect.NewError(connect.CodePermissionDenied,
@@ -64,9 +54,6 @@ func (w workerAuth) callerSlug(ctx context.Context) (string, error) {
 		return caller.Slug, nil
 	}
 	if caller.App == "" {
-		if w.allowUnauthenticated {
-			return "", nil
-		}
 		return "", connect.NewError(connect.CodeUnauthenticated,
 			errors.New("worker RPC requires a tenant-bound service token"))
 	}

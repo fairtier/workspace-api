@@ -28,9 +28,9 @@ type TransformationServer struct {
 }
 
 // NewInternalTransformationServer builds the worker-facing
-// TransformationServer for the internal mux, in the given INTERNAL_AUTH_MODE.
-func NewInternalTransformationServer(svc *workspace.TransformationService, internalAuthMode string) *TransformationServer {
-	return &TransformationServer{Service: svc, worker: newWorkerAuth(internalAuthMode)}
+// TransformationServer for the internal mux.
+func NewInternalTransformationServer(svc *workspace.TransformationService) *TransformationServer {
+	return &TransformationServer{Service: svc, worker: newWorkerAuth()}
 }
 
 // --- User-facing RPCs ---
@@ -213,7 +213,7 @@ func (s *TransformationServer) GetTransformationConfigs(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
-	if callerSlug != "" && callerSlug != req.Msg.CustomerSlug {
+	if callerSlug != req.Msg.CustomerSlug {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("token tenant does not match customer_slug"))
 	}
 

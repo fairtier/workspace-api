@@ -23,6 +23,7 @@ var domainErrorCodes = []struct {
 	{workspace.ErrInvalidRole, connect.CodeInvalidArgument},
 	{workspace.ErrInvalidWarehouseName, connect.CodeInvalidArgument},
 	{workspace.ErrInvalidKeyPrefix, connect.CodeInvalidArgument},
+	{workspace.ErrInvalidS3Endpoint, connect.CodeInvalidArgument},
 	{workspace.ErrCustomerNotProvisioned, connect.CodeFailedPrecondition},
 	{workspace.ErrPipelineNotFound, connect.CodeNotFound},
 	{workspace.ErrPipelineAlreadyExists, connect.CodeAlreadyExists},

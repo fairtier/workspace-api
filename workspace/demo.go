@@ -345,9 +345,12 @@ func (s *DemoService) failLoad(callerID core.UserID, seed *DemoSeed, cause error
 
 // createPipelines creates the two filesystem pipelines that read the shared
 // demo bucket: the trips backfill (globbing the tier's parquet) and the zone
-// lookup. Both inject the platform-held demo-bucket credential server-side, so
-// the customer never sees the token — and the public demo data is never copied
-// into the customer's own bucket.
+// lookup. Both inject the platform-held demo-bucket credential server-side —
+// the Console never displays it, and the public demo data is never copied
+// into the customer's own bucket. The credential is still stored like any
+// other pipeline credential, though, and flows wherever those flow (the
+// age-encrypted mirror in the box repo, readable by the box operator), so it
+// must stay a read-only token scoped to the public demo bucket.
 func (s *DemoService) createPipelines(ctx context.Context, callerID core.UserID, tier demo.Tier, seed *DemoSeed) error {
 	trips := &Pipeline{
 		Name:              "NYC Taxi Trips",

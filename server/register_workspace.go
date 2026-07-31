@@ -139,7 +139,7 @@ func RegisterWorkspacePlainHTTP(mux *http.ServeMux, logger *slog.Logger, auth Us
 	mux.HandleFunc("GET /oauth/google/start", GoogleOAuthStartHandler(logger, auth, googleOAuth, workspaces))
 	mux.HandleFunc("GET /oauth/google/callback", GoogleOAuthCallbackHandler(logger, googleOAuth, grants, consoleOrigin))
 	mux.HandleFunc("/healthz", LivenessHandler())
-	mux.HandleFunc("/readyz", ReadinessHandler(db))
+	mux.HandleFunc("/readyz", ReadinessHandler(logger, db))
 }
 
 // WorkspaceServiceNames lists the workspace plane's Connect service names for

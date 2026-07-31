@@ -264,7 +264,7 @@ func run() error {
 
 	mux := http.NewServeMux()
 	server.RegisterWorkspacePlane(mux, server.WorkspacePlaneServers{
-		Health:          &server.HealthServer{DB: db},
+		Health:          &server.HealthServer{DB: db, Logger: logger},
 		LakekeeperUsers: &server.LakekeeperUserServer{Service: lakekeeperUserSvc},
 		Warehouses:      &server.WarehouseServer{Service: warehouseSvc},
 		Snapshots:       &server.SnapshotServer{Workspaces: resolver, Snapshots: boxCreds, HTTPClient: http.DefaultClient},
@@ -285,14 +285,14 @@ func run() error {
 	// central does, with the static checker pinning the one known slug.
 	// No BoxCredentialService: deposits are a central-transition mechanism —
 	// this binary reads the same credentials from local config.
-	internalOpts, internalAuthMode, err := buildInternalOpts(ctx, logger, ws, jwks, otelInterceptor)
+	internalOpts, err := buildInternalOpts(ctx, logger, ws, jwks, otelInterceptor)
 	if err != nil {
 		return err
 	}
 	internalMux := http.NewServeMux()
 	server.RegisterWorkspaceInternal(internalMux, server.WorkspaceInternalServers{
-		Pipelines:       server.NewInternalPipelineServer(pipelineSvc, internalAuthMode),
-		Transformations: server.NewInternalTransformationServer(transformationSvc, internalAuthMode),
+		Pipelines:       server.NewInternalPipelineServer(pipelineSvc),
+		Transformations: server.NewInternalTransformationServer(transformationSvc),
 	}, internalOpts)
 
 	serviceNames := workspaceServiceNamesWithoutBoxCredential()
@@ -541,20 +541,19 @@ func openDatabase(logger *slog.Logger) (*sql.DB, crypto.Encryptor, error) {
 // (ws.CasdoorIssuer); a token minted there binds this box's slug. This is the
 // box counterpart of the control plane's BoxIssuerTrust, which must instead
 // discriminate many box issuers by regex — a distinction the box does not
-// have. It returns the mode alongside the options: the worker handlers need it
-// to decide whether an unauthenticated caller is an allowance (log) or a
-// denial (enforce).
+// have.
 func buildInternalOpts(_ context.Context, logger *slog.Logger, ws *workspace.Workspace,
 	jwks keyfunc.Keyfunc, otelInterceptor connect.Interceptor,
-) (connect.HandlerOption, string, error) {
-	mode := cmp.Or(os.Getenv("INTERNAL_AUTH_MODE"), server.InternalAuthEnforce)
-	if mode != server.InternalAuthEnforce && mode != server.InternalAuthLog {
-		return nil, "", fmt.Errorf("invalid INTERNAL_AUTH_MODE %q (want %q or %q)", mode, server.InternalAuthEnforce, server.InternalAuthLog)
+) (connect.HandlerOption, error) {
+	// The rollout-era "log" mode is gone: the internal API always enforces
+	// service auth. Fail loudly rather than silently tightening a deployment
+	// that still sets the variable.
+	if mode := os.Getenv("INTERNAL_AUTH_MODE"); mode != "" && mode != "enforce" {
+		return nil, fmt.Errorf("INTERNAL_AUTH_MODE %q is not supported: the internal API always enforces service auth; unset the variable", mode)
 	}
-	logger.Info("internal API auth", "mode", mode)
 
 	boxTrust := server.NewPinnedBoxTrust(ws.CasdoorIssuer, ws.Slug, jwks)
-	return connect.WithInterceptors(otelInterceptor, server.NewInternalAuthInterceptor(jwks, boxTrust, mode, logger)), mode, nil
+	return connect.WithInterceptors(otelInterceptor, server.NewInternalAuthInterceptor(jwks, boxTrust, logger)), nil
 }
 
 // workspaceServiceNamesWithoutBoxCredential filters the central service-name

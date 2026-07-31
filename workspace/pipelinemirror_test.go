@@ -19,6 +19,11 @@ import (
 	"github.com/fairtier/workspace-api/workspace"
 )
 
+// renderedHeader is pipelineFileHeader as the repo sees it: the marker every
+// file the mirror writes carries, and the one deleteStaleRendered keys on to
+// avoid collecting files this deployment never wrote.
+const renderedHeader = "# Rendered by the FairTier Console — a Console save overwrites this file.\n"
+
 // fakeMirrorRepo is an in-memory stand-in for one box Gitea repo, faithful to
 // the contents-API contract the mirror relies on: blob-sha guarded updates
 // and deletes, create rejected when the file exists.
@@ -230,7 +235,9 @@ func TestPipelineMirror_Converge(t *testing.T) {
 	})
 
 	t.Run("save-triggered sync carries the acting user as author", func(t *testing.T) {
-		repo := newFakeMirrorRepo(map[string]string{"pipelines/stale.yaml": "old"})
+		// Rendered header included: a stale file is by definition one the
+		// mirror wrote, and only those are collected (deleteStaleRendered).
+		repo := newFakeMirrorRepo(map[string]string{"pipelines/stale.yaml": renderedHeader + "old"})
 		m := mirrorFor(boxCustomer(), repo, []workspace.Pipeline{pipe("11111111-aaaa", "Orders")})
 
 		author := &workspace.CommitAuthor{Name: "Alice", Email: "alice@example.com"}
@@ -1058,4 +1065,50 @@ func TestPipelineMirror_DriftDetection(t *testing.T) {
 			t.Fatal("row must adopt the new blob sha")
 		}
 	})
+}
+
+// A converge must never delete a definition file this deployment did not
+// write. Hydration refuses files it cannot parse, so a refused file is absent
+// from every desired set that follows — and before the render-header check it
+// was collected as stale, destroying the customer's only copy of it on their
+// own box.
+func TestPipelineMirror_ConvergeKeepsUnrenderedFiles(t *testing.T) {
+	const handWritten = "name: half finished\nsource_type: rest_api\n"
+
+	pipe := workspace.Pipeline{
+		ID:           workspace.PipelineID("11111111-aaaa"),
+		Name:         "Orders",
+		SourceType:   "rest_api",
+		SourceConfig: json.RawMessage(`{"url":"https://example.com"}`),
+		DatasetName:  "raw",
+		Enabled:      true,
+	}
+
+	repo := newFakeMirrorRepo(map[string]string{
+		// No render header: the import refused it, or a customer wrote it by
+		// hand. Either way the mirror has never owned this path.
+		"pipelines/refused.yaml": handWritten,
+	})
+
+	// First sync renders Orders and leaves the refused file alone.
+	if err := mirrorFor(boxCustomer(), repo, []workspace.Pipeline{pipe}).
+		SyncCustomer(context.Background(), "acme", nil); err != nil {
+		t.Fatal(err)
+	}
+	if repo.files["pipelines/refused.yaml"] != handWritten {
+		t.Fatalf("unrendered file was modified or deleted, files: %v", repo.files)
+	}
+
+	// Now Orders goes away too. Its own file is the mirror's and must be
+	// collected; the refused one still must not be.
+	if err := mirrorFor(boxCustomer(), repo, nil).
+		SyncCustomer(context.Background(), "acme", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := repo.files["pipelines/orders.yaml"]; ok {
+		t.Error("a file the mirror rendered must still be deleted when its pipeline is gone")
+	}
+	if repo.files["pipelines/refused.yaml"] != handWritten {
+		t.Errorf("unrendered file was deleted as stale, files: %v", repo.files)
+	}
 }

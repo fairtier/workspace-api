@@ -464,7 +464,7 @@ func (m *PipelineMirror) converge(ctx context.Context, client RepoFileClient, cu
 			return err
 		}
 	}
-	if err := deleteStale(ctx, client, pipelinesRepo, existing, desired, author); err != nil {
+	if err := deleteStaleRendered(ctx, client, pipelinesRepo, existing, desired, author); err != nil {
 		return err
 	}
 
@@ -497,10 +497,56 @@ func partitionPipelineTree(tree []RepoFileEntry) (yaml, age map[string]string) {
 }
 
 // deleteStale removes every existing file whose path is no longer desired.
+//
+// Use deleteStaleRendered for definition files. This unconditional form is
+// correct only where the desired set already accounts for files the mirror did
+// not write — as the credential set does, via CredentialsExternal.
 func deleteStale[V any](ctx context.Context, client RepoFileClient, repo string, existing map[string]string, desired map[string]V, author *CommitAuthor) error {
 	for _, filePath := range sortedPaths(existing) {
 		if _, ok := desired[filePath]; ok {
 			continue
+		}
+		msg := fmt.Sprintf("Delete %s via FairTier Console", filePath)
+		if err := client.DeleteContents(ctx, repo, filePath, existing[filePath], msg, author); err != nil {
+			return fmt.Errorf("delete %s: %w", filePath, err)
+		}
+	}
+	return nil
+}
+
+// deleteStaleRendered removes stale definition files, but only the ones this
+// mirror can prove it wrote — the file still opens with the rendered header.
+//
+// Deleting on absence alone was safe while central was the only writer: every
+// file in the repo had been rendered from a central row, so "no row" really did
+// mean "deleted in the Console". It stops being safe the moment the box's own
+// database is the writer (control-plane/workspace split Phase 3). Hydration
+// creates a row for every definition file it can parse and REFUSES the rest —
+// bad YAML, no id, a name already taken — so a refused file is absent from
+// every desired set that follows, and the next converge would delete the
+// customer's only copy of it, on their own box, with no one having asked.
+//
+// Scoping to the render bookkeeping instead is the tempting fix and is wrong in
+// the other direction: those rows go away with the pipeline-delete FK cascade,
+// so a deleted pipeline's file would never be collected at all, and a rename's
+// old path survives only in the snapshot read before the converge. The header
+// is the durable marker — every file this mirror has written begins with it,
+// and a file it never wrote cannot accidentally acquire one.
+//
+// A customer who hand-edits a rendered file keeps the header, and so keeps the
+// old overwrite-and-delete behaviour. That is exactly what the header text
+// promises them, and git history keeps the content recoverable either way.
+func deleteStaleRendered[V any](ctx context.Context, client RepoFileClient, repo string, existing map[string]string, desired map[string]V, author *CommitAuthor) error {
+	for _, filePath := range sortedPaths(existing) {
+		if _, ok := desired[filePath]; ok {
+			continue
+		}
+		content, _, err := client.GetContents(ctx, repo, filePath)
+		if err != nil {
+			return fmt.Errorf("get %s: %w", filePath, err)
+		}
+		if !strings.HasPrefix(content, pipelineFileHeader) {
+			continue // not ours to delete
 		}
 		msg := fmt.Sprintf("Delete %s via FairTier Console", filePath)
 		if err := client.DeleteContents(ctx, repo, filePath, existing[filePath], msg, author); err != nil {

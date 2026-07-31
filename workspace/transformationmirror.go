@@ -156,7 +156,9 @@ func (m *TransformationMirror) converge(ctx context.Context, client RepoFileClie
 			return err
 		}
 	}
-	return deleteStale(ctx, client, transformationsRepo, existing, desired, author)
+	// Rendered-only: the same hydration hazard applies here, and the dbt
+	// project around these files is the customer's.
+	return deleteStaleRendered(ctx, client, transformationsRepo, existing, desired, author)
 }
 
 // transformationTreeYAML returns the managed transformations/*.yaml paths

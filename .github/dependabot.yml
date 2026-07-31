@@ -1,15 +1,21 @@
 version: 2
+# The default open-PR limit is 5 per ecosystem, which silently withholds the
+# rest: a week where both ecosystems have updates leaves some invisible in the
+# PR list rather than reported as pending.
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 10
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 10
   # Also covers the pinned golang builder image (ARG GO_VERSION).
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 10

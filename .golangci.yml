@@ -1,0 +1,80 @@
+# golangci-lint configuration. Run it locally with `golangci-lint run` (or
+# `make lint`); CI runs exactly the same.
+version: "2"
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    # Complexity linters — enforce splitting long functions and methods.
+    # gocyclo counts control-flow branches; gocognit weights nesting more
+    # heavily (better proxy for "hard to read"). Strict thresholds by design.
+    - gocyclo
+    - gocognit
+    # Architectural boundaries — see the depguard rules below.
+    - depguard
+  settings:
+    gocyclo:
+      # Cyclomatic complexity ceiling per function. 10 is the strict end of the
+      # commonly cited range (10–15); anything above must be split.
+      min-complexity: 10
+    gocognit:
+      # Cognitive complexity ceiling. Deep nesting/branching costs more here, so
+      # keep it tight to force early returns and helper extraction.
+      min-complexity: 15
+    depguard:
+      rules:
+        # This module must never depend on FairTier's hosted control plane —
+        # the dependency points the other way. That is what makes a workspace
+        # self-hostable: it keeps working with no vendor service behind it.
+        no-control-plane:
+          files:
+            - "**/*.go"
+          deny:
+            - pkg: fairtier.com/platform_api
+              desc: the workspace plane must stay deployable without the control plane
+        # The workspace package holds the services; infra arrives through the
+        # ports it declares itself, never by importing an adapter directly.
+        workspace-plane:
+          files:
+            - "**/workspace/**"
+          deny:
+            - pkg: github.com/fairtier/workspace-api/casdoor
+              desc: infra adapter — consume via a workspace port
+            - pkg: github.com/fairtier/workspace-api/postgres
+              desc: store adapter — consume via a workspace port
+            - pkg: github.com/fairtier/workspace-api/gitea
+              desc: infra adapter — consume via a workspace port
+            - pkg: github.com/fairtier/workspace-api/lakekeeper
+              desc: infra adapter — consume via a workspace port
+            - pkg: github.com/fairtier/workspace-api/objstore
+              desc: infra adapter — consume via a workspace port
+            - pkg: github.com/fairtier/workspace-api/llm
+              desc: infra adapter — consume via a workspace port
+            - pkg: github.com/fairtier/workspace-api/duckflight
+              desc: infra adapter — consume via a workspace port
+            - pkg: github.com/fairtier/workspace-api/oauthgoogle
+              desc: infra adapter — consume via a workspace port
+        # core is the shared kernel: plain types only, imports no plane.
+        shared-core:
+          files:
+            - "**/core/**"
+          deny:
+            - pkg: github.com/fairtier/workspace-api/workspace
+              desc: core must stay plane-free
+            - pkg: github.com/fairtier/workspace-api/server
+              desc: core must stay plane-free
+  exclusions:
+    # `std-error-handling` drops the idiomatic "unchecked error" noise from
+    # deferred Close/Flush, os.Remove*, and fmt.Fprint*/Print* calls — errors
+    # there are conventionally ignored. Everything else stays enforced.
+    presets:
+      - std-error-handling
+    rules:
+      # Complexity limits target production code. Table-driven tests are branchy
+      # by nature (setup + many sub-cases) and splitting them hurts readability,
+      # so gocyclo/gocognit don't apply to _test.go files.
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - gocognit

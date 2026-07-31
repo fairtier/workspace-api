@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package assist.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/assist/v1;assistv1";
+
+import "transformation.proto";
+
+// AssistService drafts dbt transformations and Rill dashboards from
+// natural-language descriptions using an LLM. Like
+// pipeline_assist.v1.PipelineAssistService (which may be aliased into this
+// service later), every RPC is a single-shot request/response call — no agent
+// loop — and the model never drafts credentials of any kind. Drafts are
+// always shown to the user for review; nothing is committed automatically.
+//
+// Returns UNIMPLEMENTED when AI drafting is not configured on the server
+// (the Console shows the panels as "Coming soon").
+//
+// Requires JWT auth (available on the public port only).
+service AssistService {
+  // DraftTransformation turns a natural-language prompt into a draft dbt
+  // transformation: a pre-filled CreateTransformation request (hosted-repo
+  // mode) plus starter model files the user reviews and commits themselves.
+  rpc DraftTransformation(DraftTransformationRequest) returns (DraftTransformationResponse) {}
+
+  // DraftRillDashboard turns a natural-language prompt into draft Rill
+  // project files (metrics views, explore dashboards, optional models),
+  // opened as unsaved buffers in the Console's Rill editor.
+  rpc DraftRillDashboard(DraftRillDashboardRequest) returns (DraftRillDashboardResponse) {}
+}
+
+// DraftFile is one generated file, path relative to the target repo root.
+message DraftFile {
+  string path = 1;
+  string content = 2;
+}
+
+message DraftTransformationRequest {
+  // Natural-language description, e.g. "Build a daily revenue mart from the
+  // stripe charges table".
+  string prompt = 1;
+}
+
+message DraftTransformationResponse {
+  // Pre-filled, validated create request. repo_url and git_credentials are
+  // always empty (hosted-repo mode) — the model never drafts repos or
+  // secrets — and trigger_after_pipeline_id is left for the user (the model
+  // cannot know pipeline IDs).
+  transformation.v1.CreateTransformationRequest draft = 1;
+  // Starter dbt files for the hosted repo (models/**.sql + schema.yml),
+  // rendered read-only for review; the user commits them via the box repo
+  // editor or copy-paste.
+  repeated DraftFile files = 2;
+  // Short human-readable explanation of the draft and any assumptions made.
+  string notes = 3;
+}
+
+message DraftRillDashboardRequest {
+  string prompt = 1;
+  // Existing Rill repo paths, sent by the Console so the model references
+  // real models/sources instead of inventing them.
+  repeated string existing_paths = 2;
+}
+
+message DraftRillDashboardResponse {
+  // Drafted files (metrics/<name>.yaml, dashboards/<name>.yaml, optional
+  // models/<name>.sql), YAML-validated server-side.
+  repeated DraftFile files = 1;
+  string notes = 2;
+}

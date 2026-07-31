@@ -1,0 +1,14 @@
+# Keep the build context to what the binary actually needs: Go sources plus the
+# embedded assets under demo/ and postgres/migrations/.
+.git
+.github
+.idea
+.serena
+/scripts
+/.gitignore
+/.golangci.yml
+/.dockerignore
+/Dockerfile
+/Makefile
+/LICENSE
+/*.md

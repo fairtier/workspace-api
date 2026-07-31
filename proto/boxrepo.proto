@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package boxrepo.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/boxrepo/v1;boxrepov1";
+
+// BoxRepoService lets the Console read and edit customer-authored files in
+// the box's Gitea repos (Rill project, hosted dbt transformations). Central
+// proxies to the box Gitea REST API using the write-scoped token the box
+// deposited via boxcredential.v1.BoxCredentialService — it never holds box
+// admin credentials.
+//
+// Saves are plain commits on the default branch; the box's snapshot sidecar
+// fast-forward-pulls them into the running app (Rill hot-reloads). Concurrent
+// edits surface as ABORTED (stale sha) — refresh and retry.
+//
+// VM-substrate customers only (the shared substrate has no box Gitea).
+// Requires JWT auth (available on the public port only).
+service BoxRepoService {
+  // ListFiles returns the file tree of a box repo.
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse) {}
+
+  // GetFile returns one file's content and its blob sha (used as the
+  // optimistic-concurrency token for PutFile).
+  rpc GetFile(GetFileRequest) returns (GetFileResponse) {}
+
+  // PutFile creates or updates one file as a commit on the default branch.
+  // sha must be the blob sha from GetFile when updating (empty = create);
+  // a mismatch returns ABORTED ("changed outside the Console").
+  rpc PutFile(PutFileRequest) returns (PutFileResponse) {}
+
+  // ListFileHistory returns the newest-first commit history of one file —
+  // the Console's "version history" (follows the current path only; history
+  // from before a rename stays with the old path).
+  rpc ListFileHistory(ListFileHistoryRequest) returns (ListFileHistoryResponse) {}
+
+  // GetFileAtRef returns one file's content as of a commit sha, for version
+  // preview/restore. Restoring = PutFile of this content guarded by the
+  // CURRENT blob sha — a plain forward commit, never a git revert.
+  rpc GetFileAtRef(GetFileAtRefRequest) returns (GetFileAtRefResponse) {}
+
+  // SetPushMirror configures (or replaces) the box repo's push mirror to the
+  // customer's own git hosting (GitHub/GitLab/...). The remote token is
+  // passed through to the box's Gitea, which stores and uses it — it is
+  // never persisted centrally. Mirrors push on every commit plus a periodic
+  // interval. Allowed repos: rill, transformations, pipelines.
+  rpc SetPushMirror(SetPushMirrorRequest) returns (SetPushMirrorResponse) {}
+
+  // GetPushMirror returns the repo's mirror status (credential-stripped).
+  rpc GetPushMirror(GetPushMirrorRequest) returns (GetPushMirrorResponse) {}
+
+  // DeletePushMirror removes the repo's push mirror (and the stored remote
+  // credential with it).
+  rpc DeletePushMirror(DeletePushMirrorRequest) returns (DeletePushMirrorResponse) {}
+
+  // SyncPushMirror triggers an immediate push to the mirror remote.
+  rpc SyncPushMirror(SyncPushMirrorRequest) returns (SyncPushMirrorResponse) {}
+}
+
+// Repo names are an allowlist — "rill" or "transformations" — not arbitrary
+// Gitea repos.
+message ListFilesRequest {
+  string repo = 1;
+}
+
+message FileEntry {
+  // Path relative to the repo root.
+  string path = 1;
+  // Git blob sha of the file content.
+  string sha = 2;
+}
+
+message ListFilesResponse {
+  repeated FileEntry files = 1;
+}
+
+message GetFileRequest {
+  string repo = 1;
+  string path = 2;
+}
+
+message GetFileResponse {
+  string content = 1;
+  string sha = 2;
+}
+
+message PutFileRequest {
+  string repo = 1;
+  string path = 2;
+  string content = 3;
+  // Blob sha the edit was based on; empty when creating a new file.
+  string sha = 4;
+  // Commit message; a default is used when empty.
+  string message = 5;
+}
+
+message PutFileResponse {
+  // New blob sha after the commit.
+  string sha = 1;
+}
+
+message ListFileHistoryRequest {
+  string repo = 1;
+  string path = 2;
+}
+
+message FileCommit {
+  // Full commit sha.
+  string sha = 1;
+  // Commit message (first line is the summary).
+  string message = 2;
+  // Git author of the change — the acting Console user for Console saves,
+  // an app/bot identity otherwise (e.g. "Rill Autosave").
+  string author_name = 3;
+  string author_email = 4;
+  // RFC 3339 author time.
+  string date = 5;
+}
+
+message ListFileHistoryResponse {
+  repeated FileCommit commits = 1;
+}
+
+message GetFileAtRefRequest {
+  string repo = 1;
+  string path = 2;
+  // Commit sha from ListFileHistory (abbreviated hex accepted).
+  string ref = 3;
+}
+
+message GetFileAtRefResponse {
+  string content = 1;
+}
+
+message SetPushMirrorRequest {
+  string repo = 1;
+  // HTTPS clone URL of the customer's remote, e.g.
+  // https://github.com/acme/analytics.git. Must not embed credentials.
+  string remote_url = 2;
+  // Username for the remote (GitHub: the account name or "git";
+  // GitLab: "oauth2" for a PAT).
+  string remote_username = 3;
+  // Token/password with write access to the remote repo. Passed through to
+  // the box's Gitea; never stored or logged centrally.
+  string remote_password = 4;
+}
+
+message SetPushMirrorResponse {}
+
+message GetPushMirrorRequest {
+  string repo = 1;
+}
+
+message GetPushMirrorResponse {
+  // False when no mirror is configured (other fields are empty).
+  bool configured = 1;
+  // Remote URL with any userinfo stripped.
+  string remote_url = 2;
+  // RFC 3339 time of the last successful sync (empty if never synced).
+  string last_update = 3;
+  // Last sync error reported by Gitea (empty when healthy).
+  string last_error = 4;
+}
+
+message DeletePushMirrorRequest {
+  string repo = 1;
+}
+
+message DeletePushMirrorResponse {}
+
+message SyncPushMirrorRequest {
+  string repo = 1;
+}
+
+message SyncPushMirrorResponse {}

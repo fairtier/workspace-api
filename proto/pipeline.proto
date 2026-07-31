@@ -1,0 +1,324 @@
+syntax = "proto3";
+
+package pipeline.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/pipeline/v1;pipelinev1";
+
+// PipelineService manages dlt (data load tool) pipelines that ingest data from
+// external sources into Iceberg tables.
+//
+// User-facing RPCs (require JWT auth, available on public port):
+//   CreatePipeline, ListPipelines, GetPipeline, UpdatePipeline,
+//   DeletePipeline, TriggerPipeline
+//
+// Worker-facing RPCs (served on the authenticated internal port, not the
+// public one; tenant-bound service tokens):
+//   GetPipelineConfigs, ReportPipelineRun
+// They are served on the internal port only — the public mux denies them,
+// whatever customer_slug the request carries.
+service PipelineService {
+  // --- User-facing ---
+
+  // CreatePipeline defines a new data pipeline with source configuration,
+  // credentials, and schedule.
+  rpc CreatePipeline(CreatePipelineRequest) returns (CreatePipelineResponse) {}
+
+  // ListPipelines returns all pipelines for the authenticated user's tenant.
+  rpc ListPipelines(ListPipelinesRequest) returns (ListPipelinesResponse) {}
+
+  // GetPipeline returns a single pipeline with its recent execution history.
+  rpc GetPipeline(GetPipelineRequest) returns (GetPipelineResponse) {}
+
+  // UpdatePipeline modifies an existing pipeline's configuration.
+  rpc UpdatePipeline(UpdatePipelineRequest) returns (UpdatePipelineResponse) {}
+
+  // DeletePipeline permanently removes a pipeline and its run history.
+  rpc DeletePipeline(DeletePipelineRequest) returns (DeletePipelineResponse) {}
+
+  // TriggerPipeline manually starts a pipeline execution outside its schedule.
+  rpc TriggerPipeline(TriggerPipelineRequest) returns (TriggerPipelineResponse) {}
+
+  // ListPipelineVersions returns the newest-first history of the pipeline's
+  // rendered definition file in the workspace's git repo (VM boxes only;
+  // FAILED_PRECONDITION elsewhere). History follows the current file path —
+  // versions from before a rename stay with the old path.
+  rpc ListPipelineVersions(ListPipelineVersionsRequest) returns (ListPipelineVersionsResponse) {}
+
+  // RestorePipelineVersion applies the definition recorded at a version's
+  // commit sha through the normal update path (validated save; the repo gets
+  // a new forward commit). Source credentials are never part of a version
+  // and stay untouched.
+  rpc RestorePipelineVersion(RestorePipelineVersionRequest) returns (RestorePipelineVersionResponse) {}
+
+  // --- File drop (source_type "file_upload") ---
+  // The upload itself is a plain HTTP endpoint on the public mux
+  // (POST /filedrop/{pipeline_id}/{filename}, raw body, JWT bearer auth):
+  // browsers cannot client-stream over Connect, and files should stream
+  // through to the customer's bucket without buffering.
+
+  // ListUploadedFiles returns the files dropped into a file_upload pipeline.
+  rpc ListUploadedFiles(ListUploadedFilesRequest) returns (ListUploadedFilesResponse) {}
+
+  // DeleteUploadedFile removes one dropped file from the customer's storage
+  // and from the pipeline's configuration.
+  rpc DeleteUploadedFile(DeleteUploadedFileRequest) returns (DeleteUploadedFileResponse) {}
+
+  // --- Worker-facing (internal only) ---
+
+  // GetPipelineConfigs returns all enabled pipelines for a customer, including
+  // sensitive source credentials. Called by the dlt-worker poll loop.
+  rpc GetPipelineConfigs(GetPipelineConfigsRequest) returns (GetPipelineConfigsResponse) {}
+
+  // ReportPipelineRun records the result of a pipeline execution from the
+  // dlt-worker.
+  rpc ReportPipelineRun(ReportPipelineRunRequest) returns (ReportPipelineRunResponse) {}
+}
+
+// --- Messages ---
+
+// Pipeline represents a data ingestion pipeline definition.
+message Pipeline {
+  // Unique pipeline identifier (UUID).
+  string id = 1;
+  // Tenant slug this pipeline belongs to.
+  string customer_slug = 2;
+  // Human-readable pipeline name.
+  string name = 3;
+  // dlt source type (e.g. "sql_database", "rest_api", "filesystem", "google_sheets").
+  string source_type = 4;
+  // JSON string: non-sensitive pipeline configuration.
+  string source_config = 5;
+  string dataset_name = 6;
+  // Cron expression, or empty for manual-only.
+  string schedule = 7;
+  // "append", "replace", or "merge".
+  string write_disposition = 8;
+  bool enabled = 9;
+  // RFC 3339 timestamps.
+  string created_at = 10;
+  string updated_at = 11;
+  // "upsert" or "" (empty = delete-insert default).
+  string merge_strategy = 12;
+  // RFC 3339 timestamp of the most recent run (any status), empty if never run.
+  // Populated by ListPipelines/GetPipeline to avoid N+1 run lookups.
+  string last_run_at = 13;
+  // Status of the most recent run ("pending", "running", "success", "failed"),
+  // empty if never run.
+  string last_run_status = 14;
+}
+
+// PipelineRun records a single execution of a pipeline.
+message PipelineRun {
+  // Unique run identifier (UUID).
+  string id = 1;
+  // Pipeline this run belongs to.
+  string pipeline_id = 2;
+  // "pending", "running", "success", or "failed".
+  string status = 3;
+  // RFC 3339 timestamps.
+  string started_at = 4;
+  string completed_at = 5;
+  int64 rows_loaded = 6;
+  string error_message = 7;
+  string created_at = 8;
+}
+
+// --- Error details ---
+
+// FieldViolation describes a single field that failed validation. It is
+// attached to an INVALID_ARGUMENT error's details (gRPC richer error model)
+// so clients can map the failure back to a specific input.
+message FieldViolation {
+  // JSON path of the offending field within source_config/source_credentials,
+  // e.g. "base_url", "resources[0].endpoint", "connection_string".
+  string field = 1;
+  // Human-readable reason the field is invalid.
+  string description = 2;
+}
+
+// ValidationErrors bundles the field-level violations for a rejected request.
+message ValidationErrors {
+  repeated FieldViolation violations = 1;
+}
+
+// --- User-facing requests/responses ---
+
+message CreatePipelineRequest {
+  string name = 1;
+  string source_type = 2;
+  // JSON string: non-sensitive source configuration.
+  string source_config = 3;
+  // JSON string: sensitive credentials (API keys, passwords).
+  string source_credentials = 4;
+  string dataset_name = 5;
+  string schedule = 6;
+  string write_disposition = 7;
+  // "upsert" or "" (empty = delete-insert default).
+  string merge_strategy = 8;
+}
+
+message CreatePipelineResponse {
+  Pipeline pipeline = 1;
+}
+
+message ListPipelinesRequest {}
+
+message ListPipelinesResponse {
+  repeated Pipeline pipelines = 1;
+}
+
+message GetPipelineRequest {
+  string id = 1;
+}
+
+message GetPipelineResponse {
+  Pipeline pipeline = 1;
+  repeated PipelineRun recent_runs = 2;
+}
+
+message UpdatePipelineRequest {
+  string id = 1;
+  string name = 2;
+  string source_type = 3;
+  // JSON string: non-sensitive source configuration.
+  string source_config = 4;
+  // JSON string: sensitive credentials. Empty string = keep existing.
+  string source_credentials = 5;
+  string dataset_name = 6;
+  string schedule = 7;
+  string write_disposition = 8;
+  bool enabled = 9;
+  // "upsert" or "" (empty = delete-insert default).
+  string merge_strategy = 10;
+}
+
+message UpdatePipelineResponse {
+  Pipeline pipeline = 1;
+}
+
+message DeletePipelineRequest {
+  string id = 1;
+}
+
+message DeletePipelineResponse {}
+
+message TriggerPipelineRequest {
+  string id = 1;
+}
+
+message TriggerPipelineResponse {
+  PipelineRun run = 1;
+}
+
+message ListPipelineVersionsRequest {
+  string pipeline_id = 1;
+}
+
+// PipelineVersion is one historical rendering of the pipeline definition.
+message PipelineVersion {
+  // Full commit sha (the restore token).
+  string sha = 1;
+  // Commit message (first line is the summary).
+  string message = 2;
+  // Git author — the acting Console user for Console saves.
+  string author_name = 3;
+  string author_email = 4;
+  // RFC 3339 author time.
+  string date = 5;
+}
+
+message ListPipelineVersionsResponse {
+  repeated PipelineVersion versions = 1;
+}
+
+message RestorePipelineVersionRequest {
+  string pipeline_id = 1;
+  // Commit sha from ListPipelineVersions.
+  string sha = 2;
+}
+
+message RestorePipelineVersionResponse {
+  // The pipeline after the restore.
+  Pipeline pipeline = 1;
+}
+
+// --- File drop requests/responses ---
+
+// UploadedFile is one file dropped into a file_upload pipeline.
+message UploadedFile {
+  // Warehouse table the file loads into (derived from the filename).
+  string name = 1;
+  // Object name as uploaded, e.g. "orders.csv".
+  string file = 2;
+  int64 size_bytes = 3;
+  // RFC 3339 timestamp of the upload.
+  string uploaded_at = 4;
+  // True when the recorded object is no longer in the bucket, so this table's
+  // glob matches nothing and a run loads 0 rows. Set on List (best-effort); the
+  // Console surfaces it so the dead end is never silent. Re-upload the file
+  // (same name) or delete the entry to clear it.
+  bool missing = 5;
+}
+
+message ListUploadedFilesRequest {
+  string pipeline_id = 1;
+}
+
+message ListUploadedFilesResponse {
+  repeated UploadedFile files = 1;
+}
+
+message DeleteUploadedFileRequest {
+  string pipeline_id = 1;
+  // Object name as returned by ListUploadedFiles.file.
+  string file = 2;
+}
+
+message DeleteUploadedFileResponse {}
+
+// --- Worker-facing requests/responses ---
+
+message GetPipelineConfigsRequest {
+  string customer_slug = 1;
+}
+
+message GetPipelineConfigsResponse {
+  repeated PipelineConfigItem pipelines = 1;
+}
+
+// PipelineConfigItem includes source_credentials (only sent to in-cluster workers).
+message PipelineConfigItem {
+  string id = 1;
+  string name = 2;
+  string source_type = 3;
+  // JSON string: non-sensitive source configuration.
+  string source_config = 4;
+  // JSON string: sensitive credentials (API keys, passwords).
+  string source_credentials = 5;
+  string dataset_name = 6;
+  string schedule = 7;
+  string write_disposition = 8;
+  bool enabled = 9;
+  // True when a pending run exists (manual trigger).
+  bool trigger_now = 10;
+  // UUID of the pending run to update (instead of creating a new one).
+  string pending_run_id = 11;
+  // RFC 3339 timestamp of last successful run, empty if never run.
+  string last_run_at = 12;
+  // "upsert" or "" (empty = delete-insert default).
+  string merge_strategy = 13;
+}
+
+message ReportPipelineRunRequest {
+  string pipeline_id = 1;
+  // "success" or "failed".
+  string status = 2;
+  // RFC 3339 timestamps.
+  string started_at = 3;
+  string completed_at = 4;
+  int64 rows_loaded = 5;
+  string error_message = 6;
+  string run_id = 7; // Update existing run if set.
+}
+
+message ReportPipelineRunResponse {}

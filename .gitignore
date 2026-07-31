@@ -1,0 +1,6 @@
+# editors / tooling
+.idea/
+.serena/
+
+# executables
+/workspace_api

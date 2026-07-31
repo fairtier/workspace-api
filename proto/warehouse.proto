@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package warehouse.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/warehouse/v1;warehousev1";
+
+// WarehouseService manages Apache Iceberg warehouses within the tenant's
+// Lakekeeper catalog. Each warehouse is an isolated namespace for Iceberg
+// tables. All RPCs require JWT authentication.
+service WarehouseService {
+  // ListWarehouses returns all warehouses in the tenant's Lakekeeper catalog.
+  rpc ListWarehouses(ListWarehousesRequest) returns (ListWarehousesResponse) {}
+
+  // CreateWarehouse creates a new Iceberg warehouse in the tenant's Lakekeeper
+  // catalog. Storage can be inherited from the workspace or provided explicitly.
+  rpc CreateWarehouse(CreateWarehouseRequest) returns (CreateWarehouseResponse) {}
+}
+
+message ListWarehousesRequest {}
+
+message ListWarehousesResponse {
+  repeated Warehouse warehouses = 1;
+}
+
+message CreateWarehouseRequest {
+  // Warehouse name. Must be unique within the tenant's catalog.
+  string name = 1;
+  // Key prefix to isolate this warehouse's data within the bucket.
+  // Defaults to the warehouse name if omitted.
+  string key_prefix = 2;
+  // Optional custom S3 storage config. If omitted, inherits the workspace's
+  // effective S3 configuration (managed R2 or BYOS).
+  S3Config s3 = 3;
+}
+
+// S3Config mirrors provisioning.v1.S3Config field-for-field (same numbers and
+// enum values, so it is wire-compatible). The workspace plane carries its own
+// copy so its proto module stays independent of the control plane's.
+message S3Config {
+  // Bucket name (e.g. "ft-acme").
+  string bucket = 1;
+  // Key prefix within the bucket. Internal only.
+  string key_prefix = 2;
+  // S3 endpoint URL (e.g. "https://<account>.r2.cloudflarestorage.com").
+  string endpoint = 3;
+  // S3 region (e.g. "auto" for R2, "us-east-1" for AWS).
+  string region = 4;
+  // Access key ID for direct S3 access.
+  string access_key_id = 5;
+  // Secret access key for direct S3 access.
+  string secret_access_key = 6;
+  // Whether to use path-style S3 access (required for some providers).
+  optional bool path_style_access = 7;
+  // Whether STS credential vending is enabled. Internal only.
+  optional bool sts_enabled = 8;
+  // Whether Lakekeeper remote signing is enabled. Internal only.
+  optional bool remote_signing_enabled = 9;
+  // Cloudflare API token for R2 management. Internal only.
+  string cloudflare_api_token = 10;
+  // Cloudflare account ID (used with R2 credential vending).
+  string cloudflare_account_id = 11;
+  // Credential delegation mode.
+  CredentialDelegationMode credential_delegation_mode = 12;
+  // Storage provider.
+  StorageProvider storage_provider = 13;
+  // AWS STS assume-role ARN (only used for AWS + vended credentials).
+  string assume_role_arn = 14;
+  // Storage mode lifecycle. Terminal states: "managed", "byos". Transient
+  // states (set by the backend, never by the client): "migrating-to-byos",
+  // "migrating-to-managed". Customers always send a terminal value; the
+  // backend auto-promotes on transition.
+  string storage_mode = 15;
+}
+
+// CredentialDelegationMode mirrors provisioning.v1.CredentialDelegationMode.
+enum CredentialDelegationMode {
+  CREDENTIAL_DELEGATION_MODE_UNSPECIFIED = 0;
+  // Lakekeeper vends temporary S3 credentials via STS (AWS, MinIO) or
+  // temp-access-credentials (R2). Requires STS support on the provider.
+  CREDENTIAL_DELEGATION_MODE_VENDED = 1;
+  // Lakekeeper signs S3 requests server-side (AWS SigV4). Works with any
+  // S3-compatible provider.
+  CREDENTIAL_DELEGATION_MODE_REMOTE_SIGNING = 2;
+  // No delegation. Client provides own S3 credentials via AWS env vars.
+  CREDENTIAL_DELEGATION_MODE_NONE = 3;
+}
+
+// StorageProvider mirrors provisioning.v1.StorageProvider.
+enum StorageProvider {
+  STORAGE_PROVIDER_UNSPECIFIED = 0;
+  STORAGE_PROVIDER_AWS = 1;
+  STORAGE_PROVIDER_CLOUDFLARE_R2 = 2;
+  STORAGE_PROVIDER_S3_COMPAT = 3;
+}
+
+message CreateWarehouseResponse {
+  // The created warehouse.
+  Warehouse warehouse = 1;
+}
+
+// Warehouse represents an Iceberg warehouse in Lakekeeper.
+message Warehouse {
+  // Lakekeeper-assigned warehouse UUID.
+  string id = 1;
+  // Warehouse name.
+  string name = 2;
+}

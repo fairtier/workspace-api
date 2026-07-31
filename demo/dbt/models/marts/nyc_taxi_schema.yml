@@ -1,0 +1,12 @@
+version: 2
+models:
+  - name: fct_trips
+    columns:
+      - name: pickup_at
+        tests: [not_null]
+      - name: total_amount
+        tests: [not_null]
+  - name: agg_daily_zone
+    columns:
+      - name: pickup_date
+        tests: [not_null]

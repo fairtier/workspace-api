@@ -16,7 +16,7 @@ require (
 	filippo.io/age v1.3.1
 	github.com/MicahParks/jwkset v0.11.0
 	github.com/MicahParks/keyfunc/v3 v3.8.0
-	github.com/anthropics/anthropic-sdk-go v1.51.1
+	github.com/anthropics/anthropic-sdk-go v1.61.0
 	github.com/apache/arrow-go/v18 v18.6.0
 	github.com/casdoor/casdoor-go-sdk v1.44.0
 	github.com/golang-jwt/jwt/v5 v5.3.1

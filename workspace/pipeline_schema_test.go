@@ -216,6 +216,7 @@ func TestValidateSourceCredentials(t *testing.T) {
 	tests := []struct {
 		name         string
 		sourceType   string
+		config       json.RawMessage // sourceConfig; only filesystem consults it
 		raw          json.RawMessage
 		wantErr      bool
 		wantCredsErr bool // expect *ErrInvalidSourceCredentials
@@ -374,11 +375,33 @@ func TestValidateSourceCredentials(t *testing.T) {
 			wantCredsErr: true,
 			errSubstr:    "unknown source type",
 		},
+		// --- filesystem over a public origin: no credential to check ---
+		{
+			name:       "filesystem public origin needs no creds",
+			sourceType: "filesystem",
+			config:     json.RawMessage(`{"bucket_url":"https://demo-data.example.com"}`),
+			raw:        nil,
+		},
+		{
+			name:       "filesystem public origin ignores partial creds",
+			sourceType: "filesystem",
+			config:     json.RawMessage(`{"bucket_url":"https://demo-data.example.com"}`),
+			raw:        json.RawMessage(`{"access_key_id":"x"}`),
+		},
+		{
+			name:         "filesystem s3 still requires creds",
+			sourceType:   "filesystem",
+			config:       json.RawMessage(`{"bucket_url":"s3://bucket/prefix/"}`),
+			raw:          nil,
+			wantErr:      true,
+			wantCredsErr: true,
+			errSubstr:    "sourceCredentials is required",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateSourceCredentials(tt.sourceType, tt.raw)
+			err := ValidateSourceCredentials(tt.sourceType, tt.config, tt.raw)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ValidateSourceCredentials() error = %v, wantErr %v", err, tt.wantErr)
 			}

@@ -44,15 +44,21 @@ func ValidateSourceConfig(sourceType string, raw json.RawMessage) error {
 	}
 }
 
-// ValidateSourceCredentials validates sourceCredentials JSON for the given source type.
-func ValidateSourceCredentials(sourceType string, raw json.RawMessage) error {
+// ValidateSourceCredentials validates sourceCredentials JSON for the given
+// source type.
+//
+// config is the pipeline's already-validated sourceConfig, because whether a
+// credential is required at all can depend on it: a filesystem source over a
+// public http(s) origin has nothing to authenticate to, and demanding a
+// credential there would mean inventing one.
+func ValidateSourceCredentials(sourceType string, config, raw json.RawMessage) error {
 	switch sourceType {
 	case "rest_api":
 		return validateRestAPICreds(raw)
 	case "sql_database":
 		return validateSQLDatabaseCreds(raw)
 	case "filesystem":
-		return validateFilesystemCreds(raw)
+		return validateFilesystemCreds(config, raw)
 	case "google_sheets":
 		return validateGoogleSheetsCreds(raw)
 	case SourceTypeFileUpload:
@@ -243,10 +249,33 @@ type filesystemCreds struct {
 // (worker ≥0.0.6): each entry becomes a (filesystem | read_<format>) resource.
 type filesystemTable struct {
 	Name     string `json:"name"`
-	FileGlob string `json:"file_glob"`
+	FileGlob string `json:"file_glob,omitempty"`
+	// Files names the objects to read instead of matching them. Required
+	// when bucket_url is http(s): a public object store serves by key and
+	// will not list a directory, so there is nothing to glob against.
+	Files []string `json:"files,omitempty"`
 }
 
-func validateFilesystemCreds(raw json.RawMessage) error {
+// isPublicBucketURL reports whether a filesystem sourceConfig reads over an
+// unauthenticated http(s) origin rather than an object-store bucket.
+func isPublicBucketURL(config json.RawMessage) bool {
+	if isEmptyJSON(config) {
+		return false
+	}
+	var cfg filesystemConfig
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return false
+	}
+	lower := strings.ToLower(cfg.BucketURL)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+func validateFilesystemCreds(config, raw json.RawMessage) error {
+	// A public origin serves the objects to anyone; there is no credential
+	// to check and none is accepted.
+	if isPublicBucketURL(config) {
+		return nil
+	}
 	if isEmptyJSON(raw) {
 		return &ErrInvalidSourceCredentials{Field: "source_credentials", Msg: "filesystem: sourceCredentials is required"}
 	}

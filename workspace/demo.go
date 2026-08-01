@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/fairtier/workspace-api/demo"
@@ -30,11 +31,26 @@ var (
 	ErrDemoNotLoaded = errors.New("no demo project is loaded in this workspace")
 )
 
-// DemoBucket is the platform-held, read-only S3 credential for the shared
-// demo-datasets bucket, injected server-side as the demo filesystem pipeline's
-// credential so the customer never sees the token. Sourced
-// from DEMO_R2_* env in main.go.
+// DemoBucket says where the shared demo datasets are read from. Sourced from
+// DEMO_* env in main.go.
+//
+// Two ways, and the difference matters to whether a deployment can run the
+// demo on its own. PublicBaseURL is an unauthenticated HTTPS origin over the
+// bucket: the data is public-domain TLC data, so nothing needs to be secret,
+// and a deployment with no control plane behind it can seed the demo without
+// being handed anything. The S3 fields are the older way — a platform-held
+// read-only token injected server-side. It works, but it is a credential the
+// hosting party must deliver, and it then flows wherever pipeline credentials
+// flow (the age-encrypted mirror in the box repo). PublicBaseURL wins when
+// both are set.
 type DemoBucket struct {
+	// PublicBaseURL is an https:// origin serving the bucket's objects by
+	// key, e.g. "https://demo-data.example.com". Objects are addressed as
+	// <PublicBaseURL>/<BucketPrefix><name>. No listing is required or
+	// assumed — public object stores do not offer one, so the demo names
+	// every file it reads.
+	PublicBaseURL string
+
 	AccessKeyID     string
 	SecretAccessKey string
 	Endpoint        string
@@ -42,8 +58,14 @@ type DemoBucket struct {
 	Region          string
 }
 
-// Configured reports whether the demo bucket credential is fully set.
+// Public reports whether the demo reads over an unauthenticated URL.
+func (b DemoBucket) Public() bool { return b.PublicBaseURL != "" }
+
+// Configured reports whether the demo datasets are reachable at all.
 func (b DemoBucket) Configured() bool {
+	if b.Public() {
+		return true
+	}
 	return b.AccessKeyID != "" && b.SecretAccessKey != "" && b.Endpoint != "" && b.Bucket != ""
 }
 
@@ -355,7 +377,7 @@ func (s *DemoService) createPipelines(ctx context.Context, callerID core.UserID,
 	trips := &Pipeline{
 		Name:              "NYC Taxi Trips",
 		SourceType:        "filesystem",
-		SourceConfig:      s.demoSourceConfig(demo.TripsTable, tier.Glob),
+		SourceConfig:      s.demoSourceConfig(demo.TripsTable, tier.Files),
 		SourceCredentials: s.demoCredentials(),
 		DatasetName:       demo.DatasetName,
 		WriteDisposition:  "append",
@@ -373,7 +395,7 @@ func (s *DemoService) createPipelines(ctx context.Context, callerID core.UserID,
 	zones := &Pipeline{
 		Name:              "Taxi Zones",
 		SourceType:        "filesystem",
-		SourceConfig:      s.demoSourceConfig(demo.ZonesTable, demo.ZonesObject),
+		SourceConfig:      s.demoSourceConfig(demo.ZonesTable, []string{demo.ZonesObject}),
 		SourceCredentials: s.demoCredentials(),
 		DatasetName:       demo.DatasetName,
 		WriteDisposition:  "replace",
@@ -386,24 +408,70 @@ func (s *DemoService) createPipelines(ctx context.Context, callerID core.UserID,
 	return nil
 }
 
-// demoSourceConfig builds a filesystem source_config over the demo bucket's
-// nyc-taxi/ prefix with one table globbing the given files. Extra `tables`
-// beyond the schema's bucket_url are passed through to the worker (dlt-worker
-// ≥0.0.6 contract), the same shape a file_upload pipeline resolves to.
-func (s *DemoService) demoSourceConfig(table, glob string) json.RawMessage {
+// demoSourceConfig builds a filesystem source_config over the demo datasets,
+// naming the files one table reads. Extra `tables` beyond the schema's
+// bucket_url are passed through to the worker (dlt-worker ≥0.0.6 contract),
+// the same shape a file_upload pipeline resolves to.
+//
+// Over a public URL the files are listed explicitly and there is no glob,
+// because a public object store serves by key and will not list a directory —
+// a wildcard there matches nothing and loads zero rows without failing, which
+// is the worst way for a demo to break. Over S3 a glob still works, and the
+// same explicit names are joined into one, so the two paths read the same
+// files (dlt-worker ≥0.6.0 required for the public path).
+func (s *DemoService) demoSourceConfig(table string, files []string) json.RawMessage {
+	if s.Bucket.Public() {
+		prefixed := make([]string, len(files))
+		for i, f := range files {
+			prefixed[i] = demo.BucketPrefix + f
+		}
+		raw, _ := json.Marshal(struct {
+			filesystemConfig
+			Tables []filesystemTable `json:"tables"`
+		}{
+			filesystemConfig: filesystemConfig{BucketURL: strings.TrimSuffix(s.Bucket.PublicBaseURL, "/")},
+			Tables:           []filesystemTable{{Name: table, Files: files0(prefixed)}},
+		})
+		return raw
+	}
 	raw, _ := json.Marshal(struct {
 		filesystemConfig
 		Tables []filesystemTable `json:"tables"`
 	}{
 		filesystemConfig: filesystemConfig{BucketURL: "s3://" + s.Bucket.Bucket + "/" + demo.BucketPrefix},
-		Tables:           []filesystemTable{{Name: table, FileGlob: glob}},
+		Tables:           []filesystemTable{{Name: table, FileGlob: s3Glob(files)}},
 	})
 	return raw
 }
 
-// demoCredentials builds the filesystem source credentials from the
-// platform-held demo bucket token, shared by both demo pipelines.
+// files0 returns the list unchanged; it exists so the marshalled `files` key
+// is never null for an empty tier (the worker refuses an empty list, and a
+// clear refusal beats a null it has to special-case).
+func files0(files []string) []string {
+	if files == nil {
+		return []string{}
+	}
+	return files
+}
+
+// s3Glob renders an explicit file list as a single glob for the S3 path,
+// which does support listing. One file stays its own name; several become a
+// brace alternation, which is what fsspec matches on.
+func s3Glob(files []string) string {
+	if len(files) == 1 {
+		return files[0]
+	}
+	return "{" + strings.Join(files, ",") + "}"
+}
+
+// demoCredentials builds the filesystem source credentials for the demo
+// pipelines — empty over a public URL, which is the point of serving the
+// datasets publicly: nothing is injected, so nothing has to be delivered to
+// the deployment, and nothing lands in its credential mirror.
 func (s *DemoService) demoCredentials() json.RawMessage {
+	if s.Bucket.Public() {
+		return json.RawMessage("{}")
+	}
 	raw, _ := json.Marshal(filesystemCreds{
 		AccessKeyID:     s.Bucket.AccessKeyID,
 		SecretAccessKey: s.Bucket.SecretAccessKey,

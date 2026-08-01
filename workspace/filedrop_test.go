@@ -136,10 +136,10 @@ func TestFileUploadSourceValidation(t *testing.T) {
 		t.Error("path-traversal filename accepted")
 	}
 
-	if err := workspace.ValidateSourceCredentials("file_upload", nil); err != nil {
+	if err := workspace.ValidateSourceCredentials("file_upload", nil, nil); err != nil {
 		t.Errorf("empty credentials: %v, want nil", err)
 	}
-	if err := workspace.ValidateSourceCredentials("file_upload", json.RawMessage(`{"access_key_id":"x"}`)); err == nil {
+	if err := workspace.ValidateSourceCredentials("file_upload", nil, json.RawMessage(`{"access_key_id":"x"}`)); err == nil {
 		t.Error("customer-supplied credentials accepted")
 	}
 }

@@ -185,7 +185,7 @@ func (s *PipelineService) CreatePipeline(ctx context.Context, callerID core.User
 	if err := ValidateSourceConfig(p.SourceType, p.SourceConfig); err != nil {
 		return nil, err
 	}
-	if err := ValidateSourceCredentials(p.SourceType, p.SourceCredentials); err != nil {
+	if err := ValidateSourceCredentials(p.SourceType, p.SourceConfig, p.SourceCredentials); err != nil {
 		return nil, err
 	}
 	if err := s.swapGoogleSheetsGrant(ctx, ws.Slug, p); err != nil {
@@ -404,7 +404,7 @@ func (s *PipelineService) resolveUpdateCredentials(ctx context.Context, customer
 		p.SourceCredentials = existing.SourceCredentials
 		return nil
 	}
-	if err := ValidateSourceCredentials(p.SourceType, p.SourceCredentials); err != nil {
+	if err := ValidateSourceCredentials(p.SourceType, p.SourceConfig, p.SourceCredentials); err != nil {
 		return err
 	}
 	return s.swapGoogleSheetsGrant(ctx, customerSlug, p)

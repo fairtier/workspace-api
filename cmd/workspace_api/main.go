@@ -627,10 +627,17 @@ func loadFileDropMaxBytes() int64 {
 	return maxBytes
 }
 
-// loadDemoBucket reads the read-only demo-datasets bucket credential from
-// DEMO_R2_* env; a zero value disables the demo loader.
+// loadDemoBucket says where the demo datasets are read from; a zero value
+// disables the demo loader.
+//
+// DEMO_PUBLIC_BASE_URL is the one that matters here. The datasets are public
+// domain, so serving them over an unauthenticated origin means this
+// deployment can seed the demo with nothing handed to it — no token to
+// deliver, none to rotate, and none to land in its credential mirror. The
+// DEMO_R2_* fallback is for a deployment that keeps the bucket private.
 func loadDemoBucket() workspace.DemoBucket {
 	return workspace.DemoBucket{
+		PublicBaseURL:   os.Getenv("DEMO_PUBLIC_BASE_URL"),
 		AccessKeyID:     os.Getenv("DEMO_R2_ACCESS_KEY_ID"),
 		SecretAccessKey: os.Getenv("DEMO_R2_SECRET_ACCESS_KEY"),
 		Endpoint:        os.Getenv("DEMO_R2_ENDPOINT"),

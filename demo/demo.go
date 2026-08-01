@@ -46,11 +46,30 @@ const (
 	BucketPrefix = "nyc-taxi/"
 )
 
-// Tier is one sizing option, selected purely by the trips file glob.
+// Tier is one sizing option, selected purely by which trips files it names.
+//
+// The files are enumerated rather than globbed, because the demo bucket is
+// public and a public object-storage bucket serves objects by key and
+// refuses to list a directory — there is nothing for a glob to match
+// against. That is not a limitation to work around: the TLC filenames are
+// deterministic, so naming them is exact where a glob was only ever an
+// approximation of the same list.
 type Tier struct {
 	Name string
-	Glob string
-	Rows string // human hint, informational only
+	// Files are object names under BucketPrefix, in load order.
+	Files []string
+	Rows  string // human hint, informational only
+}
+
+// tripFiles enumerates the monthly TLC trip files for whole years.
+func tripFiles(years ...int) []string {
+	files := make([]string, 0, len(years)*12)
+	for _, year := range years {
+		for month := 1; month <= 12; month++ {
+			files = append(files, fmt.Sprintf("yellow_tripdata_%d-%02d.parquet", year, month))
+		}
+	}
+	return files
 }
 
 // Tiers, keyed by name. "sample" is the default for one-click seeding of a
@@ -61,14 +80,14 @@ type Tier struct {
 // rows) drove the dlt-worker to its 1GB limit on the PyIceberg write and pushed
 // the node into OOM/thrash. A ~200k-row pre-built sample loads in seconds and
 // fits the headroom. The larger tiers are opt-in "make it yours" upgrades and
-// assume a box sized to ingest millions of rows (a one-field glob edit on the
+// assume a box sized to ingest millions of rows (a one-field edit on the
 // pipeline).
 var Tiers = map[string]Tier{
-	"sample":  {Name: "sample", Glob: "yellow_tripdata_sample.parquet", Rows: "~200k"},
-	"tiny":    {Name: "tiny", Glob: "yellow_tripdata_2024-01.parquet", Rows: "~3M"},
-	"minimal": {Name: "minimal", Glob: "yellow_tripdata_2024-*.parquet", Rows: "~41M"},
-	"default": {Name: "default", Glob: "yellow_tripdata_202[2-4]-*.parquet", Rows: "~118M"},
-	"full":    {Name: "full", Glob: "yellow_tripdata_20{19,20,21,22,23,24}-*.parquet", Rows: "~255M"},
+	"sample":  {Name: "sample", Files: []string{"yellow_tripdata_sample.parquet"}, Rows: "~200k"},
+	"tiny":    {Name: "tiny", Files: []string{"yellow_tripdata_2024-01.parquet"}, Rows: "~3M"},
+	"minimal": {Name: "minimal", Files: tripFiles(2024), Rows: "~41M"},
+	"default": {Name: "default", Files: tripFiles(2022, 2023, 2024), Rows: "~118M"},
+	"full":    {Name: "full", Files: tripFiles(2019, 2020, 2021, 2022, 2023, 2024), Rows: "~255M"},
 }
 
 // DefaultTier is used when the caller does not pick one. Set to "sample" from

@@ -2,6 +2,7 @@ package workspace_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -397,4 +398,104 @@ func TestDemoService_GetDemoStatus(t *testing.T) {
 			t.Errorf("status = %+v, want loading not loaded", status)
 		}
 	})
+}
+
+// The demo bucket is public-domain data, and a deployment that has to be
+// handed a credential to read it is one that cannot seed the demo alone.
+// Over a public origin the pipelines must therefore carry NO credential —
+// and must name their files, because a public object store serves by key and
+// will not list a directory, so a glob there matches nothing and loads zero
+// rows without failing.
+func TestDemoService_PublicBucketNeedsNoCredential(t *testing.T) {
+	pipes := &fakeDemoPipelines{}
+	svc := newDemoService(pipes, &fakeDemoTransformations{}, &fakeDemoBoxRepo{}, &fakeDemoSeedStore{})
+	svc.Bucket = workspace.DemoBucket{PublicBaseURL: "https://demo-data.example.com/"}
+
+	if _, err := svc.LoadDemoProject(context.Background(), "user-1", "sample"); err != nil {
+		t.Fatalf("LoadDemoProject() error = %v", err)
+	}
+	if len(pipes.created) != 2 {
+		t.Fatalf("expected 2 pipelines, got %d", len(pipes.created))
+	}
+
+	for _, p := range pipes.created {
+		var creds map[string]any
+		if err := json.Unmarshal(p.SourceCredentials, &creds); err != nil {
+			t.Fatalf("%s: credentials are not JSON: %v", p.Name, err)
+		}
+		if len(creds) != 0 {
+			t.Errorf("%s: expected no credentials over a public origin, got %v", p.Name, creds)
+		}
+
+		var cfg struct {
+			BucketURL string `json:"bucket_url"`
+			Tables    []struct {
+				Name     string   `json:"name"`
+				FileGlob string   `json:"file_glob"`
+				Files    []string `json:"files"`
+			} `json:"tables"`
+		}
+		if err := json.Unmarshal(p.SourceConfig, &cfg); err != nil {
+			t.Fatalf("%s: config is not JSON: %v", p.Name, err)
+		}
+		// No trailing slash doubled into the object URLs.
+		if cfg.BucketURL != "https://demo-data.example.com" {
+			t.Errorf("%s: bucket_url = %q", p.Name, cfg.BucketURL)
+		}
+		if len(cfg.Tables) != 1 {
+			t.Fatalf("%s: expected 1 table, got %d", p.Name, len(cfg.Tables))
+		}
+		table := cfg.Tables[0]
+		if table.FileGlob != "" {
+			t.Errorf("%s: a public origin cannot be globbed, got file_glob %q", p.Name, table.FileGlob)
+		}
+		if len(table.Files) == 0 {
+			t.Fatalf("%s: expected explicit files", p.Name)
+		}
+		for _, f := range table.Files {
+			if !strings.HasPrefix(f, "nyc-taxi/") {
+				t.Errorf("%s: file %q is missing the bucket prefix", p.Name, f)
+			}
+		}
+	}
+}
+
+// The S3 path is unchanged: a credential is still injected, and the same
+// files are expressed as a glob, which S3 can list for.
+func TestDemoService_S3BucketStillInjectsCredential(t *testing.T) {
+	pipes := &fakeDemoPipelines{}
+	svc := newDemoService(pipes, &fakeDemoTransformations{}, &fakeDemoBoxRepo{}, &fakeDemoSeedStore{})
+	svc.Bucket = configuredBucket()
+
+	if _, err := svc.LoadDemoProject(context.Background(), "user-1", "minimal"); err != nil {
+		t.Fatalf("LoadDemoProject() error = %v", err)
+	}
+
+	trips := pipes.created[0]
+	var creds map[string]any
+	if err := json.Unmarshal(trips.SourceCredentials, &creds); err != nil {
+		t.Fatalf("credentials are not JSON: %v", err)
+	}
+	if creds["access_key_id"] != "ak" {
+		t.Errorf("expected the platform credential injected, got %v", creds)
+	}
+
+	var cfg struct {
+		BucketURL string `json:"bucket_url"`
+		Tables    []struct {
+			FileGlob string `json:"file_glob"`
+		} `json:"tables"`
+	}
+	if err := json.Unmarshal(trips.SourceConfig, &cfg); err != nil {
+		t.Fatalf("config is not JSON: %v", err)
+	}
+	if !strings.HasPrefix(cfg.BucketURL, "s3://") {
+		t.Errorf("bucket_url = %q, want an s3:// bucket", cfg.BucketURL)
+	}
+	// The 12 monthly files of the "minimal" tier, as one brace alternation.
+	glob := cfg.Tables[0].FileGlob
+	if !strings.HasPrefix(glob, "{") || !strings.Contains(glob, "yellow_tripdata_2024-01.parquet") ||
+		!strings.Contains(glob, "yellow_tripdata_2024-12.parquet") {
+		t.Errorf("file_glob = %q, want every 2024 month", glob)
+	}
 }

@@ -539,6 +539,34 @@ func TestPipelineService_ReportPipelineRun(t *testing.T) {
 		}
 	})
 
+	// The box worker records a run locally and reports the same id. If this
+	// database has never seen that id, the row must be created UNDER it —
+	// minting a second one would show the customer two rows for one run.
+	t.Run("creates under the reported ID when the run is unknown", func(t *testing.T) {
+		var createdID string
+
+		svc := &workspace.PipelineService{
+			Pipelines: &mockPipelineRepo{
+				updatePipelineRunFn: func(context.Context, *workspace.PipelineRun) error {
+					return workspace.ErrPipelineRunNotFound
+				},
+				createPipelineRunFn: func(_ context.Context, run *workspace.PipelineRun) error {
+					createdID = run.ID
+					return nil
+				},
+			},
+			Logger: slog.Default(),
+		}
+
+		run := &workspace.PipelineRun{ID: "run-local-1", PipelineID: "pipe-1", Status: "success"}
+		if err := svc.ReportPipelineRun(context.Background(), "", run); err != nil {
+			t.Fatalf("ReportPipelineRun() error = %v", err)
+		}
+		if createdID != "run-local-1" {
+			t.Errorf("created run id = %q, want the reported id preserved", createdID)
+		}
+	})
+
 	t.Run("creates new run when ID empty", func(t *testing.T) {
 		updateCalled := false
 		createCalled := false

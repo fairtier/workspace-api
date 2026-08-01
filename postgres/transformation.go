@@ -200,11 +200,13 @@ func (r *Repository) CreateTransformationRun(ctx context.Context, run *workspace
 	if run.CreatedAt.IsZero() {
 		run.CreatedAt = time.Now()
 	}
+	// Caller-supplied id honoured for the same reason as pipeline runs: the
+	// box worker records the run locally and reports that id back.
 	err := r.DB.QueryRowContext(ctx,
-		`INSERT INTO transformation_runs (transformation_id, status, started_at, completed_at, commit_sha, models_total, models_failed, tests_total, tests_failed, model_results, error_message, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		`INSERT INTO transformation_runs (id, transformation_id, status, started_at, completed_at, commit_sha, models_total, models_failed, tests_total, tests_failed, model_results, error_message, created_at)
+		 VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 RETURNING id`,
-		run.TransformationID, run.Status, run.StartedAt, run.CompletedAt, run.CommitSHA,
+		nullUUID(run.ID), run.TransformationID, run.Status, run.StartedAt, run.CompletedAt, run.CommitSHA,
 		run.ModelsTotal, run.ModelsFailed, run.TestsTotal, run.TestsFailed,
 		jsonArrayOrEmpty(run.ModelResults), run.ErrorMessage, run.CreatedAt,
 	).Scan(&run.ID)

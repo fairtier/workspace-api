@@ -622,14 +622,24 @@ func (s *PipelineService) appendFileUploadPipeline(ctx context.Context, p Pipeli
 }
 
 // ReportPipelineRun records a run result from the dlt-worker.
-// If run.ID is set, it updates the existing row (used for triggered runs);
-// otherwise it inserts a new row.
+//
+// A report carrying an id is an upsert on that id: it updates the existing
+// row, and creates the row under that same id when there is none. That
+// second half is what lets one run keep one identity. On a box the worker
+// records every run in this database itself and reports the id it used, so
+// an id it has never seen means the local write is the one that did not
+// happen — not that a new run should be invented. An id-less report (a
+// worker predating the single-identity contract) still inserts, with the
+// column default minting the id.
 //
 // callerSlug, when non-empty, is the tenant bound to the caller's service
 // token: the reported pipeline must belong to that ws. Empty skips the
 // check — only possible while the internal mux runs in log mode. The
 // run-update path is covered too: UpdatePipelineRun matches on run ID AND
 // pipeline ID, so a run can't be touched through someone else's pipeline.
+// The create-on-missing path cannot reach another tenant's run either: the
+// id is a primary key, so colliding with an existing row fails the insert
+// rather than overwriting it.
 func (s *PipelineService) ReportPipelineRun(ctx context.Context, callerSlug string, run *PipelineRun) error {
 	if callerSlug != "" {
 		pipeline, err := s.Pipelines.GetPipeline(ctx, run.PipelineID)
@@ -641,8 +651,12 @@ func (s *PipelineService) ReportPipelineRun(ctx context.Context, callerSlug stri
 		}
 	}
 	if run.ID != "" {
-		if err := s.Pipelines.UpdatePipelineRun(ctx, run); err != nil {
-			return fmt.Errorf("update pipeline run: %w", err)
+		err := s.Pipelines.UpdatePipelineRun(ctx, run)
+		if errors.Is(err, ErrPipelineRunNotFound) {
+			err = s.Pipelines.CreatePipelineRun(ctx, run)
+		}
+		if err != nil {
+			return fmt.Errorf("record pipeline run: %w", err)
 		}
 	} else {
 		if err := s.Pipelines.CreatePipelineRun(ctx, run); err != nil {

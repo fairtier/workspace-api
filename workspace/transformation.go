@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -386,8 +387,10 @@ func (s *TransformationService) GetEnabledTransformations(ctx context.Context, c
 }
 
 // ReportTransformationRun records a run result from the dlt-worker.
-// If run.ID is set, it updates the existing row (used for triggered runs);
-// otherwise it inserts a new row.
+//
+// Like ReportPipelineRun, a report carrying an id is an upsert on that id:
+// one run, one identity, whether the row was created here or by the box
+// worker recording the run locally first.
 //
 // callerSlug, when non-empty, is the tenant bound to the caller's service
 // token: the reported transformation must belong to that ws. Empty
@@ -403,8 +406,12 @@ func (s *TransformationService) ReportTransformationRun(ctx context.Context, cal
 		}
 	}
 	if run.ID != "" {
-		if err := s.Transformations.UpdateTransformationRun(ctx, run); err != nil {
-			return fmt.Errorf("update transformation run: %w", err)
+		err := s.Transformations.UpdateTransformationRun(ctx, run)
+		if errors.Is(err, ErrTransformationRunNotFound) {
+			err = s.Transformations.CreateTransformationRun(ctx, run)
+		}
+		if err != nil {
+			return fmt.Errorf("record transformation run: %w", err)
 		}
 	} else {
 		if err := s.Transformations.CreateTransformationRun(ctx, run); err != nil {

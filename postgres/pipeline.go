@@ -257,11 +257,15 @@ func (r *Repository) CreatePipelineRun(ctx context.Context, run *workspace.Pipel
 	if run.CreatedAt.IsZero() {
 		run.CreatedAt = time.Now()
 	}
+	// A caller-supplied id is honoured so one run keeps one identity wherever
+	// it is recorded. On a box the dlt-worker writes the run row itself and
+	// then reports the same id back here; letting the column default mint a
+	// second uuid would show the customer two rows for one run.
 	err := r.DB.QueryRowContext(ctx,
-		`INSERT INTO pipeline_runs (pipeline_id, status, started_at, completed_at, rows_loaded, error_message, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO pipeline_runs (id, pipeline_id, status, started_at, completed_at, rows_loaded, error_message, created_at)
+		 VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id`,
-		run.PipelineID, run.Status, run.StartedAt, run.CompletedAt, run.RowsLoaded, run.ErrorMessage, run.CreatedAt,
+		nullUUID(run.ID), run.PipelineID, run.Status, run.StartedAt, run.CompletedAt, run.RowsLoaded, run.ErrorMessage, run.CreatedAt,
 	).Scan(&run.ID)
 	if err != nil {
 		return fmt.Errorf("postgres: create pipeline run: %w", err)

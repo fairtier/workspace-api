@@ -263,6 +263,36 @@ func TestTransformationService_ReportTransformationRun(t *testing.T) {
 		}
 	})
 
+	// Same single-identity rule as pipeline runs: an unknown reported id
+	// creates the row under that id rather than minting a second one.
+	t.Run("creates under the reported ID when the run is unknown", func(t *testing.T) {
+		var createdID string
+
+		svc := &workspace.TransformationService{
+			Transformations: &mockTransformationRepo{
+				getTransformationFn: func(context.Context, workspace.TransformationID) (*workspace.Transformation, error) {
+					return acmeTransformation, nil
+				},
+				updateTransformationRunFn: func(context.Context, *workspace.TransformationRun) error {
+					return workspace.ErrTransformationRunNotFound
+				},
+				createTransformationRunFn: func(_ context.Context, run *workspace.TransformationRun) error {
+					createdID = run.ID
+					return nil
+				},
+			},
+			Logger: slog.Default(),
+		}
+
+		run := &workspace.TransformationRun{ID: "run-local-1", TransformationID: "tf-1", Status: "success"}
+		if err := svc.ReportTransformationRun(context.Background(), "acme", run); err != nil {
+			t.Fatalf("ReportTransformationRun() error = %v", err)
+		}
+		if createdID != "run-local-1" {
+			t.Errorf("created run id = %q, want the reported id preserved", createdID)
+		}
+	})
+
 	t.Run("notifies on completion", func(t *testing.T) {
 		var notified *workspace.Notification
 

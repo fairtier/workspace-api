@@ -43,8 +43,22 @@ type pipelineMirrorDispatcher struct {
 	maxAttempts int
 
 	mu      sync.Mutex
-	pending map[string]core.UserID // customerSlug -> latest caller; presence = dirty
+	pending map[string]pendingSync // customerSlug -> latest save; presence = dirty
 	active  map[string]bool        // customerSlug -> a worker goroutine is running
+}
+
+// pendingSync is one coalesced save waiting to converge.
+type pendingSync struct {
+	callerID core.UserID
+	// authorCtx is the saving request's context with its cancellation
+	// stripped, and it is used for ONE thing: resolving the commit author.
+	// The converge itself deliberately runs on a fresh context (see
+	// syncOnce), but who the caller *is* can be request-scoped state rather
+	// than a row — on a box there is no users table, and the identity lives
+	// in the claims of the token that authenticated the save. Dropping the
+	// values here would silently attribute every mirrored commit to the
+	// platform.
+	authorCtx context.Context
 }
 
 func newPipelineMirrorDispatcher(mirror PipelineMirrorer, users UserReader, logger *slog.Logger) *pipelineMirrorDispatcher {
@@ -56,17 +70,21 @@ func newPipelineMirrorDispatcher(mirror PipelineMirrorer, users UserReader, logg
 		backoff:     1 * time.Second,
 		maxBackoff:  30 * time.Second,
 		maxAttempts: 5,
-		pending:     make(map[string]core.UserID),
+		pending:     make(map[string]pendingSync),
 		active:      make(map[string]bool),
 	}
 }
 
 // enqueue marks the customer dirty with the latest caller and ensures a worker
-// is running. Non-blocking: the save returns immediately.
-func (d *pipelineMirrorDispatcher) enqueue(callerID core.UserID, customerSlug string) {
+// is running. Non-blocking: the save returns immediately. ctx is the saving
+// request's; only its values are retained, and only to name the commit author.
+func (d *pipelineMirrorDispatcher) enqueue(ctx context.Context, callerID core.UserID, customerSlug string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.pending[customerSlug] = callerID
+	d.pending[customerSlug] = pendingSync{
+		callerID:  callerID,
+		authorCtx: context.WithoutCancel(ctx),
+	}
 	if d.active[customerSlug] {
 		return // the running worker will pick up the newly-pending state
 	}
@@ -80,7 +98,7 @@ func (d *pipelineMirrorDispatcher) enqueue(callerID core.UserID, customerSlug st
 func (d *pipelineMirrorDispatcher) work(customerSlug string) {
 	for {
 		d.mu.Lock()
-		callerID, ok := d.pending[customerSlug]
+		save, ok := d.pending[customerSlug]
 		if !ok {
 			d.active[customerSlug] = false
 			d.mu.Unlock()
@@ -89,7 +107,7 @@ func (d *pipelineMirrorDispatcher) work(customerSlug string) {
 		delete(d.pending, customerSlug)
 		d.mu.Unlock()
 
-		d.syncWithRetry(customerSlug, callerID)
+		d.syncWithRetry(customerSlug, save)
 	}
 }
 
@@ -97,10 +115,10 @@ func (d *pipelineMirrorDispatcher) work(customerSlug string) {
 // failure — and only while no newer save is already queued, since that queued
 // save will re-converge the latest state and retrying a superseded run is
 // wasted work.
-func (d *pipelineMirrorDispatcher) syncWithRetry(customerSlug string, callerID core.UserID) {
+func (d *pipelineMirrorDispatcher) syncWithRetry(customerSlug string, save pendingSync) {
 	backoff := d.backoff
 	for attempt := 1; ; attempt++ {
-		err := d.syncOnce(customerSlug, callerID)
+		err := d.syncOnce(customerSlug, save)
 		if err == nil {
 			return
 		}
@@ -120,10 +138,23 @@ func (d *pipelineMirrorDispatcher) syncWithRetry(customerSlug string, callerID c
 // syncOnce converges once against a fresh background context (never the request
 // context: this runs after the handler has returned, so it must not inherit its
 // cancellation or its request-scoped values) bounded by syncTimeout.
-func (d *pipelineMirrorDispatcher) syncOnce(customerSlug string, callerID core.UserID) error {
+//
+// The one exception is resolving the commit author, which reads the saving
+// request's values (see pendingSync.authorCtx) under the same timeout — it is
+// where the caller's identity may live, and attribution is the only thing that
+// needs it. A nil authorCtx (a caller that predates this, or a test) simply
+// degrades to platform attribution rather than panicking.
+func (d *pipelineMirrorDispatcher) syncOnce(customerSlug string, save pendingSync) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d.syncTimeout)
 	defer cancel()
-	return d.mirror.SyncCustomer(ctx, customerSlug, resolveCommitAuthor(ctx, d.users, callerID))
+
+	authorCtx := ctx
+	if save.authorCtx != nil {
+		var authorCancel context.CancelFunc
+		authorCtx, authorCancel = context.WithTimeout(save.authorCtx, d.syncTimeout)
+		defer authorCancel()
+	}
+	return d.mirror.SyncCustomer(ctx, customerSlug, resolveCommitAuthor(authorCtx, d.users, save.callerID))
 }
 
 func (d *pipelineMirrorDispatcher) superseded(customerSlug string) bool {

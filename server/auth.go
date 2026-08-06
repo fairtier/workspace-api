@@ -20,7 +20,38 @@ type contextKey int
 const (
 	userIDKey contextKey = iota
 	internalCallerKey
+	tokenProfileKey
 )
+
+// TokenProfile is the profile the caller's own verified token carries. It is
+// best-effort by nature — every field but Subject is optional in both Casdoor
+// token formats — and exists so a deployment with no users table (the box)
+// can still attribute a git commit to the person who made it. Anything that
+// must be trustworthy belongs in a lookup, not here: these claims are only as
+// good as the issuer, which is the same issuer that authenticated the call.
+type TokenProfile struct {
+	// Subject is the token's sub, i.e. the same value UserIDFromContext
+	// returns. Consumers compare it against the caller they were handed
+	// rather than assuming the context belongs to them.
+	Subject     string
+	Name        string
+	DisplayName string
+	Email       string
+}
+
+// TokenProfileFromContext returns the profile claims of the token that
+// authenticated this request, if the request was authenticated at all.
+func TokenProfileFromContext(ctx context.Context) (TokenProfile, bool) {
+	v, ok := ctx.Value(tokenProfileKey).(TokenProfile)
+	return v, ok
+}
+
+// ContextWithTokenProfile returns a context carrying the given profile as if
+// the auth interceptor had set it. For handler tests and embedders that
+// authenticate outside the interceptor.
+func ContextWithTokenProfile(ctx context.Context, p TokenProfile) context.Context {
+	return context.WithValue(ctx, tokenProfileKey, p)
+}
 
 // UserIDFromContext returns the authenticated user ID from the context.
 func UserIDFromContext(ctx context.Context) core.UserID {
@@ -108,6 +139,31 @@ func (a UserAuth) UserIDFromBearer(ctx context.Context, authHeader string) (core
 	return a.userIDFromToken(ctx, token)
 }
 
+// authenticateBearer validates an Authorization header and returns a context
+// carrying both the caller and the profile claims their token supplied. The
+// interceptors use this rather than UserIDFromBearer so commit attribution
+// works on a deployment that cannot look the caller up (see TokenProfile);
+// UserIDFromBearer stays for the plain-HTTP endpoints, which only need the
+// identity.
+func (a UserAuth) authenticateBearer(ctx context.Context, authHeader string) (context.Context, error) {
+	token, err := tokenFromHeader(authHeader)
+	if err != nil {
+		return nil, err
+	}
+	return a.authenticateToken(ctx, token)
+}
+
+// authenticateToken verifies a token and returns a context carrying the
+// caller plus their profile claims.
+func (a UserAuth) authenticateToken(ctx context.Context, token string) (context.Context, error) {
+	userID, profile, err := a.parseToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, userIDKey, userID)
+	return context.WithValue(ctx, tokenProfileKey, profile), nil
+}
+
 // userIDFromToken verifies a bearer token and returns the human user it
 // authenticates. Service-account subjects are rejected outright: the user
 // surfaces of both planes are for people, and a machine identity that
@@ -116,19 +172,63 @@ func (a UserAuth) UserIDFromBearer(ctx context.Context, authHeader string) (core
 // account has a users row either, so this only moves the denial from the
 // lookup to the token — the two planes answer the same way.
 func (a UserAuth) userIDFromToken(ctx context.Context, token string) (core.UserID, error) {
+	userID, _, err := a.parseToken(ctx, token)
+	return userID, err
+}
+
+// parseToken verifies a bearer token and returns the caller together with the
+// profile claims it carries.
+func (a UserAuth) parseToken(ctx context.Context, token string) (core.UserID, TokenProfile, error) {
 	parsed, err := jwt.Parse(token, a.JWKS.KeyfuncCtx(ctx), a.parserOptions()...)
 	if err != nil {
-		return "", errors.New("invalid token")
+		return "", TokenProfile{}, errors.New("invalid token")
 	}
 
 	sub, err := parsed.Claims.GetSubject()
 	if err != nil || sub == "" {
-		return "", errors.New("missing subject")
+		return "", TokenProfile{}, errors.New("missing subject")
 	}
 	if core.UserID(sub).IsServiceAccount() {
-		return "", errors.New("service-account token is not a user identity")
+		return "", TokenProfile{}, errors.New("service-account token is not a user identity")
 	}
-	return core.UserID(sub), nil
+	return core.UserID(sub), tokenProfile(sub, parsed.Claims), nil
+}
+
+// tokenProfile reads the optional profile claims out of a verified token.
+//
+// The two Casdoor token formats in play disagree about what "name" means, and
+// the mapping is the reverse of the intuitive one — verified against Casdoor's
+// UserStandard struct tags rather than assumed:
+//
+//	tokenFormat "JWT"          embeds the user object: name = username,
+//	                           displayName = display name.
+//	tokenFormat "JWT-Standard" is OIDC UserStandard: preferred_username =
+//	                           username, name = *display* name, picture =
+//	                           avatar.
+//
+// Every field is omitempty in the standard format, so any of them may be
+// absent. preferred_username is the discriminator: only the standard format
+// emits it. Boxes issue JWT-Standard (the full format bloats the session
+// cookie past the HPACK table); central issues JWT.
+func tokenProfile(sub string, claims jwt.Claims) TokenProfile {
+	m, ok := claims.(jwt.MapClaims)
+	if !ok {
+		return TokenProfile{Subject: sub}
+	}
+	profile := TokenProfile{Subject: sub, Email: stringClaim(m, "email")}
+	if username := stringClaim(m, "preferred_username"); username != "" {
+		profile.Name = username
+		profile.DisplayName = stringClaim(m, "name")
+		return profile
+	}
+	profile.Name = stringClaim(m, "name")
+	profile.DisplayName = stringClaim(m, "displayName")
+	return profile
+}
+
+func stringClaim(m jwt.MapClaims, name string) string {
+	s, _ := m[name].(string)
+	return s
 }
 
 // authInterceptor validates JWT bearer tokens and puts the token subject in
@@ -154,11 +254,11 @@ func NewAuthInterceptor(auth UserAuth) connect.Interceptor {
 
 func (i authInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		userID, err := i.auth.UserIDFromBearer(ctx, req.Header().Get("Authorization"))
+		authed, err := i.auth.authenticateBearer(ctx, req.Header().Get("Authorization"))
 		if err != nil {
 			return nil, connect.NewError(connect.CodeUnauthenticated, err)
 		}
-		return next(context.WithValue(ctx, userIDKey, userID), req)
+		return next(authed, req)
 	}
 }
 
@@ -170,11 +270,11 @@ func (i authInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) c
 
 func (i authInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		userID, err := i.auth.UserIDFromBearer(ctx, conn.RequestHeader().Get("Authorization"))
+		authed, err := i.auth.authenticateBearer(ctx, conn.RequestHeader().Get("Authorization"))
 		if err != nil {
 			return connect.NewError(connect.CodeUnauthenticated, err)
 		}
-		return next(context.WithValue(ctx, userIDKey, userID), conn)
+		return next(authed, conn)
 	}
 }
 
@@ -191,12 +291,12 @@ func NewOptionalAuthInterceptor(auth UserAuth) connect.UnaryInterceptorFunc {
 				return next(ctx, req)
 			}
 
-			userID, err := auth.userIDFromToken(ctx, token)
+			authed, err := auth.authenticateToken(ctx, token)
 			if err != nil {
 				return nil, connect.NewError(connect.CodeUnauthenticated, err)
 			}
 
-			return next(context.WithValue(ctx, userIDKey, userID), req)
+			return next(authed, req)
 		}
 	}
 }

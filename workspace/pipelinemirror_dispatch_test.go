@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/fairtier/workspace-api/core"
 )
 
 type funcMirror struct{ fn func() error }
@@ -52,7 +54,7 @@ func TestPipelineMirrorDispatcher_retriesTransient(t *testing.T) {
 		return nil
 	}}
 	d := testDispatcher(m)
-	d.enqueue("u1", "acme")
+	d.enqueue(t.Context(), "u1", "acme")
 
 	select {
 	case <-done:
@@ -73,7 +75,7 @@ func TestPipelineMirrorDispatcher_noRetryOnPermanent(t *testing.T) {
 		return errors.New("permanent render failure")
 	}}
 	d := testDispatcher(m)
-	d.enqueue("u1", "acme")
+	d.enqueue(t.Context(), "u1", "acme")
 	waitIdle(t, d, "acme")
 
 	if got := calls.Load(); got != 1 {
@@ -96,7 +98,7 @@ func TestPipelineMirrorDispatcher_serializesPerCustomer(t *testing.T) {
 	}}
 	d := testDispatcher(m)
 	for range 20 {
-		d.enqueue("u1", "acme")
+		d.enqueue(t.Context(), "u1", "acme")
 	}
 	waitIdle(t, d, "acme")
 
@@ -120,13 +122,94 @@ func TestPipelineMirrorDispatcher_coalescesFollowUp(t *testing.T) {
 	}}
 	d := testDispatcher(m)
 
-	d.enqueue("u1", "acme")
+	d.enqueue(t.Context(), "u1", "acme")
 	<-started
-	d.enqueue("u2", "acme") // arrives while the first converge is in flight
+	d.enqueue(t.Context(), "u2", "acme") // arrives while the first converge is in flight
 	close(release)
 	waitIdle(t, d, "acme")
 
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("want exactly 2 converges (initial + one coalesced follow-up), got %d", got)
 	}
+}
+
+// ctxUserReader resolves the commit author from a request-scoped context
+// value, the way the box's reader resolves it from the caller's token claims
+// rather than from a table.
+type ctxUserReader struct{}
+
+type ctxUserKey struct{}
+
+func (ctxUserReader) GetCommitUser(ctx context.Context, _ core.UserID) (*UserInfo, error) {
+	email, _ := ctx.Value(ctxUserKey{}).(string)
+	if email == "" {
+		return nil, errors.New("no user in context")
+	}
+	return &UserInfo{Name: "rich", Email: email}, nil
+}
+
+// The converge runs on a fresh context by design, but the commit author may
+// only be resolvable from the *saving request's* context — on a box the
+// caller's identity is in their token, not in a users table. Dropping those
+// values would silently attribute every mirrored commit to the platform,
+// which looks like working software.
+func TestPipelineMirrorDispatcher_authorResolvedFromRequestValues(t *testing.T) {
+	authors := make(chan *CommitAuthor, 1)
+	m := &captureMirror{authors: authors}
+
+	d := newPipelineMirrorDispatcher(m, ctxUserReader{}, nil)
+	d.backoff = time.Millisecond
+	d.maxBackoff = time.Millisecond
+
+	// A request context that is CANCELLED by the time the worker runs, as a
+	// real one is once the handler has returned.
+	reqCtx, cancel := context.WithCancel(context.WithValue(t.Context(), ctxUserKey{}, "rich@example.com"))
+	d.enqueue(reqCtx, "u1", "acme")
+	cancel()
+
+	select {
+	case got := <-authors:
+		if got == nil {
+			t.Fatal("commit author was nil: the request's values did not survive the hand-off")
+		}
+		if got.Email != "rich@example.com" {
+			t.Errorf("author email = %q, want rich@example.com", got.Email)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("converge never ran")
+	}
+	waitIdle(t, d, "acme")
+}
+
+// A dispatcher driven without a request context (a caller that predates the
+// authorCtx field, or a test) must degrade to platform attribution, never
+// panic on a nil context.
+func TestPipelineMirrorDispatcher_nilAuthorContext(t *testing.T) {
+	authors := make(chan *CommitAuthor, 1)
+	d := newPipelineMirrorDispatcher(&captureMirror{authors: authors}, ctxUserReader{}, nil)
+	d.backoff = time.Millisecond
+	d.maxBackoff = time.Millisecond
+
+	d.mu.Lock()
+	d.pending["acme"] = pendingSync{callerID: "u1"}
+	d.active["acme"] = true
+	d.mu.Unlock()
+	go d.work("acme")
+
+	select {
+	case got := <-authors:
+		if got != nil {
+			t.Errorf("author = %+v, want nil (platform attribution)", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("converge never ran")
+	}
+	waitIdle(t, d, "acme")
+}
+
+type captureMirror struct{ authors chan *CommitAuthor }
+
+func (m *captureMirror) SyncCustomer(_ context.Context, _ string, a *CommitAuthor) error {
+	m.authors <- a
+	return nil
 }

@@ -168,14 +168,14 @@ func (s *TransformationService) commitOrCompensate(ctx context.Context, callerID
 // mirrorTransformations hands the customer's execution configs off to be
 // dual-written to the box repo, best-effort and OFF the request path (same
 // contract as PipelineService.mirrorPipelines).
-func (s *TransformationService) mirrorTransformations(callerID core.UserID, customerSlug string) {
+func (s *TransformationService) mirrorTransformations(ctx context.Context, callerID core.UserID, customerSlug string) {
 	if s.Mirror == nil {
 		return
 	}
 	s.mirrorOnce.Do(func() {
 		s.mirrorDispatcher = newPipelineMirrorDispatcher(s.Mirror, s.Users, s.Logger)
 	})
-	s.mirrorDispatcher.enqueue(callerID, customerSlug)
+	s.mirrorDispatcher.enqueue(ctx, callerID, customerSlug)
 }
 
 // validateTrigger verifies that a non-empty trigger pipeline belongs to the
@@ -227,7 +227,7 @@ func (s *TransformationService) CreateTransformation(ctx context.Context, caller
 		}
 		return t, nil
 	}
-	s.mirrorTransformations(callerID, ws.Slug)
+	s.mirrorTransformations(ctx, callerID, ws.Slug)
 	return t, nil
 }
 
@@ -311,7 +311,7 @@ func (s *TransformationService) UpdateTransformation(ctx context.Context, caller
 		}
 		return t, nil
 	}
-	s.mirrorTransformations(callerID, ws.Slug)
+	s.mirrorTransformations(ctx, callerID, ws.Slug)
 	return t, nil
 }
 
@@ -343,7 +343,7 @@ func (s *TransformationService) DeleteTransformation(ctx context.Context, caller
 			return s.Transformations.CreateTransformation(ctx, existing)
 		})
 	}
-	s.mirrorTransformations(callerID, ws.Slug)
+	s.mirrorTransformations(ctx, callerID, ws.Slug)
 	return nil
 }
 

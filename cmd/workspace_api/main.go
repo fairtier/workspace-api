@@ -165,12 +165,20 @@ func run() error {
 	pipelinesGitPrimary := os.Getenv("PIPELINES_GIT_PRIMARY") != "off"
 	transformationsGitPrimary := os.Getenv("TRANSFORMATIONS_GIT_PRIMARY") != "off"
 
+	// Commit attribution: central reads its users table, the box reads the
+	// claims of the token the caller just presented — its database holds no
+	// user rows, and the identity lives in the box's own Casdoor, which minted
+	// that token. A caller whose token carries no email keeps the platform
+	// identity, exactly as a failed central lookup does.
+	commitUsers := server.TokenUserReader{}
+
 	pipelineSvc := &workspace.PipelineService{
 		Workspaces:    resolver,
 		Pipelines:     repo,
 		Notifications: notificationSvc,
 		Mirror:        pipelineMirror,
 		Ownership:     repo,
+		Users:         commitUsers,
 		Versions:      pipelineMirror,
 		// The local dlt-worker decrypts credentials from the checkout, and
 		// saves commit synchronously.
@@ -205,6 +213,7 @@ func run() error {
 		Pipelines:       repo,
 		Notifications:   notificationSvc,
 		Mirror:          transformationMirror,
+		Users:           commitUsers,
 		GitPrimary:      transformationsGitPrimary,
 		Logger:          logger,
 	}
@@ -213,6 +222,7 @@ func run() error {
 	boxRepoSvc := &workspace.BoxRepoService{
 		Workspaces:      resolver,
 		Credentials:     boxCreds,
+		Users:           commitUsers,
 		NewClient:       gitea.NewClient,
 		NewMirrorClient: gitea.NewMirrorClient,
 		Logger:          logger,

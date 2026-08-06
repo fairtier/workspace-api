@@ -204,7 +204,7 @@ func (s *PipelineService) CreatePipeline(ctx context.Context, callerID core.User
 		}
 		return p, nil
 	}
-	s.mirrorPipelines(callerID, ws.Slug)
+	s.mirrorPipelines(ctx, callerID, ws.Slug)
 	return p, nil
 }
 
@@ -251,14 +251,14 @@ func (s *PipelineService) commitOrCompensate(ctx context.Context, callerID core.
 // truth) is written. The dispatcher serializes and coalesces converges per
 // customer with bounded retry (see pipelineMirrorDispatcher); a failed sync is
 // retried, and overlapping saves can never leave the box on a stale snapshot.
-func (s *PipelineService) mirrorPipelines(callerID core.UserID, customerSlug string) {
+func (s *PipelineService) mirrorPipelines(ctx context.Context, callerID core.UserID, customerSlug string) {
 	if s.Mirror == nil {
 		return
 	}
 	s.mirrorOnce.Do(func() {
 		s.mirrorDispatcher = newPipelineMirrorDispatcher(s.Mirror, s.Users, s.Logger)
 	})
-	s.mirrorDispatcher.enqueue(callerID, customerSlug)
+	s.mirrorDispatcher.enqueue(ctx, callerID, customerSlug)
 }
 
 // swapGoogleSheetsGrant redeems a "Sign in with Google" grant referenced in a
@@ -374,7 +374,7 @@ func (s *PipelineService) finishUpdate(ctx context.Context, callerID core.UserID
 		}
 		return p, nil
 	}
-	s.mirrorPipelines(callerID, customerSlug)
+	s.mirrorPipelines(ctx, callerID, customerSlug)
 	return p, nil
 }
 
@@ -438,7 +438,7 @@ func (s *PipelineService) DeletePipeline(ctx context.Context, callerID core.User
 			return s.Pipelines.CreatePipeline(ctx, existing)
 		})
 	}
-	s.mirrorPipelines(callerID, ws.Slug)
+	s.mirrorPipelines(ctx, callerID, ws.Slug)
 	return nil
 }
 

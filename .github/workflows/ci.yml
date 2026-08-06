@@ -4,6 +4,17 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Run CI for a commit that is already pushed. A push that lands while Actions
+  # is down creates no run at all — nothing queues, so there is nothing to retry
+  # once it recovers, and unlike a tag a branch commit cannot be re-pushed to
+  # mint a fresh event. Run it from the branch (`gh workflow run CI --ref
+  # master`); a dispatched run covers exactly what a master push covers, since
+  # `buf breaking` is skipped on any non-pull-request event either way.
+  #
+  # It only works for commits after this line, because the dispatch is checked
+  # against the trigger present *on the requested ref*. An earlier commit stays
+  # unverified until something else lands on master.
+  workflow_dispatch:
 
 jobs:
   lint:

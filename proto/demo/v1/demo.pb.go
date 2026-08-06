@@ -216,9 +216,15 @@ func (x *GetDemoStatusResponse) GetStatus() *DemoStatus {
 
 type LoadDemoProjectRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Sizing tier: "minimal" (default, ~41M rows), "default" (~118M), or "full"
-	// (~255M). Empty picks the server default (minimal). The pipeline is the
-	// customer's own after seeding — widening the glob is a one-field edit.
+	// Sizing tier: "sample", "tiny", "minimal", "default" or "full". Empty picks
+	// the server default, which is "sample" — a standard box has no headroom to
+	// ingest millions of rows while hosting the whole stack.
+	//
+	// The month ranges and row counts live in the demo package's Tiers and move
+	// as newer TLC months are mirrored, so they are deliberately not repeated
+	// here: this comment used to name "minimal" as the default at ~41M rows,
+	// and both halves had gone stale. The pipeline is the customer's own after
+	// seeding — widening it is a one-field edit.
 	Tier          string `protobuf:"bytes,1,opt,name=tier,proto3" json:"tier,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

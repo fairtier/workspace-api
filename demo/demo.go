@@ -61,12 +61,35 @@ type Tier struct {
 	Rows  string // human hint, informational only
 }
 
-// tripFiles enumerates the monthly TLC trip files for whole years.
-func tripFiles(years ...int) []string {
-	files := make([]string, 0, len(years)*12)
-	for _, year := range years {
-		for month := 1; month <= 12; month++ {
-			files = append(files, fmt.Sprintf("yellow_tripdata_%d-%02d.parquet", year, month))
+// latestYear/latestMonth is the most recent month mirrored into the demo
+// bucket, and the end of every range-based tier below. TLC publishes about two
+// months behind, one month at a time, so this moves — bumping it is the second
+// half of an operator running scripts/mirror-demo-datasets.sh in the platform
+// repo, whose LATEST_YM must hold the same month. Nothing discovers it at
+// runtime: the tiers name their files (see Tier), so the mirror and the loader
+// have to agree on a fixed end month rather than each finding its own.
+const (
+	latestYear  = 2026
+	latestMonth = 5
+)
+
+// tripFile names the TLC trip file for one month.
+func tripFile(year, month int) string {
+	return fmt.Sprintf("yellow_tripdata_%d-%02d.parquet", year, month)
+}
+
+// tripFiles enumerates the monthly TLC trip files from one month to another,
+// inclusive, in load order. A range rather than whole years because the newest
+// year is always partial — a tier that stops at the last December available
+// would be a year and a half stale for most of its life.
+func tripFiles(fromYear, fromMonth, toYear, toMonth int) []string {
+	var files []string
+	for y, m := fromYear, fromMonth; y < toYear || (y == toYear && m <= toMonth); {
+		files = append(files, tripFile(y, m))
+		if m == 12 {
+			y, m = y+1, 1
+		} else {
+			m++
 		}
 	}
 	return files
@@ -82,12 +105,17 @@ func tripFiles(years ...int) []string {
 // fits the headroom. The larger tiers are opt-in "make it yours" upgrades and
 // assume a box sized to ingest millions of rows (a one-field edit on the
 // pipeline).
+//
+// The trip tiers are windows ending at the latest published month rather than
+// at whole years, so "the demo" means recent data for as long as someone keeps
+// running the mirror. `full` starts in 2019 for the story, not the size: it is
+// the only tier that contains the COVID cliff.
 var Tiers = map[string]Tier{
 	"sample":  {Name: "sample", Files: []string{"yellow_tripdata_sample.parquet"}, Rows: "~200k"},
-	"tiny":    {Name: "tiny", Files: []string{"yellow_tripdata_2024-01.parquet"}, Rows: "~3M"},
-	"minimal": {Name: "minimal", Files: tripFiles(2024), Rows: "~41M"},
-	"default": {Name: "default", Files: tripFiles(2022, 2023, 2024), Rows: "~118M"},
-	"full":    {Name: "full", Files: tripFiles(2019, 2020, 2021, 2022, 2023, 2024), Rows: "~255M"},
+	"tiny":    {Name: "tiny", Files: []string{tripFile(latestYear, latestMonth)}, Rows: "~4M"},
+	"minimal": {Name: "minimal", Files: tripFiles(2025, 1, 2025, 12), Rows: "~48M"},
+	"default": {Name: "default", Files: tripFiles(2024, 1, latestYear, latestMonth), Rows: "~110M"},
+	"full":    {Name: "full", Files: tripFiles(2019, 1, latestYear, latestMonth), Rows: "~330M"},
 }
 
 // DefaultTier is used when the caller does not pick one. Set to "sample" from

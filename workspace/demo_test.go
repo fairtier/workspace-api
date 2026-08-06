@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/fairtier/workspace-api/core"
+	"github.com/fairtier/workspace-api/demo"
 	"github.com/fairtier/workspace-api/workspace"
 )
 
@@ -492,10 +494,16 @@ func TestDemoService_S3BucketStillInjectsCredential(t *testing.T) {
 	if !strings.HasPrefix(cfg.BucketURL, "s3://") {
 		t.Errorf("bucket_url = %q, want an s3:// bucket", cfg.BucketURL)
 	}
-	// The 12 monthly files of the "minimal" tier, as one brace alternation.
+	// The monthly files of the "minimal" tier, as one brace alternation. Read
+	// off the tier rather than named here: the tiers are a rolling window that
+	// moves as newer TLC months are mirrored, and a year hardcoded here only
+	// tells us which year it was written in.
 	glob := cfg.Tables[0].FileGlob
-	if !strings.HasPrefix(glob, "{") || !strings.Contains(glob, "yellow_tripdata_2024-01.parquet") ||
-		!strings.Contains(glob, "yellow_tripdata_2024-12.parquet") {
-		t.Errorf("file_glob = %q, want every 2024 month", glob)
+	if !strings.HasPrefix(glob, "{") || !strings.HasSuffix(glob, "}") {
+		t.Fatalf("file_glob = %q, want a brace alternation", glob)
+	}
+	globbed := strings.Split(strings.Trim(glob, "{}"), ",")
+	if want := demo.Tiers["minimal"].Files; !slices.Equal(globbed, want) {
+		t.Errorf("file_glob = %v, want the minimal tier's files %v", globbed, want)
 	}
 }

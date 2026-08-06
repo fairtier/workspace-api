@@ -3,6 +3,18 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Re-run a release for a tag that is already pushed. A tag push that lands
+  # while Actions is down creates no run at all — nothing queues, so there is
+  # nothing to retry once it recovers. Run it from the tag ref
+  # (`gh workflow run Release --ref v1.2.3`); the metadata step reads the image
+  # tags off that ref, so it produces the same image either way.
+  #
+  # It only works for tags cut after this line, because the dispatch is checked
+  # against the trigger present *on the requested ref*. For an older tag the
+  # recovery is to delete and re-push it — safe only while it points at the
+  # same commit, since the Go module proxy has already recorded that tag's
+  # content hash and will keep serving the original one.
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io

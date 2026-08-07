@@ -1,4 +1,5 @@
 DROP TABLE IF EXISTS demo_seeds;
+DROP TABLE IF EXISTS customer_oauth_clients;
 DROP TABLE IF EXISTS google_oauth_grants;
 DROP TABLE IF EXISTS notifications;
 DROP TABLE IF EXISTS transformation_definition_renders;

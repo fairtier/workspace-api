@@ -13,7 +13,7 @@ import (
 
 func newTestClient(t *testing.T) *Client {
 	t.Helper()
-	c, err := New("cid", "csecret", "https://api.example.com/oauth/google/callback", "state-secret")
+	c, err := New("https://api.example.com/oauth/google/callback", "state-secret")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -21,10 +21,10 @@ func newTestClient(t *testing.T) *Client {
 }
 
 func TestNewRequiresAllFields(t *testing.T) {
-	if _, err := New("", "s", "r", "k"); err == nil {
-		t.Fatal("expected error for empty client_id")
+	if _, err := New("", "k"); err == nil {
+		t.Fatal("expected error for empty redirect_url")
 	}
-	if _, err := New("c", "s", "r", ""); err == nil {
+	if _, err := New("r", ""); err == nil {
 		t.Fatal("expected error for empty state_secret")
 	}
 }
@@ -46,7 +46,7 @@ func TestStateRoundTrip(t *testing.T) {
 
 func TestVerifyStateRejectsTampered(t *testing.T) {
 	c := newTestClient(t)
-	other, _ := New("cid", "csecret", "https://api.example.com/oauth/google/callback", "different-secret")
+	other, _ := New("https://api.example.com/oauth/google/callback", "different-secret")
 	state, _ := c.SignState("sub", "acme")
 	if _, _, err := other.VerifyState(state); err == nil {
 		t.Fatal("expected verification failure under a different secret")
@@ -55,7 +55,7 @@ func TestVerifyStateRejectsTampered(t *testing.T) {
 
 func TestAuthURL(t *testing.T) {
 	c := newTestClient(t)
-	raw := c.AuthURL("the-state")
+	raw := c.AuthURL("the-state", "cid")
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -84,6 +84,11 @@ func TestExchange(t *testing.T) {
 		if r.Form.Get("code") != "auth-code" || r.Form.Get("grant_type") != "authorization_code" {
 			t.Errorf("bad form: %v", r.Form)
 		}
+		// The pair comes from the caller (the customer's own app), not from the
+		// Client — that is the whole point of the BYO split.
+		if r.Form.Get("client_id") != "cid" || r.Form.Get("client_secret") != "csecret" {
+			t.Errorf("exchange did not use the passed client pair: %v", r.Form)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  "at",
@@ -96,7 +101,7 @@ func TestExchange(t *testing.T) {
 	c := newTestClient(t)
 	c.TokenEndpoint = srv.URL
 
-	res, err := c.Exchange(context.Background(), "auth-code")
+	res, err := c.Exchange(context.Background(), "auth-code", "cid", "csecret")
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
@@ -116,7 +121,7 @@ func TestExchangeMissingRefreshToken(t *testing.T) {
 
 	c := newTestClient(t)
 	c.TokenEndpoint = srv.URL
-	if _, err := c.Exchange(context.Background(), "code"); err == nil {
+	if _, err := c.Exchange(context.Background(), "code", "cid", "csecret"); err == nil {
 		t.Fatal("expected error when no refresh_token returned")
 	}
 }

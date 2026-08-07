@@ -642,7 +642,7 @@ func TestPipelineMirror_AgeCredentials(t *testing.T) {
 		}
 	})
 
-	t.Run("oauth google_sheets file carries the injected client", func(t *testing.T) {
+	t.Run("oauth google_sheets file carries the customer's own client", func(t *testing.T) {
 		identity, recipient := newIdentity(t)
 		repo := newFakeMirrorRepo(nil)
 		sheets := pipe("11111111-aaaa", "Sheet")
@@ -650,20 +650,48 @@ func TestPipelineMirror_AgeCredentials(t *testing.T) {
 		m := withAge(
 			mirrorFor(boxCustomer(), repo, []workspace.Pipeline{sheets}),
 			recipient,
-			fakeCredReader{"11111111-aaaa": json.RawMessage(`{"oauth":{"refresh_token":"rt","email":"e@example.com"}}`)},
+			fakeCredReader{"11111111-aaaa": json.RawMessage(`{"oauth":{"refresh_token":"rt","email":"e@example.com","client_id":"acme-cid"}}`)},
 			&fakeRenderStore{},
 		)
-		m.OAuthClientID = "central-client-id"
-		m.OAuthClientSecret = "central-client-secret"
+		m.OAuthClients = acmeOAuthClient("acme-cid", "acme-csecret")
 
 		if err := m.SyncCustomer(context.Background(), "acme", nil); err != nil {
 			t.Fatal(err)
 		}
 		got := string(decryptArmored(t, identity, repo.files["pipelines/sheet.credentials.age"]))
-		for _, want := range []string{"central-client-id", "central-client-secret", `"rt"`} {
+		for _, want := range []string{"acme-cid", "acme-csecret", `"rt"`} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("decrypted OAuth credentials missing %q: %s", want, got)
 			}
+		}
+	})
+
+	// The whole point of BYO: what lands in the customer's own repo is their
+	// OAuth app, so a second customer's box can never receive this one's secret
+	// — and no FairTier-owned secret exists to leak in the first place.
+	t.Run("a stale oauth credential is rendered without a client pair", func(t *testing.T) {
+		identity, recipient := newIdentity(t)
+		repo := newFakeMirrorRepo(nil)
+		sheets := pipe("11111111-aaaa", "Sheet")
+		sheets.SourceType = "google_sheets"
+		m := withAge(
+			mirrorFor(boxCustomer(), repo, []workspace.Pipeline{sheets}),
+			recipient,
+			// Minted under the old shared app: no client_id recorded.
+			fakeCredReader{"11111111-aaaa": json.RawMessage(`{"oauth":{"refresh_token":"rt","email":"e@example.com"}}`)},
+			&fakeRenderStore{},
+		)
+		m.OAuthClients = acmeOAuthClient("acme-cid", "acme-csecret")
+
+		if err := m.SyncCustomer(context.Background(), "acme", nil); err != nil {
+			t.Fatal(err)
+		}
+		got := string(decryptArmored(t, identity, repo.files["pipelines/sheet.credentials.age"]))
+		if strings.Contains(got, "acme-csecret") {
+			t.Fatalf("a client secret was paired with a token it cannot refresh: %s", got)
+		}
+		if !strings.Contains(got, `"rt"`) {
+			t.Fatalf("refresh token dropped from the rendered file: %s", got)
 		}
 	})
 }

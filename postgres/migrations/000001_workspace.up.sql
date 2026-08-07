@@ -188,18 +188,51 @@ CREATE INDEX idx_notifications_unread
 -- redeems it when the pipeline is created, at which point the row is deleted —
 -- one-time use. refresh_token is encrypted at rest by the application, and rows
 -- expire and are swept periodically.
+--
+-- client_id records WHICH of the customer's OAuth apps minted the token, because
+-- a refresh token is only refreshable by the client it was issued to. Reading it
+-- back from customer_oauth_clients at redemption time would be wrong precisely
+-- when it matters: a customer who swapped apps mid-flow would have the new id
+-- recorded against a token the new app cannot refresh.
 CREATE TABLE google_oauth_grants (
     grant_id      UUID PRIMARY KEY,
     customer_slug TEXT NOT NULL,
     user_sub      TEXT NOT NULL,
     refresh_token TEXT NOT NULL,
     email         TEXT NOT NULL DEFAULT '',
+    client_id     TEXT NOT NULL DEFAULT '',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at    TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX google_oauth_grants_expires_at_idx
     ON google_oauth_grants (expires_at);
+
+-- ---------------------------------------------------------------------------
+-- Customer-supplied OAuth application credentials (BYO client).
+-- ---------------------------------------------------------------------------
+
+-- The OAuth app a customer connects a source with is THEIRS, not ours: they
+-- register it in their own Google Cloud project and paste the pair here. That is
+-- what makes it correct to render the client id and secret into the customer's
+-- own box repo alongside their refresh token — a shared vendor app would put our
+-- identity on every customer's machine. client_secret is encrypted at rest by
+-- the application (crypto.Encryptor, "enc:" prefix), like pipeline credentials;
+-- client_id is not secret and stays readable so the Console can show which app
+-- is connected.
+--
+-- provider is one column of headroom, not a framework: only 'google' is accepted
+-- today, and a second provider would reuse this table rather than add one.
+CREATE TABLE customer_oauth_clients (
+    customer_slug TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    client_id     TEXT NOT NULL,
+    client_secret TEXT NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Casdoor sub of whoever last saved it, for the Console's "changed by" line.
+    updated_by    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (customer_slug, provider)
+);
 
 -- ---------------------------------------------------------------------------
 -- Demo seeds: bookkeeping for the loadable starter project.

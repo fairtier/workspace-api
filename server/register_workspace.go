@@ -14,6 +14,7 @@ import (
 	"github.com/fairtier/workspace-api/proto/demo/v1/demov1connect"
 	"github.com/fairtier/workspace-api/proto/lakekeeper_user/v1/lakekeeperuserv1connect"
 	"github.com/fairtier/workspace-api/proto/notification/v1/notificationv1connect"
+	"github.com/fairtier/workspace-api/proto/oauthclient/v1/oauthclientv1connect"
 	"github.com/fairtier/workspace-api/proto/pipeline/v1/pipelinev1connect"
 	"github.com/fairtier/workspace-api/proto/pipeline_assist/v1/pipelineassistv1connect"
 	"github.com/fairtier/workspace-api/proto/query/v1/queryv1connect"
@@ -47,6 +48,10 @@ type WorkspacePlaneServers struct {
 	Demo            *DemoServer
 	Notifications   *NotificationServer
 	Query           *QueryServer
+	// OAuthClients lets a workspace connect its OWN vendor OAuth application
+	// (Google, for Sheets). Optional: nil simply does not mount the service,
+	// and the Console then hides the Integrations card.
+	OAuthClients *OAuthClientServer
 }
 
 // RegisterWorkspacePlane mounts the workspace plane's Connect services on the
@@ -82,6 +87,9 @@ func RegisterWorkspacePlane(mux *http.ServeMux, s WorkspacePlaneServers, opts co
 	mux.Handle(demov1connect.NewDemoServiceHandler(s.Demo, opts))
 	mux.Handle(notificationv1connect.NewNotificationServiceHandler(s.Notifications, opts))
 	mux.Handle(queryv1connect.NewQueryServiceHandler(s.Query, opts))
+	if s.OAuthClients != nil {
+		mux.Handle(oauthclientv1connect.NewOAuthClientServiceHandler(s.OAuthClients, opts))
+	}
 }
 
 // WorkspaceInternalServers bundles the worker-facing handlers (:8081).
@@ -122,13 +130,15 @@ func RegisterWorkspaceInternal(mux *http.ServeMux, s WorkspaceInternalServers, o
 // endpoints: file-drop upload streaming (browsers cannot client-stream over
 // connect-web), the Google OAuth broker redirect pair, and health probes.
 //
-// workspaces/grants back the Google OAuth flow; both may be nil when
-// googleOAuth is nil (the handlers then answer 501 before touching either,
-// which is the clean Console fallback to the service-account path). The OAuth
-// app itself is central on SaaS — self-hosters register their own Google app
-// with the same env shape.
+// workspaces/grants/oauthClients back the Google OAuth flow; all three may be
+// nil when googleOAuth is nil (the handlers then answer 501 before touching any
+// of them, which is the clean Console fallback to the service-account path).
+// The OAuth app is the CUSTOMER's on every tier — they register their own Google
+// client and it is looked up per tenant — so this deployment supplies only the
+// redirect URL and the state-signing key.
 func RegisterWorkspacePlainHTTP(mux *http.ServeMux, logger *slog.Logger, auth UserAuth, db *sql.DB,
 	workspaces workspace.Resolver, grants workspace.GoogleOAuthGrantStore,
+	oauthClients workspace.OAuthClientStore,
 	fileDropSvc *workspace.FileDropService, googleOAuth *oauthgoogle.Client, consoleOrigin string,
 ) {
 	mux.HandleFunc("POST /filedrop/{pipelineID}/{filename}", FileDropUploadHandler(logger, auth, fileDropSvc))
@@ -136,8 +146,8 @@ func RegisterWorkspacePlainHTTP(mux *http.ServeMux, logger *slog.Logger, auth Us
 	// "Sign in with Google" for Google Sheets sources (outside ConnectRPC:
 	// /start returns the consent URL as JSON, /callback is Google's redirect
 	// target and postMessages the grant back to the Console popup).
-	mux.HandleFunc("GET /oauth/google/start", GoogleOAuthStartHandler(logger, auth, googleOAuth, workspaces))
-	mux.HandleFunc("GET /oauth/google/callback", GoogleOAuthCallbackHandler(logger, googleOAuth, grants, consoleOrigin))
+	mux.HandleFunc("GET /oauth/google/start", GoogleOAuthStartHandler(logger, auth, googleOAuth, workspaces, oauthClients))
+	mux.HandleFunc("GET /oauth/google/callback", GoogleOAuthCallbackHandler(logger, googleOAuth, grants, oauthClients, consoleOrigin))
 	mux.HandleFunc("/healthz", LivenessHandler())
 	mux.HandleFunc("/readyz", ReadinessHandler(logger, db))
 }

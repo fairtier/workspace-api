@@ -58,10 +58,17 @@ type WorkspaceCapabilities struct {
 	// on both paths.
 	ControlPlane bool `json:"control_plane"`
 
-	Rill        bool `json:"rill"`
-	Cube        bool `json:"cube"`
-	DuckFlight  bool `json:"duckflight"`
-	FileDrop    bool `json:"filedrop"`
+	Rill       bool `json:"rill"`
+	Cube       bool `json:"cube"`
+	DuckFlight bool `json:"duckflight"`
+	FileDrop   bool `json:"filedrop"`
+
+	// GoogleOAuth reports only that this deployment CAN run the flow — it has a
+	// redirect URL and a state key. Whether the customer has connected their own
+	// Google app is a separate, mutable fact and deliberately not here: this
+	// document is built once at startup, so a value that changes the moment
+	// someone saves a client pair would be stale for the life of the process.
+	// The Console reads that half from OAuthClientService.GetOAuthClient.
 	GoogleOAuth bool `json:"google_oauth"`
 }
 

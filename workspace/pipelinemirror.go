@@ -69,14 +69,17 @@ type PipelineMirror struct {
 	// pipelinemirror_import.go). Optional, and deliberately left nil
 	// centrally, where the Console is the only create path.
 	Importer PipelineImporter
-	// OAuthClientID/OAuthClientSecret mirror PipelineService's serve-time
-	// injection for OAuth google_sheets credentials: the stored row lacks
-	// the central client pair, but the worker needs it to refresh tokens,
-	// so the rendered credential file carries it too (workers already
-	// receive it via the poll — no new exposure, and the file is
-	// encrypted to the box). Empty = no injection.
-	OAuthClientID     string
-	OAuthClientSecret string
+	// OAuthClients mirrors PipelineService's serve-time injection for OAuth
+	// google_sheets credentials: the stored row lacks the client pair, but
+	// the worker needs it to refresh tokens, so the rendered credential file
+	// carries it too (encrypted to the box).
+	//
+	// The pair is the CUSTOMER's own app, resolved per tenant. That is what
+	// makes writing it into their repo correct rather than a leak: a single
+	// shared FairTier app would put our Google identity, able to impersonate
+	// us on every other customer's consent screen, on every box that has one
+	// Sheets pipeline. Nil = no injection.
+	OAuthClients OAuthClientStore
 	// NewClient builds a Gitea client for a box (same factory shape as
 	// BoxRepoService.NewClient).
 	NewClient func(baseURL, username, token string) RepoFileClient
@@ -85,6 +88,11 @@ type PipelineMirror struct {
 	// importSkips dedupes the import pass's "could not import" warnings
 	// across sweeps.
 	importSkips importSkips
+	// staleOAuth dedupes the "reconnect this Sheets pipeline" notification
+	// across converges, keyed by pipeline → the client id it is stale against.
+	// Connecting a different app re-reports, which is right: the pipeline is
+	// stale against the new app too.
+	staleOAuth importSkips
 }
 
 // credentialFingerprintContext domain-separates the mirror's fingerprints
@@ -246,10 +254,11 @@ func (m *PipelineMirror) desiredCredentialFiles(ctx context.Context, customerSlu
 		return nil, "", nil, err
 	}
 	maps.Copy(credentials, extraCreds)
-	return m.buildCredentialFiles(pipelines, slugs, credentials), key.PublicKey, renders, nil
+	return m.buildCredentialFiles(ctx, customerSlug, pipelines, slugs, credentials), key.PublicKey, renders, nil
 }
 
-func (m *PipelineMirror) buildCredentialFiles(pipelines []Pipeline, slugs map[PipelineID]string, credentials map[PipelineID]json.RawMessage) map[string]credentialFile {
+func (m *PipelineMirror) buildCredentialFiles(ctx context.Context, customerSlug string, pipelines []Pipeline, slugs map[PipelineID]string, credentials map[PipelineID]json.RawMessage) map[string]credentialFile {
+	oauth := newOAuthClientResolver(m.OAuthClients, customerSlug)
 	files := make(map[string]credentialFile)
 	for _, p := range pipelines {
 		filePath := "pipelines/" + slugs[p.ID] + ".credentials.age"
@@ -265,10 +274,43 @@ func (m *PipelineMirror) buildCredentialFiles(pipelines []Pipeline, slugs map[Pi
 		}
 		files[filePath] = credentialFile{
 			pipelineID: p.ID,
-			plaintext:  m.credentialPlaintext(&p, raw),
+			plaintext:  m.credentialPlaintext(ctx, oauth, &p, raw),
 		}
+		m.notifyStaleOAuthCredential(ctx, oauth, customerSlug, &p, raw)
 	}
 	return files
+}
+
+// notifyStaleOAuthCredential tells the customer to reconnect a Sheets pipeline
+// whose refresh token was minted by an OAuth app they no longer use — including
+// the legacy case of a credential that records no app at all, from when one
+// shared FairTier app served every customer.
+//
+// Without this the failure surfaces as a run error from inside the worker's
+// Google client, which names neither the pipeline nor the fix. Best-effort and
+// deduped: the converge runs on every save.
+func (m *PipelineMirror) notifyStaleOAuthCredential(ctx context.Context, oauth *oauthClientResolver, customerSlug string, p *Pipeline, raw json.RawMessage) {
+	if m.Notifications == nil {
+		return
+	}
+	probe := *p
+	probe.SourceCredentials = raw
+	if !oauth.staleClientID(ctx, &probe) {
+		return
+	}
+	if !m.staleOAuth.firstReport(string(p.ID), oauth.clientID) {
+		return
+	}
+	n := Notification{
+		CustomerSlug: customerSlug,
+		Type:         "info",
+		Title:        "Reconnect " + p.Name + " to Google",
+		Body:         fmt.Sprintf("%s was connected with a different Google OAuth app than the one this workspace uses now, so its access can no longer be refreshed. Open the pipeline and sign in with Google again.", p.Name),
+		Link:         "/pipelines?pipeline=" + string(p.ID),
+	}
+	if err := m.Notifications.Notify(ctx, n); err != nil && m.Logger != nil {
+		m.Logger.WarnContext(ctx, "notify stale oauth credential", "pipeline", p.ID, "err", err)
+	}
 }
 
 func (m *PipelineMirror) loadCredentialState(ctx context.Context, customerSlug string) (map[PipelineID]json.RawMessage, map[PipelineID]PipelineCredentialRender, error) {
@@ -285,13 +327,18 @@ func (m *PipelineMirror) loadCredentialState(ctx context.Context, customerSlug s
 
 // credentialPlaintext applies serve-time parity to a stored credential:
 // OAuth google_sheets rows store only the refresh token, but the worker
-// also needs the central client pair to refresh access tokens, so the
+// also needs the customer's client pair to refresh access tokens, so the
 // rendered file carries it too.
-func (m *PipelineMirror) credentialPlaintext(p *Pipeline, raw json.RawMessage) json.RawMessage {
-	if m.OAuthClientID == "" || m.OAuthClientSecret == "" {
-		return raw
-	}
-	if injected, ok := injectGoogleSheetsOAuthClient(p.SourceType, raw, m.OAuthClientID, m.OAuthClientSecret); ok {
+//
+// When the pair cannot be resolved — no app connected, or the credential was
+// minted by a different one — the file is rendered WITHOUT it rather than with
+// a mismatched pair. The run then fails on a missing client_id, which is the
+// honest signal; the reconnect prompt is raised separately by
+// notifyStaleOAuthCredentials.
+func (m *PipelineMirror) credentialPlaintext(ctx context.Context, oauth *oauthClientResolver, p *Pipeline, raw json.RawMessage) json.RawMessage {
+	pipeline := *p
+	pipeline.SourceCredentials = raw
+	if injected, ok := oauth.inject(ctx, &pipeline); ok {
 		return injected
 	}
 	return raw

@@ -142,13 +142,12 @@ type PipelineService struct {
 	// tokens on pipeline create/update. Nil disables the OAuth path: a
 	// google_sheets pipeline can then only be created with a service account.
 	GoogleOAuth GoogleOAuthGrantStore
-	// OAuthClientID / OAuthClientSecret are the central Google OAuth client
-	// credentials injected into google_sheets OAuth credentials at serve time
-	// (GetEnabledPipelines) so the worker can refresh access tokens. The secret
-	// stays central and rotatable — never stored per pipeline, never sent to the
-	// browser. Empty = no injection.
-	OAuthClientID     string
-	OAuthClientSecret string
+	// OAuthClients resolves the CUSTOMER's own Google OAuth app, whose
+	// client_id/client_secret are injected into google_sheets OAuth credentials
+	// at serve time (GetEnabledPipelines) so the worker can refresh access
+	// tokens. Per customer rather than one shared app because the pair travels
+	// with the credential onto the customer's own machine. Nil = no injection.
+	OAuthClients OAuthClientStore
 	// StripPollCredentials removes source_credentials from the worker-facing
 	// GetEnabledPipelines response (pipelines-as-files Phase 3 kill-switch,
 	// env POLL_SOURCE_CREDENTIALS=off) — flip only once the fleet's workers
@@ -281,7 +280,7 @@ func (s *PipelineService) swapGoogleSheetsGrant(ctx context.Context, customerSlu
 		}
 		return fmt.Errorf("consume oauth grant: %w", err)
 	}
-	stored, err := googleSheetsStoredOAuthCreds(grant.RefreshToken, grant.Email)
+	stored, err := googleSheetsStoredOAuthCreds(grant.RefreshToken, grant.Email, grant.ClientID)
 	if err != nil {
 		return fmt.Errorf("build oauth credentials: %w", err)
 	}
@@ -546,6 +545,7 @@ func (s *PipelineService) GetEnabledPipelines(ctx context.Context, customerSlug 
 	}
 
 	var storage *core.S3Config // resolved once, only if a file_upload pipeline exists
+	oauth := newOAuthClientResolver(s.OAuthClients, customerSlug)
 	out := pipelines[:0]
 	for _, p := range pipelines {
 		if p.SourceType != SourceTypeFileUpload {
@@ -554,8 +554,8 @@ func (s *PipelineService) GetEnabledPipelines(ctx context.Context, customerSlug 
 				// age-encrypted checkout files instead (OAuth client
 				// included — the mirror injects it before encrypting).
 				p.SourceCredentials = nil
-			} else {
-				s.injectGoogleSheetsOAuthClient(&p)
+			} else if injected, ok := oauth.inject(ctx, &p); ok {
+				p.SourceCredentials = injected
 			}
 			out = append(out, p)
 			continue
@@ -575,17 +575,72 @@ func (s *PipelineService) GetEnabledPipelines(ctx context.Context, customerSlug 
 	return out, nil
 }
 
-// injectGoogleSheetsOAuthClient adds the central OAuth client_id/client_secret
-// to an OAuth google_sheets pipeline's credentials so the worker can refresh
-// access tokens. No-op when injection is not configured or the pipeline is not
-// an OAuth google_sheets credential.
-func (s *PipelineService) injectGoogleSheetsOAuthClient(p *Pipeline) {
-	if s.OAuthClientID == "" || s.OAuthClientSecret == "" {
+// oauthClientResolver looks a customer's own Google OAuth app up at most once
+// per batch and injects it into each OAuth google_sheets credential. The lookup
+// is lazy because most batches contain no Sheets pipeline at all, and cached
+// because both callers iterate every pipeline of one customer.
+//
+// Shared by the worker poll (GetEnabledPipelines) and the .age render
+// (PipelineMirror): the two must agree byte-for-byte, since the render
+// fingerprint is taken over the injected plaintext.
+type oauthClientResolver struct {
+	clients      OAuthClientStore
+	customerSlug string
+	resolved     bool
+	clientID     string
+	clientSecret string
+}
+
+func newOAuthClientResolver(clients OAuthClientStore, customerSlug string) *oauthClientResolver {
+	return &oauthClientResolver{clients: clients, customerSlug: customerSlug}
+}
+
+// load fetches the customer's app once. A missing app is cached as the empty
+// pair, which inject treats as "do not inject" — the same outcome as an
+// unconfigured store, and correct: without their app there is nothing to
+// refresh with.
+func (r *oauthClientResolver) load(ctx context.Context) {
+	if r.resolved {
 		return
 	}
-	if injected, ok := injectGoogleSheetsOAuthClient(p.SourceType, p.SourceCredentials, s.OAuthClientID, s.OAuthClientSecret); ok {
-		p.SourceCredentials = injected
+	r.resolved = true
+	if r.clients == nil {
+		return
 	}
+	cc, err := r.clients.GetOAuthClient(ctx, r.customerSlug, OAuthProviderGoogle)
+	if err != nil {
+		return
+	}
+	r.clientID, r.clientSecret = cc.ClientID, cc.ClientSecret
+}
+
+// inject returns the credential with the customer's client pair added, or
+// (nil, false) to leave it untouched.
+func (r *oauthClientResolver) inject(ctx context.Context, p *Pipeline) (json.RawMessage, bool) {
+	if p.SourceType != "google_sheets" {
+		return nil, false
+	}
+	r.load(ctx)
+	if r.clientID == "" || r.clientSecret == "" {
+		return nil, false
+	}
+	return injectGoogleSheetsOAuthClient(p.SourceType, p.SourceCredentials, r.clientID, r.clientSecret)
+}
+
+// staleClientID reports whether a stored OAuth credential names a client other
+// than the customer's current one — i.e. the connection is dead and needs a
+// reconnect. Returns false when there is nothing to compare against, so a
+// customer who has not connected an app yet is not nagged about it.
+func (r *oauthClientResolver) staleClientID(ctx context.Context, p *Pipeline) bool {
+	storedID, isOAuth := googleSheetsOAuthClientID(p.SourceType, p.SourceCredentials)
+	if !isOAuth {
+		return false
+	}
+	r.load(ctx)
+	if r.clientID == "" {
+		return false
+	}
+	return storedID != r.clientID
 }
 
 // resolveUploadStorage loads the customer's upload S3 config. A provisioning

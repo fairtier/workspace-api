@@ -17,9 +17,9 @@ func (r *Repository) CreateGoogleOAuthGrant(ctx context.Context, g *workspace.Go
 		return fmt.Errorf("postgres: encrypt oauth refresh token: %w", err)
 	}
 	_, err = r.DB.ExecContext(ctx,
-		`INSERT INTO google_oauth_grants (grant_id, customer_slug, user_sub, refresh_token, email, created_at, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		g.GrantID, g.CustomerSlug, g.UserSub, encToken, g.Email, g.CreatedAt, g.ExpiresAt,
+		`INSERT INTO google_oauth_grants (grant_id, customer_slug, user_sub, refresh_token, email, client_id, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		g.GrantID, g.CustomerSlug, g.UserSub, encToken, g.Email, g.ClientID, g.CreatedAt, g.ExpiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: create oauth grant: %w", err)
@@ -36,9 +36,9 @@ func (r *Repository) ConsumeGoogleOAuthGrant(ctx context.Context, grantID, custo
 	err := r.DB.QueryRowContext(ctx,
 		`DELETE FROM google_oauth_grants
 		 WHERE grant_id = $1 AND customer_slug = $2 AND expires_at > now()
-		 RETURNING grant_id, customer_slug, user_sub, refresh_token, email, created_at, expires_at`,
+		 RETURNING grant_id, customer_slug, user_sub, refresh_token, email, client_id, created_at, expires_at`,
 		grantID, customerSlug,
-	).Scan(&g.GrantID, &g.CustomerSlug, &g.UserSub, &storedToken, &g.Email, &g.CreatedAt, &g.ExpiresAt)
+	).Scan(&g.GrantID, &g.CustomerSlug, &g.UserSub, &storedToken, &g.Email, &g.ClientID, &g.CreatedAt, &g.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, workspace.ErrOAuthGrantNotFound
 	}

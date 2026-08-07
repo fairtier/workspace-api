@@ -390,10 +390,17 @@ type googleSheetsCreds struct {
 //     short-lived server-side grant minted by the /oauth/google/callback flow.
 //     PipelineService swaps it for the stored RefreshToken before persisting so
 //     the refresh token never travels through the browser.
-//   - Stored (encrypted at rest): RefreshToken (+ Email for display).
-//   - Served to the worker: RefreshToken plus ClientID/ClientSecret injected
-//     from central config by GetEnabledPipelines. ClientID/ClientSecret are
-//     never accepted as input and never stored per pipeline.
+//   - Stored (encrypted at rest): RefreshToken (+ Email for display, + ClientID
+//     recording which of the customer's OAuth apps minted the token).
+//   - Served to the worker: RefreshToken plus ClientID/ClientSecret, resolved
+//     per customer from their own OAuth app (OAuthClientStore) by
+//     GetEnabledPipelines and by the mirror's .age render.
+//
+// ClientID is stored but ClientSecret never is. Storing the id is what lets a
+// stale connection be reported rather than merely failing: a refresh token is
+// only refreshable by the client it was issued to, so once the customer swaps
+// their Google app every earlier token is dead, and comparing the stored id
+// against the current one is the only way to know that before the run.
 type googleSheetsOAuth struct {
 	GrantID      string `json:"grant_id,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
@@ -476,19 +483,39 @@ func googleSheetsGrantID(sourceType string, raw json.RawMessage) (string, bool) 
 }
 
 // googleSheetsStoredOAuthCreds builds the persisted credential JSON for an
-// OAuth grant: just the refresh token and the granting email (for display).
-func googleSheetsStoredOAuthCreds(refreshToken, email string) (json.RawMessage, error) {
+// OAuth grant: the refresh token, the granting email (for display), and the
+// customer OAuth client that minted it.
+func googleSheetsStoredOAuthCreds(refreshToken, email, clientID string) (json.RawMessage, error) {
 	return json.Marshal(googleSheetsCreds{OAuth: &googleSheetsOAuth{
 		RefreshToken: refreshToken,
 		Email:        email,
+		ClientID:     clientID,
 	}})
 }
 
-// injectGoogleSheetsOAuthClient adds the central OAuth client_id/client_secret
+// googleSheetsOAuthClientID returns the OAuth client id a stored google_sheets
+// credential was minted with, and whether the credential is an OAuth one at all.
+// An OAuth credential with no recorded id is reported as ("", true): that is a
+// legacy row from when one shared app served every customer, and it is exactly
+// as stale as one naming a different app.
+func googleSheetsOAuthClientID(sourceType string, raw json.RawMessage) (string, bool) {
+	if sourceType != "google_sheets" || isEmptyJSON(raw) {
+		return "", false
+	}
+	var creds googleSheetsCreds
+	if err := json.Unmarshal(raw, &creds); err != nil || creds.OAuth == nil || creds.OAuth.RefreshToken == "" {
+		return "", false
+	}
+	return creds.OAuth.ClientID, true
+}
+
+// injectGoogleSheetsOAuthClient adds the customer's OAuth client_id/client_secret
 // to a stored google_sheets OAuth credential so the worker can refresh access
 // tokens. It returns (raw, false) unchanged when the pipeline is not an OAuth
-// google_sheets credential. Mirrors the file_upload storage injection: the
-// client secret stays central and rotatable, never stored per pipeline.
+// google_sheets credential, or when the stored credential was minted by a
+// different client than the one passed — refreshing that token would fail at
+// Google, and shipping a credential that pairs one app's secret with another
+// app's refresh token only turns a clear "reconnect" into an opaque run failure.
 func injectGoogleSheetsOAuthClient(sourceType string, raw json.RawMessage, clientID, clientSecret string) (json.RawMessage, bool) {
 	if sourceType != "google_sheets" || isEmptyJSON(raw) {
 		return raw, false
@@ -497,7 +524,9 @@ func injectGoogleSheetsOAuthClient(sourceType string, raw json.RawMessage, clien
 	if err := json.Unmarshal(raw, &creds); err != nil || creds.OAuth == nil || creds.OAuth.RefreshToken == "" {
 		return raw, false
 	}
-	creds.OAuth.ClientID = clientID
+	if creds.OAuth.ClientID != clientID {
+		return raw, false
+	}
 	creds.OAuth.ClientSecret = clientSecret
 	injected, err := json.Marshal(creds)
 	if err != nil {

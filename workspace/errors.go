@@ -27,4 +27,17 @@ var (
 	ErrDraftNotConfigured          = errors.New("AI pipeline drafting is not configured on this server")
 	ErrDraftRateLimited            = errors.New("too many drafting requests; please wait and try again")
 	ErrOAuthGrantNotFound          = errors.New("oauth grant not found, already used, or expired")
+
+	// ErrOAuthClientNotFound means this customer has not connected an OAuth
+	// application for the provider yet. It is a precondition, not a failure:
+	// the Console turns it into "connect your Google app first" rather than an
+	// error toast.
+	ErrOAuthClientNotFound = errors.New("no OAuth client configured for this workspace")
+
+	// ErrInvalidOAuthClient rejects a malformed client pair on save.
+	ErrInvalidOAuthClient = errors.New("invalid OAuth client: client id and client secret are both required")
+
+	// ErrUnsupportedOAuthProvider guards the provider column: the store shape is
+	// generic, the flow behind it is not.
+	ErrUnsupportedOAuthProvider = errors.New("unsupported OAuth provider")
 )

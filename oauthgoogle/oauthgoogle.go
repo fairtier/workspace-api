@@ -4,11 +4,21 @@
 // token. It is a thin, no-SDK wrapper over Google's OAuth 2.0 endpoints (same
 // plain net/http style as the llm package).
 //
-// The FairTier-owned OAuth client (client_id/client_secret) is central and
-// shared across all customers; a customer only ever grants read-only access to
-// their own spreadsheets. The refresh token obtained here is stored per
-// pipeline (encrypted); the client_id/client_secret are injected at serve time
-// so they stay central and rotatable.
+// The OAuth application is the CUSTOMER's, not ours: each workspace registers
+// its own client in its own Google Cloud project and the pair is looked up per
+// tenant (workspace.OAuthClientStore). So this package holds only the
+// deployment-wide half of the configuration — the redirect URL Google calls back
+// on, and the HMAC key the state parameter is signed with — and takes the client
+// pair per call.
+//
+// That split is deliberate rather than incidental. The refresh token obtained
+// here is stored per pipeline and has to be refreshed offline by a worker on the
+// customer's own machine, which means the client pair travels with it into the
+// customer's own repo. A shared FairTier app would therefore put our identity on
+// every customer's box; a BYO client puts theirs on their own.
+//
+// Note the consequence for the state key: it can no longer be derived from a
+// client secret, because there is no single client secret any more.
 package oauthgoogle
 
 import (
@@ -46,12 +56,12 @@ const (
 	stateTTL = 15 * time.Minute
 )
 
-// Client drives the Google OAuth flow with the central FairTier OAuth app.
+// Client drives the Google OAuth flow. It carries the deployment-wide
+// configuration only; the customer's client id and secret are passed to the
+// calls that need them.
 type Client struct {
-	clientID     string
-	clientSecret string
-	redirectURL  string
-	stateSecret  []byte
+	redirectURL string
+	stateSecret []byte
 
 	// Overridable for tests; default to Google's real endpoints.
 	AuthEndpoint  string
@@ -59,16 +69,16 @@ type Client struct {
 	HTTPClient    *http.Client
 }
 
-// New builds a Client. All four inputs are required; when any is empty the
-// caller should treat OAuth as disabled and pass a nil *Client around (the
-// handlers report FailedPrecondition and the Console hides the button).
-func New(clientID, clientSecret, redirectURL, stateSecret string) (*Client, error) {
-	if clientID == "" || clientSecret == "" || redirectURL == "" || stateSecret == "" {
-		return nil, errors.New("oauthgoogle: client_id, client_secret, redirect_url and state_secret are all required")
+// New builds a Client. Both inputs are required; when either is empty the caller
+// should treat OAuth as disabled for the whole deployment and pass a nil *Client
+// around (the handlers report 501 and the Console falls back to the
+// service-account path). A customer having no OAuth app of their own is a
+// different, per-tenant condition — see workspace.ErrOAuthClientNotFound.
+func New(redirectURL, stateSecret string) (*Client, error) {
+	if redirectURL == "" || stateSecret == "" {
+		return nil, errors.New("oauthgoogle: redirect_url and state_secret are both required")
 	}
 	return &Client{
-		clientID:      clientID,
-		clientSecret:  clientSecret,
 		redirectURL:   redirectURL,
 		stateSecret:   []byte(stateSecret),
 		AuthEndpoint:  defaultAuthEndpoint,
@@ -76,11 +86,10 @@ func New(clientID, clientSecret, redirectURL, stateSecret string) (*Client, erro
 	}, nil
 }
 
-// ClientID returns the central OAuth client id (for serve-time injection).
-func (c *Client) ClientID() string { return c.clientID }
-
-// ClientSecret returns the central OAuth client secret (for serve-time injection).
-func (c *Client) ClientSecret() string { return c.clientSecret }
+// RedirectURL is the callback URI Google must be configured with. The Console
+// shows it so the customer can paste the exact string into their Google Cloud
+// OAuth client — it is never guessed browser-side.
+func (c *Client) RedirectURL() string { return c.redirectURL }
 
 func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
@@ -89,11 +98,12 @@ func (c *Client) httpClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
-// AuthURL builds the Google consent URL for the given signed state. access_type
-// offline + prompt=consent guarantees a refresh_token on every grant.
-func (c *Client) AuthURL(state string) string {
+// AuthURL builds the Google consent URL for the given signed state, against the
+// customer's own OAuth client. access_type offline + prompt=consent guarantees a
+// refresh_token on every grant.
+func (c *Client) AuthURL(state, clientID string) string {
 	v := url.Values{}
-	v.Set("client_id", c.clientID)
+	v.Set("client_id", clientID)
 	v.Set("redirect_uri", c.redirectURL)
 	v.Set("response_type", "code")
 	v.Set("scope", scopes)
@@ -174,14 +184,15 @@ type tokenResponse struct {
 }
 
 // Exchange trades an authorization code for a refresh token (and reads the
-// granting email from the id_token). A missing refresh_token is an error:
-// prompt=consent should always yield one, and without it the pipeline could not
-// run unattended.
-func (c *Client) Exchange(ctx context.Context, code string) (*TokenResult, error) {
+// granting email from the id_token), using the customer's own OAuth client — it
+// must be the same pair the consent URL was built with, or Google rejects the
+// code. A missing refresh_token is an error: prompt=consent should always yield
+// one, and without it the pipeline could not run unattended.
+func (c *Client) Exchange(ctx context.Context, code, clientID, clientSecret string) (*TokenResult, error) {
 	form := url.Values{}
 	form.Set("code", code)
-	form.Set("client_id", c.clientID)
-	form.Set("client_secret", c.clientSecret)
+	form.Set("client_id", clientID)
+	form.Set("client_secret", clientSecret)
 	form.Set("redirect_uri", c.redirectURL)
 	form.Set("grant_type", "authorization_code")
 

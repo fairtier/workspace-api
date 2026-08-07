@@ -264,10 +264,12 @@ func run() error {
 		Logger:     logger,
 	}
 
-	if os.Getenv("GOOGLE_OAUTH_CLIENT_ID") != "" {
-		// The broker handlers need a customer lookup this binary does not
-		// have yet — box-local Google OAuth arrives with Phase 3D.
-		logger.Warn("GOOGLE_OAUTH_* is set but Sign in with Google is not supported on the box binary yet; google_sheets falls back to the service-account path")
+	if os.Getenv("GOOGLE_OAUTH_REDIRECT_URL") != "" {
+		// Storing the customer's own OAuth app works here (the box owns the
+		// table and the mirror reads it to render .age files), but running a
+		// consent round-trip needs a redirect URI registered for THIS host, so
+		// the popup stays central until box-local OAuth ships.
+		logger.Warn("GOOGLE_OAUTH_REDIRECT_URL is set but the consent flow is not served by the box binary yet; new google_sheets connections must be made from the central Console")
 	}
 
 	pipelineAssistServer, assistServer := buildAssistServers(resolver, logger)
@@ -286,8 +288,16 @@ func run() error {
 		Demo:            demoServer,
 		Notifications:   &server.NotificationServer{Service: notificationSvc},
 		Query:           &server.QueryServer{Workspaces: resolver, Executor: duckflight.NewClient()},
+		// OAuth is nil: the box stores the customer's own Google app (its
+		// mirror needs the pair to render .age files) but cannot serve the
+		// consent popup, so GetOAuthClient reports flow_available=false and
+		// the Console points at the central Console for new connections.
+		OAuthClients: &server.OAuthClientServer{Workspaces: resolver, Clients: repo, Logger: logger},
 	}, authOpts)
-	server.RegisterWorkspacePlainHTTP(mux, logger, userAuth, db, nil, nil, fileDropSvc, nil, firstCORSOrigin())
+	// oauthClients is wired even though googleOAuth is nil: the box owns the
+	// customer_oauth_clients row, and its mirror needs the pair to render the
+	// .age credential files for Sheets pipelines connected before cutover.
+	server.RegisterWorkspacePlainHTTP(mux, logger, userAuth, db, nil, nil, repo, fileDropSvc, nil, firstCORSOrigin())
 	// The pre-authentication discovery document.
 	server.RegisterWorkspaceBootstrap(mux, logger,
 		server.BootstrapFromWorkspace(ws, consoleClientID(logger), fileDropSvc != nil, false))

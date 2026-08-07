@@ -92,7 +92,7 @@ for co-located workers and should not be published.
 | `FILEDROP_MAX_BYTES` | | Upload size ceiling for file drop. |
 | `PIPELINES_GIT_PRIMARY`, `TRANSFORMATIONS_GIT_PRIMARY` | | Treat the git repository as the source of truth for definitions. |
 | `WORKSPACE_IMPORT_FROM_REPO` | | On by default: definitions already in the repositories are loaded into an empty database on the first sweep, keeping their ids. Set it to `off` to start with whatever the database holds instead. |
-| `GOOGLE_OAUTH_CLIENT_ID` | | Enables the Google Sheets "Sign in with Google" source flow. |
+| `GOOGLE_OAUTH_REDIRECT_URL`, `GOOGLE_OAUTH_STATE_SECRET` | | Enable the Google Sheets "Sign in with Google" source flow. The redirect URL must point at this deployment's `/oauth/google/callback`; the state secret signs the consent round-trip and must be its own random value. The OAuth *application* is not configured here — each workspace registers its own client in its own Google Cloud project and stores it through `OAuthClientService`, so no operator holds a client secret that every workspace's pipelines depend on. |
 | `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` (plus `ANTHROPIC_MODEL` / `DEEPSEEK_MODEL`) | | Enables the optional AI drafting assists. Without a key those endpoints stay unavailable. |
 | `DEMO_R2_*` | | Object storage holding the sample dataset for the starter project. |
 

@@ -29,6 +29,31 @@ func (m *mockGrantStore) DeleteExpiredGoogleOAuthGrants(context.Context) (int64,
 	return 0, nil
 }
 
+// mockOAuthClientStore serves one customer's own Google app.
+type mockOAuthClientStore struct {
+	client *workspace.OAuthClient
+}
+
+func (m *mockOAuthClientStore) UpsertOAuthClient(context.Context, *workspace.OAuthClient) error {
+	return nil
+}
+
+func (m *mockOAuthClientStore) GetOAuthClient(_ context.Context, _, _ string) (*workspace.OAuthClient, error) {
+	if m.client == nil {
+		return nil, workspace.ErrOAuthClientNotFound
+	}
+	return m.client, nil
+}
+
+func (m *mockOAuthClientStore) DeleteOAuthClient(context.Context, string, string) error { return nil }
+
+func acmeOAuthClient(clientID, clientSecret string) *mockOAuthClientStore {
+	return &mockOAuthClientStore{client: &workspace.OAuthClient{
+		CustomerSlug: "acme", Provider: workspace.OAuthProviderGoogle,
+		ClientID: clientID, ClientSecret: clientSecret,
+	}}
+}
+
 func acmeCustomers() *mockCustomerReader {
 	return &mockCustomerReader{
 		getByUserIDFn: func(context.Context, core.UserID) (*workspace.Workspace, error) {
@@ -57,6 +82,7 @@ func TestCreatePipeline_SwapsGoogleSheetsGrant(t *testing.T) {
 					CustomerSlug: customerSlug,
 					RefreshToken: "1//refresh",
 					Email:        "user@gmail.com",
+					ClientID:     "acme-cid",
 					ExpiresAt:    time.Now().Add(time.Minute),
 				}, nil
 			},
@@ -84,6 +110,14 @@ func TestCreatePipeline_SwapsGoogleSheetsGrant(t *testing.T) {
 	}
 	if strings.Contains(got, "grant_id") {
 		t.Fatalf("stored creds still carry grant_id: %s", got)
+	}
+	// The minting app is carried through from the grant so a later app swap is
+	// detectable; its secret is not.
+	if !strings.Contains(got, `"client_id":"acme-cid"`) {
+		t.Fatalf("stored creds lost the minting client id: %s", got)
+	}
+	if strings.Contains(got, "client_secret") {
+		t.Fatalf("client secret must never be stored per pipeline: %s", got)
 	}
 }
 
@@ -152,7 +186,7 @@ func TestGetEnabledPipelines_InjectsOAuthClient(t *testing.T) {
 					{
 						ID:                "p-oauth",
 						SourceType:        "google_sheets",
-						SourceCredentials: json.RawMessage(`{"oauth":{"refresh_token":"1//refresh","email":"u@gmail.com"}}`),
+						SourceCredentials: json.RawMessage(`{"oauth":{"refresh_token":"1//refresh","email":"u@gmail.com","client_id":"acme-cid"}}`),
 					},
 					{
 						ID:                "p-sa",
@@ -162,9 +196,8 @@ func TestGetEnabledPipelines_InjectsOAuthClient(t *testing.T) {
 				}, nil
 			},
 		},
-		OAuthClientID:     "central-cid",
-		OAuthClientSecret: "central-csecret",
-		Logger:            slog.Default(),
+		OAuthClients: acmeOAuthClient("acme-cid", "acme-csecret"),
+		Logger:       slog.Default(),
 	}
 
 	got, err := svc.GetEnabledPipelines(context.Background(), "acme")
@@ -176,7 +209,7 @@ func TestGetEnabledPipelines_InjectsOAuthClient(t *testing.T) {
 	}
 
 	oauth := string(got[0].SourceCredentials)
-	if !strings.Contains(oauth, `"client_id":"central-cid"`) || !strings.Contains(oauth, `"client_secret":"central-csecret"`) {
+	if !strings.Contains(oauth, `"client_id":"acme-cid"`) || !strings.Contains(oauth, `"client_secret":"acme-csecret"`) {
 		t.Fatalf("oauth pipeline missing injected client creds: %s", oauth)
 	}
 	if !strings.Contains(oauth, `"refresh_token":"1//refresh"`) {
@@ -186,5 +219,73 @@ func TestGetEnabledPipelines_InjectsOAuthClient(t *testing.T) {
 	// Service-account pipeline is left untouched (no client_id injected).
 	if strings.Contains(string(got[1].SourceCredentials), "client_id") {
 		t.Fatalf("service-account pipeline was wrongly injected: %s", got[1].SourceCredentials)
+	}
+}
+
+// A credential minted by an app the customer no longer uses must NOT be paired
+// with the current app's secret: that combination is rejected by Google at
+// refresh time, and shipping it turns a clear "reconnect" into an opaque run
+// failure. Covers the legacy shape too (no recorded client_id), which is what
+// every pipeline connected under the old shared FairTier app looks like.
+func TestGetEnabledPipelines_SkipsInjectionForStaleOAuthClient(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		creds string
+	}{
+		{"different app", `{"oauth":{"refresh_token":"1//refresh","client_id":"old-cid"}}`},
+		{"legacy, no app recorded", `{"oauth":{"refresh_token":"1//refresh"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &workspace.PipelineService{
+				Workspaces: acmeCustomers(),
+				Pipelines: &mockPipelineRepo{
+					getEnabledPipelinesFn: func(context.Context, string) ([]workspace.Pipeline, error) {
+						return []workspace.Pipeline{{
+							ID:                "p-oauth",
+							SourceType:        "google_sheets",
+							SourceCredentials: json.RawMessage(tc.creds),
+						}}, nil
+					},
+				},
+				OAuthClients: acmeOAuthClient("acme-cid", "acme-csecret"),
+				Logger:       slog.Default(),
+			}
+
+			got, err := svc.GetEnabledPipelines(context.Background(), "acme")
+			if err != nil {
+				t.Fatalf("GetEnabledPipelines() error = %v", err)
+			}
+			if strings.Contains(string(got[0].SourceCredentials), "client_secret") {
+				t.Fatalf("stale credential was paired with the current app's secret: %s", got[0].SourceCredentials)
+			}
+		})
+	}
+}
+
+// With no app connected there is nothing to inject, and the credential must
+// survive unchanged rather than being mangled.
+func TestGetEnabledPipelines_NoCustomerOAuthClient(t *testing.T) {
+	const stored = `{"oauth":{"refresh_token":"1//refresh","client_id":"acme-cid"}}`
+	svc := &workspace.PipelineService{
+		Workspaces: acmeCustomers(),
+		Pipelines: &mockPipelineRepo{
+			getEnabledPipelinesFn: func(context.Context, string) ([]workspace.Pipeline, error) {
+				return []workspace.Pipeline{{
+					ID:                "p-oauth",
+					SourceType:        "google_sheets",
+					SourceCredentials: json.RawMessage(stored),
+				}}, nil
+			},
+		},
+		OAuthClients: &mockOAuthClientStore{}, // none connected
+		Logger:       slog.Default(),
+	}
+
+	got, err := svc.GetEnabledPipelines(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("GetEnabledPipelines() error = %v", err)
+	}
+	if string(got[0].SourceCredentials) != stored {
+		t.Fatalf("credential changed with no client configured: %s", got[0].SourceCredentials)
 	}
 }

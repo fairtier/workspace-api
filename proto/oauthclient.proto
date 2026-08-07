@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package oauthclient.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/oauthclient/v1;oauthclientv1";
+
+// OAuthClientService manages the OAuth application a workspace connects vendor
+// sources with — today only Google, for the Sheets "Sign in with Google" flow.
+//
+// The application is the CUSTOMER's: they register it in their own Google Cloud
+// project and paste the client id and secret here. That is not friction for its
+// own sake. The refresh token a Sheets pipeline stores has to be renewed offline
+// by a worker running on the customer's own machine, so the client pair travels
+// with it into the customer's own repo — with a single shared FairTier app, our
+// Google identity would sit on every customer's box, able to impersonate us on
+// every other customer's consent screen. It also means each customer's quota,
+// consent screen and Google verification status are their own.
+//
+// All RPCs are tenant-scoped from the caller's JWT; there is no slug parameter.
+// The client secret is write-only: it is never returned by any RPC.
+service OAuthClientService {
+  // GetOAuthClient reports whether the workspace has connected an app, and
+  // returns everything needed to connect one — including the exact redirect URI
+  // to register with the provider. Never returns the client secret.
+  rpc GetOAuthClient(GetOAuthClientRequest) returns (GetOAuthClientResponse) {}
+
+  // SetOAuthClient stores or replaces the pair. Both halves are required on
+  // every save: a client id without its secret cannot complete a code exchange,
+  // so accepting one alone would only defer the failure to the consent popup.
+  rpc SetOAuthClient(SetOAuthClientRequest) returns (SetOAuthClientResponse) {}
+
+  // DeleteOAuthClient disconnects the app. Existing pipelines keep their stored
+  // refresh tokens but can no longer be refreshed, so the Console warns first.
+  rpc DeleteOAuthClient(DeleteOAuthClientRequest) returns (DeleteOAuthClientResponse) {}
+}
+
+message GetOAuthClientRequest {
+  // Provider key; empty defaults to "google" (the only one supported today).
+  string provider = 1;
+}
+
+message GetOAuthClientResponse {
+  // Whether a client pair is stored for this workspace.
+  bool configured = 1;
+  // The stored client id. Not a secret; shown so the customer can confirm which
+  // app is connected. Empty when configured is false.
+  string client_id = 2;
+  // The exact redirect URI to register with the provider. Served rather than
+  // constructed in the browser so it always matches what the callback runs on.
+  // Empty when this deployment cannot run the consent flow.
+  string redirect_uri = 3;
+  // Scopes the provider app must be allowed to request.
+  repeated string required_scopes = 4;
+  // Whether this deployment can run the consent round-trip at all. False on a
+  // box that has no redirect URI of its own: the pair can still be stored
+  // (pipelines mirrored from central need it to refresh) but new connections
+  // must be made from the central Console.
+  bool flow_available = 5;
+  // RFC 3339 timestamp of the last save, empty when never saved.
+  string updated_at = 6;
+  // Subject of the user who last saved it, empty when never saved.
+  string updated_by = 7;
+}
+
+message SetOAuthClientRequest {
+  // Provider key; empty defaults to "google".
+  string provider = 1;
+  // OAuth client id from the customer's provider project.
+  string client_id = 2;
+  // OAuth client secret. Write-only — never returned by GetOAuthClient.
+  string client_secret = 3;
+}
+
+message SetOAuthClientResponse {
+  // The stored state after the save, same shape as GetOAuthClient.
+  GetOAuthClientResponse client = 1;
+}
+
+message DeleteOAuthClientRequest {
+  // Provider key; empty defaults to "google".
+  string provider = 1;
+}
+
+message DeleteOAuthClientResponse {}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -17,16 +18,26 @@ import (
 // wizard must reconnect. Matches the state TTL in the oauthgoogle package.
 const grantTTL = 15 * time.Minute
 
+// oauthClientNotConfiguredCode is returned to the Console alongside HTTP 412 so
+// it can tell "this workspace has not connected a Google app yet" (a setup step
+// the user can complete) apart from a 501 "this server cannot do OAuth at all"
+// (nothing the user can do). Collapsing the two would hide the Connect button
+// exactly when it should be inviting the customer to Integrations.
+const oauthClientNotConfiguredCode = "oauth_client_not_configured"
+
 // GoogleOAuthStartHandler begins the "Sign in with Google" flow for a Google
 // Sheets pipeline source: GET /oauth/google/start. It is JWT-authed like the
-// RPC mux, resolves the caller's tenant, mints a signed state, and returns the
-// Google consent URL as JSON {"auth_url": "..."}. The Console opens that URL in
-// a popup. Returns 501 when OAuth is not configured on this server so the
-// Console can fall back to the service-account path.
-func GoogleOAuthStartHandler(logger *slog.Logger, auth UserAuth, client *oauthgoogle.Client, workspaces workspace.Resolver) http.HandlerFunc {
+// RPC mux, resolves the caller's tenant and that tenant's own OAuth app, mints a
+// signed state, and returns the Google consent URL as JSON {"auth_url": "..."}.
+// The Console opens that URL in a popup.
+//
+// Two distinct refusals: 501 when the deployment has no OAuth configuration at
+// all (Console falls back to the service-account path), 412 when this customer
+// has not connected their own Google app yet.
+func GoogleOAuthStartHandler(logger *slog.Logger, auth UserAuth, client *oauthgoogle.Client, workspaces workspace.Resolver, clients workspace.OAuthClientStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		if client == nil {
+		if client == nil || clients == nil {
 			writeOAuthError(w, http.StatusNotImplemented, "Sign in with Google is not configured on this server")
 			return
 		}
@@ -43,6 +54,18 @@ func GoogleOAuthStartHandler(logger *slog.Logger, auth UserAuth, client *oauthgo
 			return
 		}
 
+		cc, err := clients.GetOAuthClient(ctx, ws.Slug, workspace.OAuthProviderGoogle)
+		if errors.Is(err, workspace.ErrOAuthClientNotFound) {
+			writeOAuthErrorCode(w, http.StatusPreconditionFailed,
+				"connect your own Google OAuth app first", oauthClientNotConfiguredCode)
+			return
+		}
+		if err != nil {
+			logger.ErrorContext(ctx, "oauth: load customer client", "err", err, "slug", ws.Slug)
+			writeOAuthError(w, http.StatusInternalServerError, "could not start sign-in")
+			return
+		}
+
 		state, err := client.SignState(string(userID), ws.Slug)
 		if err != nil {
 			logger.ErrorContext(ctx, "oauth: sign state", "err", err)
@@ -51,7 +74,7 @@ func GoogleOAuthStartHandler(logger *slog.Logger, auth UserAuth, client *oauthgo
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"auth_url": client.AuthURL(state)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"auth_url": client.AuthURL(state, cc.ClientID)})
 	}
 }
 
@@ -61,10 +84,10 @@ func GoogleOAuthStartHandler(logger *slog.Logger, auth UserAuth, client *oauthgo
 // token, stores a short-lived grant, and returns a tiny HTML page that
 // postMessages {grant_id, email} back to the Console opener (restricted to
 // consoleOrigin) and closes. The refresh token never reaches the browser.
-func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client, grants workspace.GoogleOAuthGrantStore, consoleOrigin string) http.HandlerFunc {
+func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client, grants workspace.GoogleOAuthGrantStore, clients workspace.OAuthClientStore, consoleOrigin string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		if client == nil {
+		if client == nil || clients == nil {
 			renderOAuthResult(w, consoleOrigin, oauthResult{Error: "Sign in with Google is not configured"})
 			return
 		}
@@ -89,7 +112,17 @@ func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client,
 			return
 		}
 
-		tok, err := client.Exchange(ctx, code)
+		// The exchange must use the same client the consent URL was built with.
+		// The state binds the tenant, so this is that customer's own app — not a
+		// second lookup that could drift from the first.
+		cc, err := clients.GetOAuthClient(ctx, slug, workspace.OAuthProviderGoogle)
+		if err != nil {
+			logger.ErrorContext(ctx, "oauth: load customer client", "err", err, "slug", slug)
+			renderOAuthResult(w, consoleOrigin, oauthResult{Error: "could not complete the Google sign-in"})
+			return
+		}
+
+		tok, err := client.Exchange(ctx, code, cc.ClientID, cc.ClientSecret)
 		if err != nil {
 			logger.ErrorContext(ctx, "oauth: code exchange", "err", err)
 			renderOAuthResult(w, consoleOrigin, oauthResult{Error: "could not complete the Google sign-in"})
@@ -103,6 +136,7 @@ func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client,
 			UserSub:      userSub,
 			RefreshToken: tok.RefreshToken,
 			Email:        tok.Email,
+			ClientID:     cc.ClientID,
 			CreatedAt:    now,
 			ExpiresAt:    now.Add(grantTTL),
 		}
@@ -117,9 +151,19 @@ func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client,
 }
 
 func writeOAuthError(w http.ResponseWriter, status int, msg string) {
+	writeOAuthErrorCode(w, status, msg, "")
+}
+
+// writeOAuthErrorCode adds a stable machine-readable code the Console can branch
+// on, so the copy can be reworded without breaking the client.
+func writeOAuthErrorCode(w http.ResponseWriter, status int, msg, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	body := map[string]string{"error": msg}
+	if code != "" {
+		body["code"] = code
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // oauthResult is the payload postMessaged back to the Console opener. On success

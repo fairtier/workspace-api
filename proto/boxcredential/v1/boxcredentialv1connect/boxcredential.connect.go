@@ -42,6 +42,9 @@ const (
 	// BoxCredentialServiceDepositAgePublicKeyProcedure is the fully-qualified name of the
 	// BoxCredentialService's DepositAgePublicKey RPC.
 	BoxCredentialServiceDepositAgePublicKeyProcedure = "/boxcredential.v1.BoxCredentialService/DepositAgePublicKey"
+	// BoxCredentialServiceDepositFederationClientProcedure is the fully-qualified name of the
+	// BoxCredentialService's DepositFederationClient RPC.
+	BoxCredentialServiceDepositFederationClientProcedure = "/boxcredential.v1.BoxCredentialService/DepositFederationClient"
 )
 
 // BoxCredentialServiceClient is a client for the boxcredential.v1.BoxCredentialService service.
@@ -62,6 +65,14 @@ type BoxCredentialServiceClient interface {
 	// pipelines get their credential files immediately. Idempotent: the dlt
 	// seed Job re-deposits on every ArgoCD sync.
 	DepositAgePublicKey(context.Context, *connect.Request[v1.DepositAgePublicKeyRequest]) (*connect.Response[v1.DepositAgePublicKeyResponse], error)
+	// DepositFederationClient upserts the OAuth client the box minted for
+	// itself so its users can sign in through the central identity provider.
+	// Central registers the deposited pair as this tenant's client rather than
+	// minting one and pushing it down — the secret that ends up in the box's
+	// database is then the box's own, and its owner can rotate it by
+	// re-depositing. Idempotent: the box seed Job re-deposits on every ArgoCD
+	// sync.
+	DepositFederationClient(context.Context, *connect.Request[v1.DepositFederationClientRequest]) (*connect.Response[v1.DepositFederationClientResponse], error)
 }
 
 // NewBoxCredentialServiceClient constructs a client for the boxcredential.v1.BoxCredentialService
@@ -93,14 +104,21 @@ func NewBoxCredentialServiceClient(httpClient connect.HTTPClient, baseURL string
 			connect.WithSchema(boxCredentialServiceMethods.ByName("DepositAgePublicKey")),
 			connect.WithClientOptions(opts...),
 		),
+		depositFederationClient: connect.NewClient[v1.DepositFederationClientRequest, v1.DepositFederationClientResponse](
+			httpClient,
+			baseURL+BoxCredentialServiceDepositFederationClientProcedure,
+			connect.WithSchema(boxCredentialServiceMethods.ByName("DepositFederationClient")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // boxCredentialServiceClient implements BoxCredentialServiceClient.
 type boxCredentialServiceClient struct {
-	depositGitToken      *connect.Client[v1.DepositGitTokenRequest, v1.DepositGitTokenResponse]
-	depositSnapshotToken *connect.Client[v1.DepositSnapshotTokenRequest, v1.DepositSnapshotTokenResponse]
-	depositAgePublicKey  *connect.Client[v1.DepositAgePublicKeyRequest, v1.DepositAgePublicKeyResponse]
+	depositGitToken         *connect.Client[v1.DepositGitTokenRequest, v1.DepositGitTokenResponse]
+	depositSnapshotToken    *connect.Client[v1.DepositSnapshotTokenRequest, v1.DepositSnapshotTokenResponse]
+	depositAgePublicKey     *connect.Client[v1.DepositAgePublicKeyRequest, v1.DepositAgePublicKeyResponse]
+	depositFederationClient *connect.Client[v1.DepositFederationClientRequest, v1.DepositFederationClientResponse]
 }
 
 // DepositGitToken calls boxcredential.v1.BoxCredentialService.DepositGitToken.
@@ -116,6 +134,11 @@ func (c *boxCredentialServiceClient) DepositSnapshotToken(ctx context.Context, r
 // DepositAgePublicKey calls boxcredential.v1.BoxCredentialService.DepositAgePublicKey.
 func (c *boxCredentialServiceClient) DepositAgePublicKey(ctx context.Context, req *connect.Request[v1.DepositAgePublicKeyRequest]) (*connect.Response[v1.DepositAgePublicKeyResponse], error) {
 	return c.depositAgePublicKey.CallUnary(ctx, req)
+}
+
+// DepositFederationClient calls boxcredential.v1.BoxCredentialService.DepositFederationClient.
+func (c *boxCredentialServiceClient) DepositFederationClient(ctx context.Context, req *connect.Request[v1.DepositFederationClientRequest]) (*connect.Response[v1.DepositFederationClientResponse], error) {
+	return c.depositFederationClient.CallUnary(ctx, req)
 }
 
 // BoxCredentialServiceHandler is an implementation of the boxcredential.v1.BoxCredentialService
@@ -137,6 +160,14 @@ type BoxCredentialServiceHandler interface {
 	// pipelines get their credential files immediately. Idempotent: the dlt
 	// seed Job re-deposits on every ArgoCD sync.
 	DepositAgePublicKey(context.Context, *connect.Request[v1.DepositAgePublicKeyRequest]) (*connect.Response[v1.DepositAgePublicKeyResponse], error)
+	// DepositFederationClient upserts the OAuth client the box minted for
+	// itself so its users can sign in through the central identity provider.
+	// Central registers the deposited pair as this tenant's client rather than
+	// minting one and pushing it down — the secret that ends up in the box's
+	// database is then the box's own, and its owner can rotate it by
+	// re-depositing. Idempotent: the box seed Job re-deposits on every ArgoCD
+	// sync.
+	DepositFederationClient(context.Context, *connect.Request[v1.DepositFederationClientRequest]) (*connect.Response[v1.DepositFederationClientResponse], error)
 }
 
 // NewBoxCredentialServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -164,6 +195,12 @@ func NewBoxCredentialServiceHandler(svc BoxCredentialServiceHandler, opts ...con
 		connect.WithSchema(boxCredentialServiceMethods.ByName("DepositAgePublicKey")),
 		connect.WithHandlerOptions(opts...),
 	)
+	boxCredentialServiceDepositFederationClientHandler := connect.NewUnaryHandler(
+		BoxCredentialServiceDepositFederationClientProcedure,
+		svc.DepositFederationClient,
+		connect.WithSchema(boxCredentialServiceMethods.ByName("DepositFederationClient")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/boxcredential.v1.BoxCredentialService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BoxCredentialServiceDepositGitTokenProcedure:
@@ -172,6 +209,8 @@ func NewBoxCredentialServiceHandler(svc BoxCredentialServiceHandler, opts ...con
 			boxCredentialServiceDepositSnapshotTokenHandler.ServeHTTP(w, r)
 		case BoxCredentialServiceDepositAgePublicKeyProcedure:
 			boxCredentialServiceDepositAgePublicKeyHandler.ServeHTTP(w, r)
+		case BoxCredentialServiceDepositFederationClientProcedure:
+			boxCredentialServiceDepositFederationClientHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -191,4 +230,8 @@ func (UnimplementedBoxCredentialServiceHandler) DepositSnapshotToken(context.Con
 
 func (UnimplementedBoxCredentialServiceHandler) DepositAgePublicKey(context.Context, *connect.Request[v1.DepositAgePublicKeyRequest]) (*connect.Response[v1.DepositAgePublicKeyResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("boxcredential.v1.BoxCredentialService.DepositAgePublicKey is not implemented"))
+}
+
+func (UnimplementedBoxCredentialServiceHandler) DepositFederationClient(context.Context, *connect.Request[v1.DepositFederationClientRequest]) (*connect.Response[v1.DepositFederationClientResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("boxcredential.v1.BoxCredentialService.DepositFederationClient is not implemented"))
 }

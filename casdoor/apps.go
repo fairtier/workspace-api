@@ -27,12 +27,23 @@ func (m *AppManager) client(org string) *casdoorsdk.Client {
 // AddApp creates a Casdoor application for the given organization.
 // The application is configured for client_credentials only (no password grant).
 // Casdoor auto-generates ClientId and ClientSecret.
+//
+// The "dcr" tag is load-bearing, not cosmetic. Casdoor accepts an
+// application's clientId/clientSecret as API authentication on any /api/*
+// path, and an untagged application's subject ("app") is allowed everything by
+// the built-in policy — so the pair handed to a service-account holder would
+// carry management authority over the whole Casdoor. The tag moves the subject
+// to "app-dcr", whose policy covers only /api/login/oauth/*,
+// /api/get-oauth-token, /api/userinfo and /api/get-application: everything a
+// client-credentials service account needs to obtain and spend a token, and
+// nothing that administers anything.
 func (m *AppManager) AddApp(_ context.Context, org, name string) (*core.CasdoorApp, error) {
 	app := &casdoorsdk.Application{
 		Owner:                "admin",
 		Name:                 name,
 		Organization:         org,
 		DisplayName:          name,
+		Tags:                 []string{"dcr"},
 		GrantTypes:           []string{"client_credentials"},
 		TokenFormat:          "JWT",
 		ExpireInHours:        168,

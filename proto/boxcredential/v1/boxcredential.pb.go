@@ -301,6 +301,106 @@ func (*DepositAgePublicKeyResponse) Descriptor() ([]byte, []int) {
 	return file_boxcredential_proto_rawDescGZIP(), []int{5}
 }
 
+type DepositFederationClientRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// OAuth client id the box generated for itself. Not secret.
+	ClientId string `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// The matching client secret, generated on the box. Central stores it
+	// encrypted and registers it as this tenant's client; it never mints one.
+	ClientSecret string `protobuf:"bytes,2,opt,name=client_secret,json=clientSecret,proto3" json:"client_secret,omitempty"`
+	// Optional free-form note (e.g. the minting job / secret name) for audit.
+	Note          string `protobuf:"bytes,3,opt,name=note,proto3" json:"note,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DepositFederationClientRequest) Reset() {
+	*x = DepositFederationClientRequest{}
+	mi := &file_boxcredential_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DepositFederationClientRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DepositFederationClientRequest) ProtoMessage() {}
+
+func (x *DepositFederationClientRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_boxcredential_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DepositFederationClientRequest.ProtoReflect.Descriptor instead.
+func (*DepositFederationClientRequest) Descriptor() ([]byte, []int) {
+	return file_boxcredential_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DepositFederationClientRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *DepositFederationClientRequest) GetClientSecret() string {
+	if x != nil {
+		return x.ClientSecret
+	}
+	return ""
+}
+
+func (x *DepositFederationClientRequest) GetNote() string {
+	if x != nil {
+		return x.Note
+	}
+	return ""
+}
+
+type DepositFederationClientResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DepositFederationClientResponse) Reset() {
+	*x = DepositFederationClientResponse{}
+	mi := &file_boxcredential_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DepositFederationClientResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DepositFederationClientResponse) ProtoMessage() {}
+
+func (x *DepositFederationClientResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_boxcredential_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DepositFederationClientResponse.ProtoReflect.Descriptor instead.
+func (*DepositFederationClientResponse) Descriptor() ([]byte, []int) {
+	return file_boxcredential_proto_rawDescGZIP(), []int{7}
+}
+
 var File_boxcredential_proto protoreflect.FileDescriptor
 
 const file_boxcredential_proto_rawDesc = "" +
@@ -319,11 +419,17 @@ const file_boxcredential_proto_rawDesc = "" +
 	"\n" +
 	"public_key\x18\x01 \x01(\tR\tpublicKey\x12\x12\n" +
 	"\x04note\x18\x02 \x01(\tR\x04note\"\x1d\n" +
-	"\x1bDepositAgePublicKeyResponse2\xef\x02\n" +
+	"\x1bDepositAgePublicKeyResponse\"v\n" +
+	"\x1eDepositFederationClientRequest\x12\x1b\n" +
+	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
+	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x12\n" +
+	"\x04note\x18\x03 \x01(\tR\x04note\"!\n" +
+	"\x1fDepositFederationClientResponse2\xf2\x03\n" +
 	"\x14BoxCredentialService\x12h\n" +
 	"\x0fDepositGitToken\x12(.boxcredential.v1.DepositGitTokenRequest\x1a).boxcredential.v1.DepositGitTokenResponse\"\x00\x12w\n" +
 	"\x14DepositSnapshotToken\x12-.boxcredential.v1.DepositSnapshotTokenRequest\x1a..boxcredential.v1.DepositSnapshotTokenResponse\"\x00\x12t\n" +
-	"\x13DepositAgePublicKey\x12,.boxcredential.v1.DepositAgePublicKeyRequest\x1a-.boxcredential.v1.DepositAgePublicKeyResponse\"\x00BJZHgithub.com/fairtier/workspace-api/proto/boxcredential/v1;boxcredentialv1b\x06proto3"
+	"\x13DepositAgePublicKey\x12,.boxcredential.v1.DepositAgePublicKeyRequest\x1a-.boxcredential.v1.DepositAgePublicKeyResponse\"\x00\x12\x80\x01\n" +
+	"\x17DepositFederationClient\x120.boxcredential.v1.DepositFederationClientRequest\x1a1.boxcredential.v1.DepositFederationClientResponse\"\x00BJZHgithub.com/fairtier/workspace-api/proto/boxcredential/v1;boxcredentialv1b\x06proto3"
 
 var (
 	file_boxcredential_proto_rawDescOnce sync.Once
@@ -337,24 +443,28 @@ func file_boxcredential_proto_rawDescGZIP() []byte {
 	return file_boxcredential_proto_rawDescData
 }
 
-var file_boxcredential_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_boxcredential_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_boxcredential_proto_goTypes = []any{
-	(*DepositGitTokenRequest)(nil),       // 0: boxcredential.v1.DepositGitTokenRequest
-	(*DepositGitTokenResponse)(nil),      // 1: boxcredential.v1.DepositGitTokenResponse
-	(*DepositSnapshotTokenRequest)(nil),  // 2: boxcredential.v1.DepositSnapshotTokenRequest
-	(*DepositSnapshotTokenResponse)(nil), // 3: boxcredential.v1.DepositSnapshotTokenResponse
-	(*DepositAgePublicKeyRequest)(nil),   // 4: boxcredential.v1.DepositAgePublicKeyRequest
-	(*DepositAgePublicKeyResponse)(nil),  // 5: boxcredential.v1.DepositAgePublicKeyResponse
+	(*DepositGitTokenRequest)(nil),          // 0: boxcredential.v1.DepositGitTokenRequest
+	(*DepositGitTokenResponse)(nil),         // 1: boxcredential.v1.DepositGitTokenResponse
+	(*DepositSnapshotTokenRequest)(nil),     // 2: boxcredential.v1.DepositSnapshotTokenRequest
+	(*DepositSnapshotTokenResponse)(nil),    // 3: boxcredential.v1.DepositSnapshotTokenResponse
+	(*DepositAgePublicKeyRequest)(nil),      // 4: boxcredential.v1.DepositAgePublicKeyRequest
+	(*DepositAgePublicKeyResponse)(nil),     // 5: boxcredential.v1.DepositAgePublicKeyResponse
+	(*DepositFederationClientRequest)(nil),  // 6: boxcredential.v1.DepositFederationClientRequest
+	(*DepositFederationClientResponse)(nil), // 7: boxcredential.v1.DepositFederationClientResponse
 }
 var file_boxcredential_proto_depIdxs = []int32{
 	0, // 0: boxcredential.v1.BoxCredentialService.DepositGitToken:input_type -> boxcredential.v1.DepositGitTokenRequest
 	2, // 1: boxcredential.v1.BoxCredentialService.DepositSnapshotToken:input_type -> boxcredential.v1.DepositSnapshotTokenRequest
 	4, // 2: boxcredential.v1.BoxCredentialService.DepositAgePublicKey:input_type -> boxcredential.v1.DepositAgePublicKeyRequest
-	1, // 3: boxcredential.v1.BoxCredentialService.DepositGitToken:output_type -> boxcredential.v1.DepositGitTokenResponse
-	3, // 4: boxcredential.v1.BoxCredentialService.DepositSnapshotToken:output_type -> boxcredential.v1.DepositSnapshotTokenResponse
-	5, // 5: boxcredential.v1.BoxCredentialService.DepositAgePublicKey:output_type -> boxcredential.v1.DepositAgePublicKeyResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	6, // 3: boxcredential.v1.BoxCredentialService.DepositFederationClient:input_type -> boxcredential.v1.DepositFederationClientRequest
+	1, // 4: boxcredential.v1.BoxCredentialService.DepositGitToken:output_type -> boxcredential.v1.DepositGitTokenResponse
+	3, // 5: boxcredential.v1.BoxCredentialService.DepositSnapshotToken:output_type -> boxcredential.v1.DepositSnapshotTokenResponse
+	5, // 6: boxcredential.v1.BoxCredentialService.DepositAgePublicKey:output_type -> boxcredential.v1.DepositAgePublicKeyResponse
+	7, // 7: boxcredential.v1.BoxCredentialService.DepositFederationClient:output_type -> boxcredential.v1.DepositFederationClientResponse
+	4, // [4:8] is the sub-list for method output_type
+	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -371,7 +481,7 @@ func file_boxcredential_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_boxcredential_proto_rawDesc), len(file_boxcredential_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

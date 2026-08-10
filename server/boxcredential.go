@@ -20,9 +20,10 @@ import (
 // "credential inversion": the box pushes credentials up, central never holds
 // box admin credentials.
 type BoxCredentialServer struct {
-	Store     workspace.BoxGitCredentialStore
-	Snapshots workspace.BoxSnapshotCredentialStore
-	AgeKeys   workspace.BoxAgeKeyStore
+	Store      workspace.BoxGitCredentialStore
+	Snapshots  workspace.BoxSnapshotCredentialStore
+	AgeKeys    workspace.BoxAgeKeyStore
+	Federation workspace.BoxFederationClientStore
 	// Mirror, when set, re-renders the depositing tenant's pipelines repo
 	// after an age-key deposit so existing pipelines get their
 	// .credentials.age files immediately (the data migration for free).
@@ -133,4 +134,39 @@ func (s *BoxCredentialServer) DepositAgePublicKey(ctx context.Context, req *conn
 		}
 	}
 	return connect.NewResponse(&boxcredentialv1.DepositAgePublicKeyResponse{}), nil
+}
+
+// DepositFederationClient upserts the OAuth client the calling box minted for
+// itself. Same trust rules as the other deposits: box-issued service token
+// only, slug bound by issuer trust, so a box can only ever deposit its own.
+//
+// A re-deposit with a different secret is a rotation the customer initiated;
+// central converges both ends on the next reconcile.
+func (s *BoxCredentialServer) DepositFederationClient(ctx context.Context, req *connect.Request[boxcredentialv1.DepositFederationClientRequest]) (*connect.Response[boxcredentialv1.DepositFederationClientResponse], error) {
+	caller := InternalCallerFromContext(ctx)
+	if caller.Slug == "" {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("credential deposit requires a box service token"))
+	}
+
+	clientID := strings.TrimSpace(req.Msg.ClientId)
+	clientSecret := strings.TrimSpace(req.Msg.ClientSecret)
+	if clientID == "" || clientSecret == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("client_id and client_secret are required"))
+	}
+
+	err := s.Federation.UpsertBoxFederationClient(ctx, &workspace.BoxFederationClient{
+		CustomerSlug: caller.Slug,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		Note:         req.Msg.Note,
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	if s.Logger != nil {
+		// client id only — the secret never reaches a log line.
+		s.Logger.Info("box federation client deposited", "slug", caller.Slug, "client_id", clientID, "note", req.Msg.Note)
+	}
+	return connect.NewResponse(&boxcredentialv1.DepositFederationClientResponse{}), nil
 }

@@ -9,6 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/fairtier/workspace-api/core"
 )
 
@@ -418,8 +421,29 @@ func (s *TransformationService) ReportTransformationRun(ctx context.Context, cal
 			return fmt.Errorf("create transformation run: %w", err)
 		}
 	}
+	recordTransformationRun(ctx, run)
 	s.notifyRun(ctx, run)
 	return nil
+}
+
+// recordTransformationRun is recordPipelineRun's twin for dbt builds — same
+// terminal-only rule, same reason. There is no rows counter: a dbt build's
+// output is tables in the warehouse, and the worker reports no row count.
+func recordTransformationRun(ctx context.Context, run *TransformationRun) {
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attrTransformID.String(string(run.TransformationID)),
+		attrRunStatus.String(run.Status),
+	)
+	if run.Status != "success" && run.Status != "failed" {
+		return
+	}
+
+	status := metric.WithAttributes(attrRunStatus.String(run.Status))
+	transformationRuns.Add(ctx, 1, status)
+	if seconds, ok := runDurationSeconds(run.StartedAt, run.CompletedAt); ok {
+		transformationRunDuration.Record(ctx, seconds, status)
+	}
 }
 
 // notifyRun raises a best-effort in-app notification for a completed run. It

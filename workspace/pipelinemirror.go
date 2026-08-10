@@ -11,9 +11,12 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
 
 	"github.com/fairtier/workspace-api/core"
@@ -127,11 +130,22 @@ const pipelineFileHeader = "# Rendered by the FairTier Console — a Console sav
 // author of every commit this converge makes — full-state convergence means
 // a save can also backfill or heal other files, but those changes are still
 // the result of that user's save; the committer stays the platform identity.
-func (m *PipelineMirror) SyncCustomer(ctx context.Context, customerSlug string, author *CommitAuthor) error {
+func (m *PipelineMirror) SyncCustomer(ctx context.Context, customerSlug string, author *CommitAuthor) (err error) {
+	// With git-primary on, this converge is on the request path of every
+	// Console save, so its span is the one that explains a slow save — the
+	// child client spans show whether the time went to Gitea or to Postgres.
+	ctx, span := tracer.Start(ctx, "PipelineMirror.SyncCustomer", trace.WithAttributes(
+		attrSlug.String(customerSlug),
+		attrRepoPlane.String(planePipelines),
+	))
+	started, inScope := time.Now(), false
+	defer func() { recordSync(ctx, span, planePipelines, started, err, inScope) }()
+
 	client, ws, ok, err := m.clientFor(ctx, customerSlug)
 	if err != nil || !ok {
 		return err
 	}
+	inScope = true
 
 	pipelines, err := m.Pipelines.ListPipelinesByCustomer(ctx, customerSlug)
 	if err != nil {
@@ -158,6 +172,10 @@ func (m *PipelineMirror) SyncCustomer(ctx context.Context, customerSlug string, 
 	if err != nil {
 		return err
 	}
+	span.SetAttributes(
+		attribute.Int("workspace.repo.definition_files", len(desired)),
+		attribute.Int("workspace.repo.credential_files", len(credentials)),
+	)
 
 	if err := m.converge(ctx, client, customerSlug, desired, credentials, recipient, renders, defRenders, author); errors.Is(err, ErrRepoFileChanged) {
 		// Something else committed between our tree read and write (e.g. the
@@ -167,6 +185,11 @@ func (m *PipelineMirror) SyncCustomer(ctx context.Context, customerSlug string, 
 		// re-encrypts. defRenders is deliberately NOT re-read: files the
 		// first attempt already converged compare content-equal on the retry
 		// and adopt the new sha silently, so no double drift notification.
+		//
+		// The event is what makes a rising conflict rate visible: both
+		// attempts land inside one span, and a retry costs a second full tree
+		// read the duration histogram alone would not explain.
+		span.AddEvent("workspace.repo.converge_retry")
 		return m.converge(ctx, client, customerSlug, desired, credentials, recipient, renders, defRenders, author)
 	} else if err != nil {
 		return err
@@ -557,6 +580,7 @@ func deleteStale[V any](ctx context.Context, client RepoFileClient, repo string,
 		if err := client.DeleteContents(ctx, repo, filePath, existing[filePath], msg, author); err != nil {
 			return fmt.Errorf("delete %s: %w", filePath, err)
 		}
+		recordCommit(ctx, repo, "delete", filePath)
 	}
 	return nil
 }
@@ -599,6 +623,7 @@ func deleteStaleRendered[V any](ctx context.Context, client RepoFileClient, repo
 		if err := client.DeleteContents(ctx, repo, filePath, existing[filePath], msg, author); err != nil {
 			return fmt.Errorf("delete %s: %w", filePath, err)
 		}
+		recordCommit(ctx, repo, "delete", filePath)
 	}
 	return nil
 }
@@ -632,6 +657,7 @@ func (m *PipelineMirror) upsertCredentialFile(ctx context.Context, client RepoFi
 	if err != nil {
 		return fmt.Errorf("put %s: %w", filePath, err)
 	}
+	recordCommit(ctx, planePipelines, "upsert", filePath)
 	err = m.Renders.UpsertPipelineCredentialRender(ctx, &PipelineCredentialRender{
 		PipelineID:  cf.pipelineID,
 		Fingerprint: fp,
@@ -675,6 +701,11 @@ func (m *PipelineMirror) markCredentialsExternal(ctx context.Context, filePath s
 		}
 		return
 	}
+	// A one-way ownership handover the user has to undo deliberately: worth a
+	// counter, because "the Console stopped updating my credentials" is
+	// otherwise reported as a bug with nothing in the logs to point at.
+	recordAdoption(ctx, planePipelines, outcomeExternal,
+		attrRepoPath.String(filePath), attrPipelineID.String(string(id)))
 	if m.Notifications == nil {
 		return
 	}
@@ -742,6 +773,7 @@ func (m *PipelineMirror) upsertFile(ctx context.Context, client RepoFileClient, 
 		if err != nil {
 			return fmt.Errorf("put %s: %w", filePath, err)
 		}
+		recordCommit(ctx, planePipelines, "upsert", filePath)
 		m.recordDefinitionRender(ctx, df.pipelineID, filePath, newSHA)
 		return nil
 	}
@@ -759,6 +791,7 @@ func (m *PipelineMirror) upsertFile(ctx context.Context, client RepoFileClient, 
 	if err != nil {
 		return fmt.Errorf("put %s: %w", filePath, err)
 	}
+	recordCommit(ctx, planePipelines, "upsert", filePath)
 	m.recordDefinitionRender(ctx, df.pipelineID, filePath, newSHA)
 	if drifted {
 		m.notifyDefinitionDrift(ctx, customerSlug, filePath, df.pipelineID)
@@ -812,6 +845,12 @@ func (m *PipelineMirror) recordDefinitionRender(ctx context.Context, id Pipeline
 // repo edit the converge just overwrote (overwrite-and-notify, never
 // silent). Best-effort.
 func (m *PipelineMirror) notifyDefinitionDrift(ctx context.Context, customerSlug, filePath string, id PipelineID) {
+	// Recorded before the nil check: the overwrite happened whether or not a
+	// notifier is wired to tell the user about it.
+	trace.SpanFromContext(ctx).AddEvent("workspace.repo.drift_overwritten", trace.WithAttributes(
+		attrRepoPath.String(filePath),
+		attrPipelineID.String(string(id)),
+	))
 	if m.Notifications == nil {
 		return
 	}

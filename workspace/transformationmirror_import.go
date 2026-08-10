@@ -85,6 +85,8 @@ func (m *TransformationMirror) importFile(ctx context.Context, client RepoFileCl
 		}
 		return false, fmt.Errorf("import %s: %w", filePath, err)
 	}
+	recordAdoption(ctx, planeTransformations, outcomeImported,
+		attrRepoPath.String(filePath), attrTransformID.String(string(t.ID)))
 	m.recordDefinitionRender(ctx, t.ID, filePath, blobSHA)
 	taken.add(t.ID, t.Name)
 	return true, nil

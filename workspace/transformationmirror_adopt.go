@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,7 +33,13 @@ import (
 
 // AdoptCustomer runs one adopt pass for a customer. Out-of-scope customers
 // (shared substrate, no deposited credential) are skipped silently.
-func (m *TransformationMirror) AdoptCustomer(ctx context.Context, customerSlug string) error {
+func (m *TransformationMirror) AdoptCustomer(ctx context.Context, customerSlug string) (err error) {
+	ctx, span := tracer.Start(ctx, "TransformationMirror.AdoptCustomer", trace.WithAttributes(
+		attrSlug.String(customerSlug),
+		attrRepoPlane.String(planeTransformations),
+	))
+	defer func() { endSpan(span, err) }()
+
 	client, _, ok, err := boxMirrorClientFor(ctx, m.Workspaces, m.Credentials, m.NewClient, customerSlug)
 	if err != nil || !ok {
 		return err
@@ -44,6 +52,10 @@ func (m *TransformationMirror) AdoptCustomer(ctx context.Context, customerSlug s
 	if err != nil {
 		return err
 	}
+	span.SetAttributes(
+		attribute.Int("workspace.repo.definition_files", len(st.yamlTree)),
+		attribute.Int("workspace.transformations", len(st.transformations)),
+	)
 	// Hydration first (Phase 3B): rows created here match the tree exactly,
 	// so the adopt loop below has nothing left to do for them.
 	if err := m.importUnrendered(ctx, client, customerSlug, st); err != nil {
@@ -114,6 +126,8 @@ func (m *TransformationMirror) adoptDefinition(ctx context.Context, client RepoF
 	if err := m.Transformations.UpdateTransformation(ctx, adopted); err != nil {
 		return fmt.Errorf("adopt %s: %w", row.Path, err)
 	}
+	recordAdoption(ctx, planeTransformations, outcomeAdopted,
+		attrRepoPath.String(row.Path), attrTransformID.String(string(t.ID)))
 	m.recordDefinitionRender(ctx, t.ID, row.Path, treeSHA)
 	m.notifyAdopted(ctx, t.CustomerSlug, row.Path)
 	return nil
@@ -172,6 +186,8 @@ func (m *TransformationMirror) refuseAdoption(ctx context.Context, t *Transforma
 		}
 		return
 	}
+	recordAdoption(ctx, planeTransformations, outcomeRefused,
+		attrRepoPath.String(filePath), attrTransformID.String(string(t.ID)), attrReason.String(reason))
 	if m.Notifications == nil {
 		return
 	}

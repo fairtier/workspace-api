@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/fairtier/workspace-api/telemetry"
 )
 
 // DeepSeekCaller implements StructuredCaller against the DeepSeek
@@ -54,10 +56,14 @@ func (c *DeepSeekCaller) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	// Drafts are single synchronous calls from an RPC handler; a generous
-	// timeout still bounds a hung upstream.
-	return &http.Client{Timeout: 90 * time.Second}
+	return tracedClient
 }
+
+// tracedClient is the default client, built once. Drafts are single
+// synchronous calls from an RPC handler; the generous timeout still bounds a
+// hung upstream, and the instrumented transport puts the provider round trip
+// under the completion span.
+var tracedClient = telemetry.InstrumentHTTPClient(&http.Client{Timeout: 90 * time.Second})
 
 type deepseekMessage struct {
 	Role    string `json:"role"`
@@ -78,7 +84,15 @@ type deepseekResponse struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	// Usage is decoded purely for the token metrics. The API always sends it;
+	// a response that somehow omits it decodes to zeros, which recordTokens
+	// skips rather than reporting as a free call.
+	Usage struct {
+		PromptTokens     int64 `json:"prompt_tokens"`
+		CompletionTokens int64 `json:"completion_tokens"`
+	} `json:"usage"`
 }
 
 // Complete runs one json_object-mode chat completion. The JSON schema is
@@ -90,23 +104,36 @@ func (c *DeepSeekCaller) Complete(ctx context.Context, req StructuredRequest) (j
 		return nil, err
 	}
 
+	var out json.RawMessage
+	err = call(ctx, "deepseek", c.Model, req.MaxTokens, func(ctx context.Context) (usage, error) {
+		raw, u, err := c.post(ctx, payload)
+		out = raw
+		return u, err
+	})
+	return out, err
+}
+
+// post sends the prepared body and decodes the response. The HTTP call itself
+// is traced by the instrumented transport, so this span's child is the request
+// — which is how a slow draft is attributed to the provider rather than to us.
+func (c *DeepSeekCaller) post(ctx context.Context, payload []byte) (json.RawMessage, usage, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL()+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, usage{}, fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("deepseek chat completions: %w", err)
+		return nil, usage{}, fmt.Errorf("deepseek chat completions: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("deepseek chat completions: status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
+		return nil, usage{}, fmt.Errorf("deepseek chat completions: status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
 	}
 
 	return decodeDeepSeekResponse(resp.Body)
@@ -149,14 +176,20 @@ func (c *DeepSeekCaller) buildPayload(req StructuredRequest) ([]byte, error) {
 }
 
 // decodeDeepSeekResponse decodes a successful response body and returns the
-// first choice's content, erroring on an empty response.
-func decodeDeepSeekResponse(r io.Reader) (json.RawMessage, error) {
+// first choice's content, erroring on an empty response. The usage is returned
+// alongside the error too: an empty completion still consumed input tokens.
+func decodeDeepSeekResponse(r io.Reader) (json.RawMessage, usage, error) {
 	var out deepseekResponse
 	if err := json.NewDecoder(r).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decode deepseek response: %w", err)
+		return nil, usage{}, fmt.Errorf("decode deepseek response: %w", err)
+	}
+	u := usage{
+		inputTokens:  out.Usage.PromptTokens,
+		outputTokens: out.Usage.CompletionTokens,
 	}
 	if len(out.Choices) == 0 || out.Choices[0].Message.Content == "" {
-		return nil, fmt.Errorf("empty model response")
+		return nil, u, fmt.Errorf("empty model response")
 	}
-	return json.RawMessage(out.Choices[0].Message.Content), nil
+	u.finishReason = out.Choices[0].FinishReason
+	return json.RawMessage(out.Choices[0].Message.Content), u, nil
 }

@@ -3,15 +3,12 @@ package telemetry
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 )
 
 // SetupTracing installs a global OpenTelemetry tracer provider that batches
@@ -24,11 +21,8 @@ import (
 // The returned shutdown must be deferred by the caller so in-flight spans
 // are flushed before exit.
 func SetupTracing(ctx context.Context, serviceName, serviceVersion string) (func(context.Context) error, error) {
-	noop := func(context.Context) error { return nil }
-
-	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" &&
-		os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") == "" {
-		return noop, nil
+	if !exporterConfigured("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") {
+		return noopShutdown, nil
 	}
 
 	exporter, err := otlptrace.New(ctx, otlptracegrpc.NewClient())
@@ -36,17 +30,10 @@ func SetupTracing(ctx context.Context, serviceName, serviceVersion string) (func
 		return nil, fmt.Errorf("otlp trace exporter: %w", err)
 	}
 
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(serviceName),
-			semconv.ServiceVersion(serviceVersion),
-		),
-	)
+	res, err := newResource(serviceName, serviceVersion)
 	if err != nil {
 		_ = exporter.Shutdown(ctx)
-		return nil, fmt.Errorf("otel resource: %w", err)
+		return nil, err
 	}
 
 	tp := sdktrace.NewTracerProvider(

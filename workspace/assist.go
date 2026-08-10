@@ -79,7 +79,9 @@ type AssistService struct {
 // DraftTransformation turns prompt into a validated TransformationDraft for
 // the caller's tenant. Drafted files are constrained to models/ with .sql/.yml
 // extensions.
-func (s *AssistService) DraftTransformation(ctx context.Context, callerID core.UserID, prompt string) (*TransformationDraft, error) {
+func (s *AssistService) DraftTransformation(ctx context.Context, callerID core.UserID, prompt string) (_ *TransformationDraft, err error) {
+	defer func() { recordDraft(ctx, "transformation", err) }()
+
 	if s.Transformations == nil {
 		return nil, ErrDraftNotConfigured
 	}
@@ -104,7 +106,9 @@ func (s *AssistService) DraftTransformation(ctx context.Context, callerID core.U
 // DraftRillDashboard turns prompt into a validated RillDraft for the caller's
 // tenant. Drafted files are constrained to models/, metrics/ and dashboards/;
 // every .yaml file must parse as YAML.
-func (s *AssistService) DraftRillDashboard(ctx context.Context, callerID core.UserID, prompt string, existingPaths []string) (*RillDraft, error) {
+func (s *AssistService) DraftRillDashboard(ctx context.Context, callerID core.UserID, prompt string, existingPaths []string) (_ *RillDraft, err error) {
+	defer func() { recordDraft(ctx, "rill_dashboard", err) }()
+
 	if s.Rill == nil {
 		return nil, ErrDraftNotConfigured
 	}

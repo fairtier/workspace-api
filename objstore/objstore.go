@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fairtier/workspace-api/core"
+	"github.com/fairtier/workspace-api/telemetry"
 )
 
 // Client implements workspace.ObjectStore against any S3-compatible endpoint.
@@ -34,7 +35,10 @@ type Client struct {
 // not a single round trip.
 func New() *Client {
 	return &Client{
-		client: &http.Client{Timeout: 15 * time.Minute},
+		// Instrumented: an upload that stalls is the customer's whole
+		// experience of the feature, and this span is the only place the
+		// bucket round trip is visible.
+		client: telemetry.InstrumentHTTPClient(&http.Client{Timeout: 15 * time.Minute}),
 		now:    time.Now,
 	}
 }

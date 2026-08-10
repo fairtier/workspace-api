@@ -60,7 +60,9 @@ type PipelineAssistService struct {
 // DraftPipeline turns prompt into a validated PipelineDraft for the caller's
 // tenant. The drafted source_config is validated with ValidateSourceConfig, so
 // a malformed draft fails exactly like a malformed manual request.
-func (s *PipelineAssistService) DraftPipeline(ctx context.Context, callerID core.UserID, prompt string) (*PipelineDraft, error) {
+func (s *PipelineAssistService) DraftPipeline(ctx context.Context, callerID core.UserID, prompt string) (_ *PipelineDraft, err error) {
+	defer func() { recordDraft(ctx, "pipeline", err) }()
+
 	if s.Drafter == nil {
 		return nil, ErrDraftNotConfigured
 	}

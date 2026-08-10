@@ -133,3 +133,48 @@ func TestDeepSeekCaller_Complete(t *testing.T) {
 		}
 	})
 }
+
+// The token counters are the only place LLM spend shows up, so the usage block
+// has to survive decoding — including on the failure path, where the input
+// tokens were still billed for a response we then reject.
+func TestDecodeDeepSeekResponseUsage(t *testing.T) {
+	t.Run("successful completion", func(t *testing.T) {
+		body := `{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}],` +
+			`"usage":{"prompt_tokens":1200,"completion_tokens":340}}`
+
+		_, u, err := decodeDeepSeekResponse(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if u.inputTokens != 1200 || u.outputTokens != 340 {
+			t.Errorf("usage = %+v, want 1200 in / 340 out", u)
+		}
+		if u.finishReason != "stop" {
+			t.Errorf("finish reason = %q, want %q", u.finishReason, "stop")
+		}
+	})
+
+	t.Run("empty completion still reports what it cost", func(t *testing.T) {
+		body := `{"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":0}}`
+
+		_, u, err := decodeDeepSeekResponse(strings.NewReader(body))
+		if err == nil {
+			t.Fatal("want an error for an empty model response")
+		}
+		if u.inputTokens != 1200 {
+			t.Errorf("input tokens = %d, want 1200 reported despite the error", u.inputTokens)
+		}
+	})
+
+	t.Run("missing usage block reports nothing rather than zero", func(t *testing.T) {
+		body := `{"choices":[{"message":{"content":"{}"}}]}`
+
+		_, u, err := decodeDeepSeekResponse(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if u.inputTokens != 0 || u.outputTokens != 0 {
+			t.Errorf("usage = %+v, want zeroes (recordTokens skips them)", u)
+		}
+	})
+}

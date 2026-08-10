@@ -66,15 +66,18 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	shutdownTracing, err := telemetry.SetupTracing(ctx, "workspace-api", version.Binary())
+	// Traces and metrics together: both are opt-in on OTEL_EXPORTER_OTLP_*,
+	// and installing the meter provider is also what switches on the RPC and
+	// HTTP metrics the interceptors below already know how to report.
+	shutdownTelemetry, err := telemetry.Setup(ctx, "workspace-api", version.Binary())
 	if err != nil {
-		return fmt.Errorf("setup tracing: %w", err)
+		return fmt.Errorf("setup telemetry: %w", err)
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := shutdownTracing(shutdownCtx); err != nil {
-			logger.Warn("tracing shutdown error", "err", err)
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			logger.Warn("telemetry shutdown error", "err", err)
 		}
 	}()
 
@@ -534,6 +537,12 @@ func openDatabase(logger *slog.Logger) (*sql.DB, crypto.Encryptor, error) {
 	if err := postgres.Migrate(db); err != nil {
 		_ = db.Close()
 		return nil, nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
+	// The pool is shared by the Console, the worker poll and the background
+	// sweeps, so its saturation is a whole-box symptom rather than any one
+	// handler's — worth publishing, not worth refusing to serve over.
+	if err := postgres.ObserveDBStats(db); err != nil {
+		logger.Warn("database pool metrics unavailable", "err", err)
 	}
 	logger.Info("database ready")
 

@@ -16,6 +16,7 @@ import (
 	profilev1 "github.com/lakekeeper/go-lakekeeper/pkg/storage/profile"
 
 	"github.com/fairtier/workspace-api/core"
+	"github.com/fairtier/workspace-api/telemetry"
 )
 
 // defaultProjectID is the nil UUID used by Lakekeeper when ENABLE_DEFAULT_PROJECT=true.
@@ -32,8 +33,16 @@ func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return tracedClient
 }
+
+// tracedClient is an instrumented copy of http.DefaultClient, built once.
+//
+// It covers only the raw-HTTP calls this file makes (the readiness poll). The
+// warehouse and user management calls go through the go-lakekeeper SDK, which
+// builds its own client and accepts none of ours, so those remain untraced —
+// they still appear as the time unaccounted for inside their caller's span.
+var tracedClient = telemetry.InstrumentHTTPClient(nil)
 
 // sdkClient creates a new go-lakekeeper SDK client for the given URL and token.
 func (c *Client) sdkClient(ctx context.Context, lakekeeperURL, token string) (*lkclient.Client, error) {

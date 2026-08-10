@@ -13,9 +13,17 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/flight"
 	"github.com/apache/arrow-go/v18/arrow/flight/flightsql"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
+
+// tracer names this package as the instrumentation scope for the query spans.
+var tracer = otel.Tracer("github.com/fairtier/workspace-api/duckflight")
 
 // Column describes one result column.
 type Column struct {
@@ -60,7 +68,26 @@ func (bearerCreds) RequireTransportSecurity() bool { return true }
 
 // Execute runs sql and reads at most maxRows rows, setting Result.Truncated
 // when more were available.
-func (c *Client) Execute(ctx context.Context, endpoint, token, sql string, maxRows int) (*Result, error) {
+func (c *Client) Execute(ctx context.Context, endpoint, token, sql string, maxRows int) (_ *Result, err error) {
+	// The statement text is the customer's data — it names their tables and can
+	// carry literals out of their warehouse — so it never goes on the span.
+	// Its length does: a query that takes a long time because it is enormous
+	// looks different from one that is slow because the engine is.
+	ctx, span := tracer.Start(ctx, "duckflight.Execute", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			semconv.DBSystemNameKey.String("duckdb"),
+			semconv.DBOperationName("query"),
+			attribute.Int("db.query.length", len(sql)),
+			attribute.Int("db.response.max_rows", maxRows),
+		))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	fc, err := flightsql.NewClientCtx(ctx, normalizeAddr(endpoint), nil, nil,
 		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})),
 		grpc.WithPerRPCCredentials(bearerCreds{token: token}),
@@ -81,9 +108,13 @@ func (c *Client) Execute(ctx context.Context, endpoint, token, sql string, maxRo
 			return nil, err
 		}
 		if res.Truncated {
-			return res, nil
+			break
 		}
 	}
+	span.SetAttributes(
+		attribute.Int("db.response.returned_rows", len(res.Rows)),
+		attribute.Bool("db.response.truncated", res.Truncated),
+	)
 	return res, nil
 }
 

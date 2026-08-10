@@ -7,7 +7,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/fairtier/workspace-api/telemetry"
 )
+
+// tracedClient is http.DefaultClient with OTel instrumentation, built once so
+// every token request becomes a client span. It is a copy: instrumenting the
+// process-wide default from here would be a side effect on every other caller.
+var tracedClient = telemetry.InstrumentHTTPClient(nil)
 
 // TokenProvider implements core.TokenProvider using Casdoor's OAuth2
 // client_credentials grant.
@@ -24,7 +31,7 @@ func (p *TokenProvider) httpClient() *http.Client {
 	if p.Client != nil {
 		return p.Client
 	}
-	return http.DefaultClient
+	return tracedClient
 }
 
 // tokenURL returns the Casdoor OAuth2 token endpoint for the given base URL,

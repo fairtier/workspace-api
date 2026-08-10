@@ -9,6 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/fairtier/workspace-api/core"
 )
 
@@ -718,8 +721,40 @@ func (s *PipelineService) ReportPipelineRun(ctx context.Context, callerSlug stri
 			return fmt.Errorf("create pipeline run: %w", err)
 		}
 	}
+	recordPipelineRun(ctx, run)
 	s.notifyRun(ctx, run)
 	return nil
+}
+
+// recordPipelineRun turns the worker's report into the plane's run metrics.
+//
+// No span of its own: this already runs inside the internal RPC's span, and a
+// worker reporting a result is one database write — the interesting part is
+// the aggregate, not any individual call. The status goes on the current span
+// too, so a trace of the report shows what was reported without opening the
+// row.
+//
+// Only terminal statuses are counted. "running" is a progress report, and
+// counting it would double every run and put a zero-duration sample in the
+// histogram for work that has barely started.
+func recordPipelineRun(ctx context.Context, run *PipelineRun) {
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attrPipelineID.String(string(run.PipelineID)),
+		attrRunStatus.String(run.Status),
+	)
+	if run.Status != "success" && run.Status != "failed" {
+		return
+	}
+
+	status := metric.WithAttributes(attrRunStatus.String(run.Status))
+	pipelineRuns.Add(ctx, 1, status)
+	if run.RowsLoaded > 0 {
+		pipelineRunRows.Add(ctx, run.RowsLoaded, status)
+	}
+	if seconds, ok := runDurationSeconds(run.StartedAt, run.CompletedAt); ok {
+		pipelineRunDuration.Record(ctx, seconds, status)
+	}
 }
 
 // notifyRun raises a best-effort in-app notification for a completed run and,

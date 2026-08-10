@@ -12,6 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/fairtier/workspace-api/core"
 )
 
@@ -164,7 +168,17 @@ func (s *FileDropService) maxBytes() int64 {
 // the pipeline's source_config. Re-uploading the same filename overwrites the
 // object and keeps a single config entry (that is how customers refresh
 // data: re-drop the file, run the pipeline again).
-func (s *FileDropService) Upload(ctx context.Context, callerID core.UserID, pipelineID PipelineID, filename string, size int64, body io.Reader) (*UploadedFile, error) {
+func (s *FileDropService) Upload(ctx context.Context, callerID core.UserID, pipelineID PipelineID, filename string, size int64, body io.Reader) (_ *UploadedFile, err error) {
+	// The filename is the customer's, so it stays off the span; the format and
+	// the size are what explain a slow or rejected upload, and neither
+	// identifies anything.
+	ctx, span := tracer.Start(ctx, "FileDropService.Upload", trace.WithAttributes(
+		attrPipelineID.String(string(pipelineID)),
+		attrFileFormat.String(uploadFormat(filename)),
+		attribute.Int64("workspace.file.size", size),
+	))
+	defer func() { endSpan(span, err) }()
+
 	if err := ValidateUploadFilename(filename); err != nil {
 		return nil, err
 	}
@@ -206,6 +220,11 @@ func (s *FileDropService) Upload(ctx context.Context, callerID core.UserID, pipe
 	}); err != nil {
 		return nil, err
 	}
+	// Counted only once the config records the file: an object in the bucket
+	// that no pipeline references is not an upload the customer can use.
+	format := metric.WithAttributes(attrFileFormat.String(uploadFormat(filename)))
+	fileDropUploads.Add(ctx, 1, format)
+	fileDropUploadSize.Record(ctx, size, format)
 	return &file, nil
 }
 

@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fairtier/workspace-api/telemetry"
 	"github.com/fairtier/workspace-api/workspace"
 )
 
@@ -54,8 +55,14 @@ func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return tracedClient
 }
+
+// tracedClient is the default client, built once rather than per call so the
+// instrumented transport — and the connection pool under it — is shared. Every
+// mirror converge and repo-editor read shows up as a client span through it,
+// which is what attributes a slow save to the box's Gitea.
+var tracedClient = telemetry.InstrumentHTTPClient(&http.Client{Timeout: 30 * time.Second})
 
 // maxAttempts bounds retries of an idempotent request; retryBackoff is the
 // pause between them. A per-box Gitea can drop ingress for a sub-second-to-

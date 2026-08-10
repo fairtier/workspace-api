@@ -99,6 +99,9 @@ func (m *PipelineMirror) importFile(ctx context.Context, client RepoFileClient, 
 		}
 		return false, fmt.Errorf("import %s: %w", filePath, err)
 	}
+	recordAdoption(ctx, planePipelines, outcomeImported,
+		attrRepoPath.String(filePath), attrPipelineID.String(string(p.ID)),
+		attrSourceType.String(p.SourceType))
 	m.recordDefinitionRender(ctx, p.ID, filePath, blobSHA)
 	taken.add(p.ID, p.Name)
 	return true, nil

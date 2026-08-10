@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,7 +33,13 @@ import (
 
 // AdoptCustomer runs one adopt pass for a customer. Out-of-scope customers
 // (shared substrate, no deposited credential) are skipped silently.
-func (m *PipelineMirror) AdoptCustomer(ctx context.Context, customerSlug string) error {
+func (m *PipelineMirror) AdoptCustomer(ctx context.Context, customerSlug string) (err error) {
+	ctx, span := tracer.Start(ctx, "PipelineMirror.AdoptCustomer", trace.WithAttributes(
+		attrSlug.String(customerSlug),
+		attrRepoPlane.String(planePipelines),
+	))
+	defer func() { endSpan(span, err) }()
+
 	client, _, ok, err := m.clientFor(ctx, customerSlug)
 	if err != nil || !ok {
 		return err
@@ -51,6 +59,10 @@ func (m *PipelineMirror) AdoptCustomer(ctx context.Context, customerSlug string)
 		return err
 	}
 
+	span.SetAttributes(
+		attribute.Int("workspace.repo.definition_files", len(st.yamlTree)),
+		attribute.Int("workspace.pipelines", len(st.pipelines)),
+	)
 	for i := range st.pipelines {
 		p := &st.pipelines[i]
 		if err := m.adoptDefinition(ctx, client, p, st.renders, st.yamlTree); err != nil {
@@ -116,6 +128,8 @@ func (m *PipelineMirror) adoptDefinition(ctx context.Context, client RepoFileCli
 	if err := m.Pipelines.UpdatePipeline(ctx, adopted); err != nil {
 		return fmt.Errorf("adopt %s: %w", row.Path, err)
 	}
+	recordAdoption(ctx, planePipelines, outcomeAdopted,
+		attrRepoPath.String(row.Path), attrPipelineID.String(string(p.ID)))
 	m.recordDefinitionRender(ctx, p.ID, row.Path, treeSHA)
 	m.notifyAdopted(ctx, p.CustomerSlug, row.Path, p.ID)
 	return nil
@@ -160,6 +174,11 @@ func (m *PipelineMirror) refuseAdoption(ctx context.Context, p *Pipeline, filePa
 		}
 		return
 	}
+	// The reason is the whole value of this signal: a box whose users keep
+	// hand-editing files the plane then refuses shows up here as one repeated
+	// reason, which no counter of "refusals" alone would tell apart.
+	recordAdoption(ctx, planePipelines, outcomeRefused,
+		attrRepoPath.String(filePath), attrPipelineID.String(string(p.ID)), attrReason.String(reason))
 	if m.Notifications == nil {
 		return
 	}
@@ -259,11 +278,20 @@ func (s *AdoptSweeper) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (s *AdoptSweeper) sweep(ctx context.Context) {
+	// Ticker-driven like the stuck-run sweep, so it needs its own root span to
+	// be a trace at all. One span per pass, not per workspace: a box sweeps a
+	// single slug, and the per-mirror children already separate the work.
+	ctx, span := tracer.Start(ctx, "AdoptSweeper.sweep")
+	var listErr error
+	defer func() { endSpan(span, listErr) }()
+
 	slugs, err := s.Workspaces.ListVMWorkspaceSlugs(ctx)
 	if err != nil {
+		listErr = err
 		s.Logger.WarnContext(ctx, "adopt sweep: list workspaces", "err", err)
 		return
 	}
+	span.SetAttributes(attribute.Int("workspace.count", len(slugs)))
 	for _, slug := range slugs {
 		if s.Mirror != nil {
 			if err := s.Mirror.AdoptCustomer(ctx, slug); err != nil {

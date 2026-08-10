@@ -52,32 +52,45 @@ func (c *AnthropicCaller) Complete(ctx context.Context, req StructuredRequest) (
 	if maxTokens <= 0 {
 		maxTokens = 2048
 	}
-	resp, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     c.model,
-		MaxTokens: maxTokens,
-		Thinking:  anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}},
-		OutputConfig: anthropic.OutputConfigParam{
-			Effort: c.effort,
-			Format: anthropic.JSONOutputFormatParam{Schema: req.Schema},
-		},
-		System: []anthropic.TextBlockParam{{Text: req.System}},
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(req.Prompt)),
-		},
+	// Note the usage returned from the failure paths inside the closure: a
+	// refusal and an empty response are both billed, and a token counter that
+	// only counted successes would under-report exactly when spend is being
+	// investigated.
+	var out json.RawMessage
+	err := call(ctx, "anthropic", string(c.model), int(maxTokens), func(ctx context.Context) (usage, error) {
+		resp, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
+			Model:     c.model,
+			MaxTokens: maxTokens,
+			Thinking:  anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}},
+			OutputConfig: anthropic.OutputConfigParam{
+				Effort: c.effort,
+				Format: anthropic.JSONOutputFormatParam{Schema: req.Schema},
+			},
+			System: []anthropic.TextBlockParam{{Text: req.System}},
+			Messages: []anthropic.MessageParam{
+				anthropic.NewUserMessage(anthropic.NewTextBlock(req.Prompt)),
+			},
+		})
+		if err != nil {
+			return usage{}, fmt.Errorf("anthropic messages: %w", err)
+		}
+		u := usage{
+			inputTokens:  resp.Usage.InputTokens,
+			outputTokens: resp.Usage.OutputTokens,
+			finishReason: string(resp.StopReason),
+		}
+
+		if resp.StopReason == anthropic.StopReasonRefusal {
+			return u, fmt.Errorf("model declined the request (%s)", resp.StopDetails.Category)
+		}
+		raw := firstText(resp)
+		if raw == "" {
+			return u, fmt.Errorf("empty model response")
+		}
+		out = json.RawMessage(raw)
+		return u, nil
 	})
-	if err != nil {
-		return nil, fmt.Errorf("anthropic messages: %w", err)
-	}
-
-	if resp.StopReason == anthropic.StopReasonRefusal {
-		return nil, fmt.Errorf("model declined the request (%s)", resp.StopDetails.Category)
-	}
-
-	raw := firstText(resp)
-	if raw == "" {
-		return nil, fmt.Errorf("empty model response")
-	}
-	return json.RawMessage(raw), nil
+	return out, err
 }
 
 // firstText returns the text of the first text block in the response.

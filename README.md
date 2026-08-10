@@ -44,6 +44,7 @@ Iceberg catalog, and it keeps working with no vendor service behind it.
 | `core/` | Shared plain types and error sentinels. |
 | `proto/` | Service definitions plus their generated Go stubs. |
 | `postgres/` | The stores and the schema migrations. |
+| `telemetry/` | OpenTelemetry providers and the helpers adapters use to instrument outbound calls. |
 | `casdoor/`, `gitea/`, `lakekeeper/`, `duckflight/`, `objstore/`, `llm/`, `oauthgoogle/`, `crypto/`, `demo/` | Adapters implementing the ports. |
 
 ## Running it
@@ -97,9 +98,42 @@ for co-located workers and should not be published.
 | `GOOGLE_OAUTH_REDIRECT_URL`, `GOOGLE_OAUTH_STATE_SECRET` | | Enable the Google Sheets "Sign in with Google" source flow. The redirect URL must point at this deployment's `/oauth/google/callback`; the state secret signs the consent round-trip and must be its own random value. The OAuth *application* is not configured here — each workspace registers its own client in its own Google Cloud project and stores it through `OAuthClientService`, so no operator holds a client secret that every workspace's pipelines depend on. |
 | `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` (plus `ANTHROPIC_MODEL` / `DEEPSEEK_MODEL`) | | Enables the optional AI drafting assists. Without a key those endpoints stay unavailable. |
 | `DEMO_R2_*` | | Object storage holding the sample dataset for the starter project. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | | OTLP collector to send traces and metrics to. Unset means no telemetry is produced at all — see [Observability](#observability). |
 
 Anything left unset simply disables the feature that needs it; the rest of the
 service starts normally.
+
+### Observability
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP/gRPC collector and the service
+exports traces and metrics; leave it unset and it produces neither, at no cost.
+The rest of the standard `OTEL_*` environment applies as usual —
+`OTEL_EXPORTER_OTLP_INSECURE` for a plaintext collector, the
+`_TRACES_`/`_METRICS_` variants to split the signals, and
+`OTEL_RESOURCE_ATTRIBUTES` to add your own dimensions (`deployment.environment`,
+the host) that this service knows nothing about.
+
+Traces cover an API call end to end: the RPC or HTTP request, the git converge
+it triggers, and every outbound call under it — the workspace's git host, the
+object store, the query engine, the model provider. Two background sweeps
+(orphaned pipeline runs, adopting out-of-band repo edits) start traces of their
+own, since nothing requests them.
+
+Metrics come in three groups:
+
+- **The libraries'**: RPC and HTTP server/client duration and size, plus Go
+  runtime memory, goroutines, and GC.
+- **The workspace plane's**, all prefixed `workspace.`: pipeline and
+  transformation runs by status with their durations and rows loaded, runs the
+  stuck sweep declared dead, repo converge duration and commits, how the adopt
+  pass classified out-of-band edits, notifications raised and streams open,
+  uploads accepted, and AI drafts by outcome.
+- **The database pool's** (`db.client.connection.*`), which is what shows a box
+  that is slow because everything is queueing for a connection.
+
+Customer data is deliberately absent from all of it. Prompts, model output, SQL
+text, credentials and uploaded filenames never reach a span — identifiers,
+sizes, counts and outcomes do.
 
 ### Rotating the credential encryption key
 

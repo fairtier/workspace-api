@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/fairtier/workspace-api/core"
 )
 
@@ -183,7 +185,29 @@ func (s *NotificationService) Subscribe(ctx context.Context, callerID core.UserI
 		return nil, nil, fmt.Errorf("broker not configured")
 	}
 	ch, cancel := s.Broker.Subscribe(ws.Slug)
-	return ch, cancel, nil
+	return ch, countedUnsubscribe(ctx, cancel), nil
+}
+
+// countedUnsubscribe tracks the live stream count around the broker's cancel.
+// The broker's own cancel is idempotent, so the decrement is guarded by a Once
+// rather than trusting each caller to unsubscribe exactly once — a double call
+// would otherwise drive the gauge negative and keep it there for the process's
+// lifetime.
+//
+// The count is taken here rather than inside the broker because this is where
+// a subscriber means "a Console has this workspace open": the broker is also
+// fed by the cross-replica listener, which subscribes nothing.
+func countedUnsubscribe(ctx context.Context, cancel func()) func() {
+	notificationSubscribers.Add(ctx, 1)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// Detached: the stream's own context is already cancelled by the
+			// time this runs, and a cancelled context drops the measurement.
+			notificationSubscribers.Add(context.WithoutCancel(ctx), -1)
+			cancel()
+		})
+	}
 }
 
 // Notify persists n and pushes it to live subscribers. It implements Notifier
@@ -202,6 +226,9 @@ func (s *NotificationService) Notify(ctx context.Context, n Notification) error 
 	if err := s.Notifications.CreateNotification(ctx, &n); err != nil {
 		return fmt.Errorf("create notification: %w", err)
 	}
+	// Counted on persistence, not on delivery: the row is what the bell shows,
+	// and the live push is a best-effort optimisation on top of it.
+	notificationsPublished.Add(ctx, 1, metric.WithAttributes(attrNotificationTyp.String(n.Type)))
 	if s.Publisher != nil {
 		if err := s.Publisher.PublishNotification(ctx, n); err != nil {
 			if s.Broker != nil {

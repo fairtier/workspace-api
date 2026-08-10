@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // DefaultStuckRunTimeout is how long a pipeline run may sit in "running" before
@@ -78,12 +81,23 @@ func (s *StuckRunSweeper) timeout() time.Duration {
 
 // SweepOnce fails every run stuck in "running" past the timeout in one
 // statement. A no-op (0 rows) is the common case and stays silent.
-func (s *StuckRunSweeper) SweepOnce(ctx context.Context) error {
+//
+// The sweep gets its own root span: it runs on a ticker with no inbound
+// request to hang off, and without one the statement it issues would appear in
+// no trace at all.
+func (s *StuckRunSweeper) SweepOnce(ctx context.Context) (err error) {
+	ctx, span := tracer.Start(ctx, "StuckRunSweeper.SweepOnce", trace.WithAttributes(
+		attrSlug.String(s.Slug),
+	))
+	defer func() { endSpan(span, err) }()
+
 	n, err := s.Store.FailStuckRunningRuns(ctx, s.Slug, s.timeout())
 	if err != nil {
 		return fmt.Errorf("fail stuck running runs: %w", err)
 	}
+	span.SetAttributes(attribute.Int64("workspace.pipeline.runs.swept", n))
 	if n > 0 {
+		pipelineRunsStuck.Add(ctx, n)
 		s.Logger.WarnContext(ctx, "failed pipeline runs orphaned in 'running' past timeout",
 			"count", n, "timeout", s.timeout())
 	}

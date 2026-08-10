@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -109,11 +112,19 @@ type transformationFile struct {
 // author is the acting Console user when the sync was triggered by a save,
 // nil for platform-initiated syncs; it becomes the git author of every
 // commit this converge makes.
-func (m *TransformationMirror) SyncCustomer(ctx context.Context, customerSlug string, author *CommitAuthor) error {
+func (m *TransformationMirror) SyncCustomer(ctx context.Context, customerSlug string, author *CommitAuthor) (err error) {
+	ctx, span := tracer.Start(ctx, "TransformationMirror.SyncCustomer", trace.WithAttributes(
+		attrSlug.String(customerSlug),
+		attrRepoPlane.String(planeTransformations),
+	))
+	started, inScope := time.Now(), false
+	defer func() { recordSync(ctx, span, planeTransformations, started, err, inScope) }()
+
 	client, _, ok, err := boxMirrorClientFor(ctx, m.Workspaces, m.Credentials, m.NewClient, customerSlug)
 	if err != nil || !ok {
 		return err
 	}
+	inScope = true
 
 	transformations, err := m.Transformations.ListTransformationsByCustomer(ctx, customerSlug)
 	if err != nil {
@@ -127,6 +138,7 @@ func (m *TransformationMirror) SyncCustomer(ctx context.Context, customerSlug st
 	if err != nil {
 		return err
 	}
+	span.SetAttributes(attribute.Int("workspace.repo.definition_files", len(desired)))
 
 	if err := m.converge(ctx, client, customerSlug, desired, defRenders, author); errors.Is(err, ErrRepoFileChanged) {
 		// Something else committed between our tree read and write. One
@@ -134,6 +146,7 @@ func (m *TransformationMirror) SyncCustomer(ctx context.Context, customerSlug st
 		// defRenders is deliberately NOT re-read: files the first attempt
 		// already converged compare content-equal on the retry and adopt the
 		// new sha silently, so no double drift notification.
+		span.AddEvent("workspace.repo.converge_retry")
 		return m.converge(ctx, client, customerSlug, desired, defRenders, author)
 	} else if err != nil {
 		return err
@@ -186,6 +199,7 @@ func (m *TransformationMirror) upsertFile(ctx context.Context, client RepoFileCl
 		if err != nil {
 			return fmt.Errorf("put %s: %w", filePath, err)
 		}
+		recordCommit(ctx, planeTransformations, "upsert", filePath)
 		m.recordDefinitionRender(ctx, df.transformationID, filePath, newSHA)
 		return nil
 	}
@@ -203,6 +217,7 @@ func (m *TransformationMirror) upsertFile(ctx context.Context, client RepoFileCl
 	if err != nil {
 		return fmt.Errorf("put %s: %w", filePath, err)
 	}
+	recordCommit(ctx, planeTransformations, "upsert", filePath)
 	m.recordDefinitionRender(ctx, df.transformationID, filePath, newSHA)
 	if drifted {
 		m.notifyDefinitionDrift(ctx, customerSlug, filePath)
@@ -252,6 +267,9 @@ func (m *TransformationMirror) recordDefinitionRender(ctx context.Context, id Tr
 // notifyDefinitionDrift raises the in-app notification for an out-of-band
 // repo edit the converge just overwrote. Best-effort.
 func (m *TransformationMirror) notifyDefinitionDrift(ctx context.Context, customerSlug, filePath string) {
+	trace.SpanFromContext(ctx).AddEvent("workspace.repo.drift_overwritten", trace.WithAttributes(
+		attrRepoPath.String(filePath),
+	))
 	if m.Notifications == nil {
 		return
 	}

@@ -537,25 +537,42 @@ func openDatabase(logger *slog.Logger) (*sql.DB, crypto.Encryptor, error) {
 	}
 	logger.Info("database ready")
 
-	var enc crypto.Encryptor
-	if keyB64 := os.Getenv("CREDENTIAL_ENCRYPTION_KEY"); keyB64 != "" {
-		key, err := base64.StdEncoding.DecodeString(keyB64)
-		if err != nil {
-			_ = db.Close()
-			return nil, nil, fmt.Errorf("decode CREDENTIAL_ENCRYPTION_KEY: %w", err)
-		}
-		enc, err = crypto.NewAESEncryptor(key)
-		if err != nil {
-			_ = db.Close()
-			return nil, nil, fmt.Errorf("init credential encryptor: %w", err)
-		}
-		logger.Info("credential encryption enabled")
+	enc, err := crypto.EncryptorFromEnv()
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("init credential encryptor: %w", err)
+	}
+	if ring, ok := enc.(*crypto.Keyring); ok {
+		logger.Info("credential encryption enabled",
+			"key_id", ring.PrimaryKeyID(), "readable_key_ids", ring.KeyIDs())
 	}
 	if err := postgres.MigrateEncryptCredentials(db, enc); err != nil {
 		_ = db.Close()
 		return nil, nil, fmt.Errorf("encrypt existing credentials: %w", err)
 	}
+	if err := rewrapCredentials(db, enc, logger); err != nil {
+		_ = db.Close()
+		return nil, nil, err
+	}
 	return db, enc, nil
+}
+
+// rewrapCredentials re-encrypts anything not under the current primary key,
+// when CREDENTIAL_ENCRYPTION_REWRAP is on. The box runs its own key, so a box
+// rotates independently of central and of every other box.
+func rewrapCredentials(db *sql.DB, enc crypto.Encryptor, logger *slog.Logger) error {
+	if !postgres.RewrapEnabled() {
+		return nil
+	}
+
+	n, err := postgres.RewrapEncrypted(db, enc, postgres.WorkspaceEncryptedColumns())
+	if err != nil {
+		return fmt.Errorf("rewrap credentials under the current key: %w", err)
+	}
+	if n > 0 {
+		logger.Info("rewrapped credentials under the current key", "rows", n)
+	}
+	return nil
 }
 
 // buildInternalOpts assembles the internal-mux (:8081, local dlt-worker)

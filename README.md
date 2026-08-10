@@ -83,7 +83,9 @@ for co-located workers and should not be published.
 | `WORKSPACE_LAKEKEEPER_URL`, `WORKSPACE_LAKEKEEPER_WAREHOUSE` | | Iceberg REST catalog endpoint and warehouse name. |
 | `WORKSPACE_DUCKFLIGHT_URL`, `WORKSPACE_DUCKFLIGHT_AUTH_TOKEN` | | Flight SQL endpoint backing the query service. |
 | `WORKSPACE_S3_*` | | Object storage for uploads and snapshots: `ENDPOINT`, `REGION`, `BUCKET`, `KEY_PREFIX`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`. |
-| `CREDENTIAL_ENCRYPTION_KEY` | | Key used to encrypt stored source credentials at rest. Set it in any real deployment. |
+| `CREDENTIAL_ENCRYPTION_KEY` | | Base64 32-byte key used to encrypt stored source credentials at rest. Set it in any real deployment. Every process sharing the database must be given the same one. |
+| `CREDENTIAL_ENCRYPTION_KEYS_PREVIOUS` | | Comma-separated base64 keys that are no longer written under but must still decrypt. Set only while [rotating](#rotating-the-credential-encryption-key). |
+| `CREDENTIAL_ENCRYPTION_REWRAP` | | `on` re-encrypts stored credentials under the current key at startup. Off by default. |
 | `BOX_GIT_USERNAME`, `BOX_GIT_TOKEN` | | Credentials for the local git host. Without them the repo-backed features report their credential as missing. |
 | `BOX_AGE_PUBLIC_KEY` | | age recipient that pipeline credential files are encrypted to. |
 | `BOX_SNAPSHOT_TOKEN` | | Token for the snapshot sidecar. |
@@ -98,6 +100,41 @@ for co-located workers and should not be published.
 
 Anything left unset simply disables the feature that needs it; the rest of the
 service starts normally.
+
+### Rotating the credential encryption key
+
+Stored credentials carry the id of the key they were encrypted under
+(`enc:<key id>:…`), which is what makes a rotation finishable rather than
+merely startable — you can ask the database whether anything is still under the
+old key instead of hoping.
+
+1. **Add the new key, keep the old one readable.** Set
+   `CREDENTIAL_ENCRYPTION_KEY` to the new key and
+   `CREDENTIAL_ENCRYPTION_KEYS_PREVIOUS` to the old one, then restart. Existing
+   rows still decrypt; new writes go under the new key.
+2. **Rewrap.** Set `CREDENTIAL_ENCRYPTION_REWRAP=on` and restart. Startup
+   re-encrypts everything under the new key and logs how many rows it moved.
+   It is idempotent, so it is safe to leave on.
+3. **Retire the old key.** Only once nothing is left under it — the audit is a
+   plain query, because the id is in the value:
+
+   ```sql
+   SELECT count(*) FROM pipelines
+   WHERE source_credentials LIKE 'enc:%'
+     AND source_credentials NOT LIKE 'enc:<new key id>:%';
+   ```
+
+   The service logs its `key_id` at startup, and `postgres.AuditStaleCiphertext`
+   runs that check across *every* text column in the schema — including any this
+   project forgot to list — which is the check worth trusting before a key is
+   destroyed.
+
+One caveat, in the other direction: a value written under the new envelope
+cannot be read by a release older than this one. Rolling back after step 1
+leaves rows written in the meantime unreadable until you roll forward again;
+rolling back after step 2 leaves *all* of them unreadable. Nothing is lost
+either way — the key still opens them — but the old binary cannot parse the
+envelope.
 
 ## Development
 

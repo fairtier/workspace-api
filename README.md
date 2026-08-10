@@ -114,7 +114,10 @@ old key instead of hoping.
    rows still decrypt; new writes go under the new key.
 2. **Rewrap.** Set `CREDENTIAL_ENCRYPTION_REWRAP=on` and restart. Startup
    re-encrypts everything under the new key and logs how many rows it moved.
-   It is idempotent, so it is safe to leave on.
+   It is idempotent, so it is safe to leave on. The sweep runs while other
+   replicas are serving, so each row is written back with a compare-and-swap on
+   the ciphertext it read: a credential saved in the meantime is left alone and
+   not counted, rather than reverted to a re-encryption of the older value.
 3. **Retire the old key.** Only once nothing is left under it — the audit is a
    plain query, because the id is in the value:
 

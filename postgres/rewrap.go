@@ -99,12 +99,28 @@ type staleRow struct {
 
 // rewrapColumn re-encrypts one column, reading every stale row into memory
 // first so the cursor is closed before any UPDATE runs.
+//
+// The sweep runs at startup while other replicas are already serving, so
+// between reading a row and writing it back a user may have saved a new
+// credential over it. Writing unconditionally would replace that save with a
+// re-encryption of the value we happened to read — a silent revert of customer
+// data. So each UPDATE is a compare-and-swap against the ciphertext we
+// decrypted; a row someone else has since rewritten matches nothing, is left
+// alone, and is not counted. It needs no retry: whoever wrote it did so under
+// the primary key, which is where the rewrap was trying to get it.
 func rewrapColumn(db *sql.DB, enc crypto.Encryptor, primaryID string, c EncryptedColumn) (int, error) {
 	pending, err := selectStaleRows(db, primaryID, c)
 	if err != nil {
 		return 0, err
 	}
+	return applyRewrap(db, enc, c, pending)
+}
 
+// applyRewrap writes back rows that selectStaleRows found stale. Split from
+// rewrapColumn so a test can do what the world does: change a row in between
+// the two halves.
+func applyRewrap(db *sql.DB, enc crypto.Encryptor, c EncryptedColumn, pending []staleRow) (int, error) {
+	rewrote := 0
 	for _, r := range pending {
 		plaintext, err := enc.Decrypt(r.stored)
 		if err != nil {
@@ -118,22 +134,32 @@ func rewrapColumn(db *sql.DB, enc crypto.Encryptor, primaryID string, c Encrypte
 				c.Table, c.Column, strings.Join(r.key, "/"), err)
 		}
 
-		args := make([]any, 0, len(r.key)+1)
+		args := make([]any, 0, len(r.key)+2)
 		args = append(args, rewrapped)
 		for _, k := range r.key {
 			args = append(args, k)
 		}
+		args = append(args, r.stored)
 
 		//nolint:gosec // identifiers come from WorkspaceEncryptedColumns, not user input
-		stmt := fmt.Sprintf(`UPDATE %s SET %s = $1 WHERE %s`,
-			c.Table, c.Column, whereClause(c.KeyColumns, 2))
-		if _, err := db.Exec(stmt, args...); err != nil {
-			return 0, fmt.Errorf("postgres: update rewrapped %s.%s for %s: %w",
+		stmt := fmt.Sprintf(`UPDATE %s SET %s = $1 WHERE %s AND %s = $%d`,
+			c.Table, c.Column, whereClause(c.KeyColumns, 2),
+			c.Column, len(r.key)+2)
+
+		res, err := db.Exec(stmt, args...)
+		if err != nil {
+			return rewrote, fmt.Errorf("postgres: update rewrapped %s.%s for %s: %w",
 				c.Table, c.Column, strings.Join(r.key, "/"), err)
 		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return rewrote, fmt.Errorf("postgres: rows affected %s.%s for %s: %w",
+				c.Table, c.Column, strings.Join(r.key, "/"), err)
+		}
+		rewrote += int(n)
 	}
 
-	return len(pending), nil
+	return rewrote, nil
 }
 
 // selectStaleRows reads every encrypted value in one column that is not tagged

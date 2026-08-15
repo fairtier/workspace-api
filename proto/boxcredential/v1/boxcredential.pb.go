@@ -401,6 +401,102 @@ func (*DepositFederationClientResponse) Descriptor() ([]byte, []int) {
 	return file_boxcredential_proto_rawDescGZIP(), []int{7}
 }
 
+type FetchBoxSecretsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Keys to read. Empty means "everything central holds for this tenant",
+	// which is what the sync Job asks for — the box learns of a new secret by
+	// receiving it, so it must not have to be taught the key list first.
+	Keys          []string `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchBoxSecretsRequest) Reset() {
+	*x = FetchBoxSecretsRequest{}
+	mi := &file_boxcredential_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchBoxSecretsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchBoxSecretsRequest) ProtoMessage() {}
+
+func (x *FetchBoxSecretsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_boxcredential_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchBoxSecretsRequest.ProtoReflect.Descriptor instead.
+func (*FetchBoxSecretsRequest) Descriptor() ([]byte, []int) {
+	return file_boxcredential_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *FetchBoxSecretsRequest) GetKeys() []string {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+type FetchBoxSecretsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// key → value, for the keys central actually holds. A requested key that is
+	// absent is OMITTED rather than an error: the box syncs on a loop and
+	// central may not have minted a value yet. Distinguishing "not yet" from
+	// "never" is not the box's job, and failing the whole fetch over one
+	// missing key would take down the delivery of every other secret.
+	Secrets       map[string]string `protobuf:"bytes,1,rep,name=secrets,proto3" json:"secrets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchBoxSecretsResponse) Reset() {
+	*x = FetchBoxSecretsResponse{}
+	mi := &file_boxcredential_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchBoxSecretsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchBoxSecretsResponse) ProtoMessage() {}
+
+func (x *FetchBoxSecretsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_boxcredential_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchBoxSecretsResponse.ProtoReflect.Descriptor instead.
+func (*FetchBoxSecretsResponse) Descriptor() ([]byte, []int) {
+	return file_boxcredential_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *FetchBoxSecretsResponse) GetSecrets() map[string]string {
+	if x != nil {
+		return x.Secrets
+	}
+	return nil
+}
+
 var File_boxcredential_proto protoreflect.FileDescriptor
 
 const file_boxcredential_proto_rawDesc = "" +
@@ -424,12 +520,20 @@ const file_boxcredential_proto_rawDesc = "" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12#\n" +
 	"\rclient_secret\x18\x02 \x01(\tR\fclientSecret\x12\x12\n" +
 	"\x04note\x18\x03 \x01(\tR\x04note\"!\n" +
-	"\x1fDepositFederationClientResponse2\xf2\x03\n" +
+	"\x1fDepositFederationClientResponse\",\n" +
+	"\x16FetchBoxSecretsRequest\x12\x12\n" +
+	"\x04keys\x18\x01 \x03(\tR\x04keys\"\xa7\x01\n" +
+	"\x17FetchBoxSecretsResponse\x12P\n" +
+	"\asecrets\x18\x01 \x03(\v26.boxcredential.v1.FetchBoxSecretsResponse.SecretsEntryR\asecrets\x1a:\n" +
+	"\fSecretsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xdc\x04\n" +
 	"\x14BoxCredentialService\x12h\n" +
 	"\x0fDepositGitToken\x12(.boxcredential.v1.DepositGitTokenRequest\x1a).boxcredential.v1.DepositGitTokenResponse\"\x00\x12w\n" +
 	"\x14DepositSnapshotToken\x12-.boxcredential.v1.DepositSnapshotTokenRequest\x1a..boxcredential.v1.DepositSnapshotTokenResponse\"\x00\x12t\n" +
 	"\x13DepositAgePublicKey\x12,.boxcredential.v1.DepositAgePublicKeyRequest\x1a-.boxcredential.v1.DepositAgePublicKeyResponse\"\x00\x12\x80\x01\n" +
-	"\x17DepositFederationClient\x120.boxcredential.v1.DepositFederationClientRequest\x1a1.boxcredential.v1.DepositFederationClientResponse\"\x00BJZHgithub.com/fairtier/workspace-api/proto/boxcredential/v1;boxcredentialv1b\x06proto3"
+	"\x17DepositFederationClient\x120.boxcredential.v1.DepositFederationClientRequest\x1a1.boxcredential.v1.DepositFederationClientResponse\"\x00\x12h\n" +
+	"\x0fFetchBoxSecrets\x12(.boxcredential.v1.FetchBoxSecretsRequest\x1a).boxcredential.v1.FetchBoxSecretsResponse\"\x00BJZHgithub.com/fairtier/workspace-api/proto/boxcredential/v1;boxcredentialv1b\x06proto3"
 
 var (
 	file_boxcredential_proto_rawDescOnce sync.Once
@@ -443,7 +547,7 @@ func file_boxcredential_proto_rawDescGZIP() []byte {
 	return file_boxcredential_proto_rawDescData
 }
 
-var file_boxcredential_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_boxcredential_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_boxcredential_proto_goTypes = []any{
 	(*DepositGitTokenRequest)(nil),          // 0: boxcredential.v1.DepositGitTokenRequest
 	(*DepositGitTokenResponse)(nil),         // 1: boxcredential.v1.DepositGitTokenResponse
@@ -453,21 +557,27 @@ var file_boxcredential_proto_goTypes = []any{
 	(*DepositAgePublicKeyResponse)(nil),     // 5: boxcredential.v1.DepositAgePublicKeyResponse
 	(*DepositFederationClientRequest)(nil),  // 6: boxcredential.v1.DepositFederationClientRequest
 	(*DepositFederationClientResponse)(nil), // 7: boxcredential.v1.DepositFederationClientResponse
+	(*FetchBoxSecretsRequest)(nil),          // 8: boxcredential.v1.FetchBoxSecretsRequest
+	(*FetchBoxSecretsResponse)(nil),         // 9: boxcredential.v1.FetchBoxSecretsResponse
+	nil,                                     // 10: boxcredential.v1.FetchBoxSecretsResponse.SecretsEntry
 }
 var file_boxcredential_proto_depIdxs = []int32{
-	0, // 0: boxcredential.v1.BoxCredentialService.DepositGitToken:input_type -> boxcredential.v1.DepositGitTokenRequest
-	2, // 1: boxcredential.v1.BoxCredentialService.DepositSnapshotToken:input_type -> boxcredential.v1.DepositSnapshotTokenRequest
-	4, // 2: boxcredential.v1.BoxCredentialService.DepositAgePublicKey:input_type -> boxcredential.v1.DepositAgePublicKeyRequest
-	6, // 3: boxcredential.v1.BoxCredentialService.DepositFederationClient:input_type -> boxcredential.v1.DepositFederationClientRequest
-	1, // 4: boxcredential.v1.BoxCredentialService.DepositGitToken:output_type -> boxcredential.v1.DepositGitTokenResponse
-	3, // 5: boxcredential.v1.BoxCredentialService.DepositSnapshotToken:output_type -> boxcredential.v1.DepositSnapshotTokenResponse
-	5, // 6: boxcredential.v1.BoxCredentialService.DepositAgePublicKey:output_type -> boxcredential.v1.DepositAgePublicKeyResponse
-	7, // 7: boxcredential.v1.BoxCredentialService.DepositFederationClient:output_type -> boxcredential.v1.DepositFederationClientResponse
-	4, // [4:8] is the sub-list for method output_type
-	0, // [0:4] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	10, // 0: boxcredential.v1.FetchBoxSecretsResponse.secrets:type_name -> boxcredential.v1.FetchBoxSecretsResponse.SecretsEntry
+	0,  // 1: boxcredential.v1.BoxCredentialService.DepositGitToken:input_type -> boxcredential.v1.DepositGitTokenRequest
+	2,  // 2: boxcredential.v1.BoxCredentialService.DepositSnapshotToken:input_type -> boxcredential.v1.DepositSnapshotTokenRequest
+	4,  // 3: boxcredential.v1.BoxCredentialService.DepositAgePublicKey:input_type -> boxcredential.v1.DepositAgePublicKeyRequest
+	6,  // 4: boxcredential.v1.BoxCredentialService.DepositFederationClient:input_type -> boxcredential.v1.DepositFederationClientRequest
+	8,  // 5: boxcredential.v1.BoxCredentialService.FetchBoxSecrets:input_type -> boxcredential.v1.FetchBoxSecretsRequest
+	1,  // 6: boxcredential.v1.BoxCredentialService.DepositGitToken:output_type -> boxcredential.v1.DepositGitTokenResponse
+	3,  // 7: boxcredential.v1.BoxCredentialService.DepositSnapshotToken:output_type -> boxcredential.v1.DepositSnapshotTokenResponse
+	5,  // 8: boxcredential.v1.BoxCredentialService.DepositAgePublicKey:output_type -> boxcredential.v1.DepositAgePublicKeyResponse
+	7,  // 9: boxcredential.v1.BoxCredentialService.DepositFederationClient:output_type -> boxcredential.v1.DepositFederationClientResponse
+	9,  // 10: boxcredential.v1.BoxCredentialService.FetchBoxSecrets:output_type -> boxcredential.v1.FetchBoxSecretsResponse
+	6,  // [6:11] is the sub-list for method output_type
+	1,  // [1:6] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_boxcredential_proto_init() }
@@ -481,7 +591,7 @@ func file_boxcredential_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_boxcredential_proto_rawDesc), len(file_boxcredential_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

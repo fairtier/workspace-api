@@ -45,6 +45,9 @@ const (
 	// BoxCredentialServiceDepositFederationClientProcedure is the fully-qualified name of the
 	// BoxCredentialService's DepositFederationClient RPC.
 	BoxCredentialServiceDepositFederationClientProcedure = "/boxcredential.v1.BoxCredentialService/DepositFederationClient"
+	// BoxCredentialServiceFetchBoxSecretsProcedure is the fully-qualified name of the
+	// BoxCredentialService's FetchBoxSecrets RPC.
+	BoxCredentialServiceFetchBoxSecretsProcedure = "/boxcredential.v1.BoxCredentialService/FetchBoxSecrets"
 )
 
 // BoxCredentialServiceClient is a client for the boxcredential.v1.BoxCredentialService service.
@@ -73,6 +76,18 @@ type BoxCredentialServiceClient interface {
 	// re-depositing. Idempotent: the box seed Job re-deposits on every ArgoCD
 	// sync.
 	DepositFederationClient(context.Context, *connect.Request[v1.DepositFederationClientRequest]) (*connect.Response[v1.DepositFederationClientResponse], error)
+	// FetchBoxSecrets returns the centrally-minted secrets central holds for the
+	// calling tenant. The one RPC on this service that runs the other way, and
+	// the reason it exists: a box's other channel for a centrally-known secret
+	// is cloud-init, which is create-only on the provider and therefore frozen
+	// at first boot. Anything delivered that way can never be changed or
+	// rotated without replacing the customer's machine. This is the day-2 path.
+	//
+	// Same trust rules as the deposits — the slug is bound by issuer trust, so a
+	// box can only ever read its own secrets. Idempotent and safe to call on a
+	// loop: the box sync Job re-reads on every ArgoCD sync, which is what makes
+	// a central rotation converge without touching the box.
+	FetchBoxSecrets(context.Context, *connect.Request[v1.FetchBoxSecretsRequest]) (*connect.Response[v1.FetchBoxSecretsResponse], error)
 }
 
 // NewBoxCredentialServiceClient constructs a client for the boxcredential.v1.BoxCredentialService
@@ -110,6 +125,12 @@ func NewBoxCredentialServiceClient(httpClient connect.HTTPClient, baseURL string
 			connect.WithSchema(boxCredentialServiceMethods.ByName("DepositFederationClient")),
 			connect.WithClientOptions(opts...),
 		),
+		fetchBoxSecrets: connect.NewClient[v1.FetchBoxSecretsRequest, v1.FetchBoxSecretsResponse](
+			httpClient,
+			baseURL+BoxCredentialServiceFetchBoxSecretsProcedure,
+			connect.WithSchema(boxCredentialServiceMethods.ByName("FetchBoxSecrets")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -119,6 +140,7 @@ type boxCredentialServiceClient struct {
 	depositSnapshotToken    *connect.Client[v1.DepositSnapshotTokenRequest, v1.DepositSnapshotTokenResponse]
 	depositAgePublicKey     *connect.Client[v1.DepositAgePublicKeyRequest, v1.DepositAgePublicKeyResponse]
 	depositFederationClient *connect.Client[v1.DepositFederationClientRequest, v1.DepositFederationClientResponse]
+	fetchBoxSecrets         *connect.Client[v1.FetchBoxSecretsRequest, v1.FetchBoxSecretsResponse]
 }
 
 // DepositGitToken calls boxcredential.v1.BoxCredentialService.DepositGitToken.
@@ -139,6 +161,11 @@ func (c *boxCredentialServiceClient) DepositAgePublicKey(ctx context.Context, re
 // DepositFederationClient calls boxcredential.v1.BoxCredentialService.DepositFederationClient.
 func (c *boxCredentialServiceClient) DepositFederationClient(ctx context.Context, req *connect.Request[v1.DepositFederationClientRequest]) (*connect.Response[v1.DepositFederationClientResponse], error) {
 	return c.depositFederationClient.CallUnary(ctx, req)
+}
+
+// FetchBoxSecrets calls boxcredential.v1.BoxCredentialService.FetchBoxSecrets.
+func (c *boxCredentialServiceClient) FetchBoxSecrets(ctx context.Context, req *connect.Request[v1.FetchBoxSecretsRequest]) (*connect.Response[v1.FetchBoxSecretsResponse], error) {
+	return c.fetchBoxSecrets.CallUnary(ctx, req)
 }
 
 // BoxCredentialServiceHandler is an implementation of the boxcredential.v1.BoxCredentialService
@@ -168,6 +195,18 @@ type BoxCredentialServiceHandler interface {
 	// re-depositing. Idempotent: the box seed Job re-deposits on every ArgoCD
 	// sync.
 	DepositFederationClient(context.Context, *connect.Request[v1.DepositFederationClientRequest]) (*connect.Response[v1.DepositFederationClientResponse], error)
+	// FetchBoxSecrets returns the centrally-minted secrets central holds for the
+	// calling tenant. The one RPC on this service that runs the other way, and
+	// the reason it exists: a box's other channel for a centrally-known secret
+	// is cloud-init, which is create-only on the provider and therefore frozen
+	// at first boot. Anything delivered that way can never be changed or
+	// rotated without replacing the customer's machine. This is the day-2 path.
+	//
+	// Same trust rules as the deposits — the slug is bound by issuer trust, so a
+	// box can only ever read its own secrets. Idempotent and safe to call on a
+	// loop: the box sync Job re-reads on every ArgoCD sync, which is what makes
+	// a central rotation converge without touching the box.
+	FetchBoxSecrets(context.Context, *connect.Request[v1.FetchBoxSecretsRequest]) (*connect.Response[v1.FetchBoxSecretsResponse], error)
 }
 
 // NewBoxCredentialServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -201,6 +240,12 @@ func NewBoxCredentialServiceHandler(svc BoxCredentialServiceHandler, opts ...con
 		connect.WithSchema(boxCredentialServiceMethods.ByName("DepositFederationClient")),
 		connect.WithHandlerOptions(opts...),
 	)
+	boxCredentialServiceFetchBoxSecretsHandler := connect.NewUnaryHandler(
+		BoxCredentialServiceFetchBoxSecretsProcedure,
+		svc.FetchBoxSecrets,
+		connect.WithSchema(boxCredentialServiceMethods.ByName("FetchBoxSecrets")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/boxcredential.v1.BoxCredentialService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BoxCredentialServiceDepositGitTokenProcedure:
@@ -211,6 +256,8 @@ func NewBoxCredentialServiceHandler(svc BoxCredentialServiceHandler, opts ...con
 			boxCredentialServiceDepositAgePublicKeyHandler.ServeHTTP(w, r)
 		case BoxCredentialServiceDepositFederationClientProcedure:
 			boxCredentialServiceDepositFederationClientHandler.ServeHTTP(w, r)
+		case BoxCredentialServiceFetchBoxSecretsProcedure:
+			boxCredentialServiceFetchBoxSecretsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -234,4 +281,8 @@ func (UnimplementedBoxCredentialServiceHandler) DepositAgePublicKey(context.Cont
 
 func (UnimplementedBoxCredentialServiceHandler) DepositFederationClient(context.Context, *connect.Request[v1.DepositFederationClientRequest]) (*connect.Response[v1.DepositFederationClientResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("boxcredential.v1.BoxCredentialService.DepositFederationClient is not implemented"))
+}
+
+func (UnimplementedBoxCredentialServiceHandler) FetchBoxSecrets(context.Context, *connect.Request[v1.FetchBoxSecretsRequest]) (*connect.Response[v1.FetchBoxSecretsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("boxcredential.v1.BoxCredentialService.FetchBoxSecrets is not implemented"))
 }

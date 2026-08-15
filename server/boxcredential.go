@@ -24,6 +24,11 @@ type BoxCredentialServer struct {
 	Snapshots  workspace.BoxSnapshotCredentialStore
 	AgeKeys    workspace.BoxAgeKeyStore
 	Federation workspace.BoxFederationClientStore
+	// Secrets serves FetchBoxSecrets, the one direction that runs
+	// central→box. Optional: a deployment without it answers Unimplemented
+	// rather than an empty map, so a box can tell "central has no secrets for
+	// me" from "central cannot serve them yet".
+	Secrets workspace.BoxSecretStore
 	// Mirror, when set, re-renders the depositing tenant's pipelines repo
 	// after an age-key deposit so existing pipelines get their
 	// .credentials.age files immediately (the data migration for free).
@@ -169,4 +174,41 @@ func (s *BoxCredentialServer) DepositFederationClient(ctx context.Context, req *
 		s.Logger.Info("box federation client deposited", "slug", caller.Slug, "client_id", clientID, "note", req.Msg.Note)
 	}
 	return connect.NewResponse(&boxcredentialv1.DepositFederationClientResponse{}), nil
+}
+
+// FetchBoxSecrets returns the centrally-minted secrets held for the calling
+// box. Same trust rules as the deposits — box-issued service token only, slug
+// bound by issuer trust — which is what makes this safe to expose at all: the
+// caller cannot name a tenant, so it cannot read another box's secrets.
+//
+// Missing keys are omitted rather than errored. The caller is a sync loop, and
+// the common transient state is "central has not minted it yet".
+func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.Request[boxcredentialv1.FetchBoxSecretsRequest]) (*connect.Response[boxcredentialv1.FetchBoxSecretsResponse], error) {
+	caller := InternalCallerFromContext(ctx)
+	if caller.Slug == "" {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("secret fetch requires a box service token"))
+	}
+	if s.Secrets == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this deployment does not serve box secrets"))
+	}
+
+	keys := make([]string, 0, len(req.Msg.Keys))
+	for _, k := range req.Msg.Keys {
+		if k = strings.TrimSpace(k); k != "" {
+			keys = append(keys, k)
+		}
+	}
+
+	secrets, err := s.Secrets.GetBoxSecrets(ctx, caller.Slug, keys)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	if s.Logger != nil {
+		// Key names and a count only. The values are the payload; none of
+		// them belongs in a log line, and neither does a per-key hit/miss
+		// list that would leak which secrets a tenant has.
+		s.Logger.Info("box secrets fetched", "slug", caller.Slug, "requested", len(keys), "returned", len(secrets))
+	}
+	return connect.NewResponse(&boxcredentialv1.FetchBoxSecretsResponse{Secrets: secrets}), nil
 }

@@ -51,6 +51,13 @@ type ConnectionServiceClient interface {
 	// CreateConnection creates a connection from a provider-specific source.
 	// For Google, the source is a grant_id from the "Sign in with Google"
 	// popup — one-time use, minted by /oauth/google/callback.
+	//
+	// Re-authorizing an account that is already connected UPDATES that
+	// connection in place and returns it, keeping its id: reconnecting is the
+	// documented fix for an expired or app-rotated grant, so it must not be the
+	// one thing the API refuses. Identity is the granting account, not the
+	// display name. ALREADY_EXISTS is therefore reserved for a genuine clash —
+	// an explicit name already taken by a different account.
 	CreateConnection(context.Context, *connect.Request[v1.CreateConnectionRequest]) (*connect.Response[v1.CreateConnectionResponse], error)
 	// DeleteConnection removes a connection. Refused with FailedPrecondition
 	// while a pipeline still references it — detach or delete those first.
@@ -119,6 +126,13 @@ type ConnectionServiceHandler interface {
 	// CreateConnection creates a connection from a provider-specific source.
 	// For Google, the source is a grant_id from the "Sign in with Google"
 	// popup — one-time use, minted by /oauth/google/callback.
+	//
+	// Re-authorizing an account that is already connected UPDATES that
+	// connection in place and returns it, keeping its id: reconnecting is the
+	// documented fix for an expired or app-rotated grant, so it must not be the
+	// one thing the API refuses. Identity is the granting account, not the
+	// display name. ALREADY_EXISTS is therefore reserved for a genuine clash —
+	// an explicit name already taken by a different account.
 	CreateConnection(context.Context, *connect.Request[v1.CreateConnectionRequest]) (*connect.Response[v1.CreateConnectionResponse], error)
 	// DeleteConnection removes a connection. Refused with FailedPrecondition
 	// while a pipeline still references it — detach or delete those first.

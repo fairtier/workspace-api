@@ -62,6 +62,12 @@ type ConnectionStore interface {
 	// rest). ErrConnectionAlreadyExists when (customer, type, name) is taken.
 	CreateConnection(ctx context.Context, c *Connection) error
 
+	// ReauthorizeConnection replaces an existing connection's credentials in
+	// place and marks it active, keeping its id so every consumer follows the
+	// new authorization. ErrConnectionNotFound when id does not address a
+	// connection in this workspace.
+	ReauthorizeConnection(ctx context.Context, customerSlug, id string, credentials json.RawMessage) error
+
 	// GetConnection returns the connection, or ErrConnectionNotFound when id
 	// does not exist or belongs to another workspace.
 	GetConnection(ctx context.Context, customerSlug, id string) (*Connection, error)
@@ -89,7 +95,10 @@ var (
 	// caller's workspace.
 	ErrConnectionNotFound = errors.New("connection not found")
 
-	// ErrConnectionAlreadyExists rejects a duplicate (type, name) per workspace.
+	// ErrConnectionAlreadyExists rejects a duplicate (type, name) per
+	// workspace. Reserved for a genuine clash — an explicit name already taken
+	// by a DIFFERENT account. Re-authorizing an account that is already
+	// connected is a reconnect, not a duplicate, and updates it in place.
 	ErrConnectionAlreadyExists = errors.New("a connection with this name already exists")
 
 	// ErrConnectionInUse refuses deleting a connection that pipelines still
@@ -122,6 +131,22 @@ type ConnectionService struct {
 // CreateGoogleConnection redeems a "Sign in with Google" grant into a
 // workspace connection. One-time use, tenant-checked — identical trust rules
 // to the per-pipeline grant swap. Name defaults to the granting email.
+//
+// Re-authorizing an account that is already connected updates that connection
+// in place and returns it, id unchanged. Reconnecting is the fix we tell
+// customers to apply whenever a token goes stale — an expired grant, or an
+// OAuth app swap, which invalidates every token the previous app minted — so
+// an insert-only create makes the documented remedy the one operation that
+// cannot succeed: the name defaults to the email, the email is the same
+// account, and the duplicate is rejected. Worse, the rejection is unfixable
+// from the outside, because the existing connection cannot be deleted while
+// pipelines reference it and pipelines cannot be repointed at a connection
+// that does not exist yet.
+//
+// Identity is the granting account, NOT the display name. Matching on name
+// would let an explicit name rebind an existing connection to a different
+// Google account behind the pipelines already referencing it, and would fork
+// a second connection for the same account after a rename.
 func (s *ConnectionService) CreateGoogleConnection(ctx context.Context, customerSlug, grantID, name string) (*Connection, error) {
 	if s.Connections == nil {
 		return nil, ErrConnectionsNotConfigured
@@ -133,6 +158,17 @@ func (s *ConnectionService) CreateGoogleConnection(ctx context.Context, customer
 	if grantID == "" {
 		return nil, errors.New("grant_id is required")
 	}
+
+	// Read the workspace's connections BEFORE redeeming, so the one dependency
+	// that can realistically fail here fails while the grant is still spendable.
+	// A grant is consumed atomically and cannot be handed back: every error
+	// raised after this point costs the customer another trip through the
+	// Google consent screen, so as little as possible is left after it.
+	existing, err := s.Connections.ListConnections(ctx, customerSlug)
+	if err != nil {
+		return nil, fmt.Errorf("list connections: %w", err)
+	}
+
 	grant, err := s.GoogleOAuth.ConsumeGoogleOAuthGrant(ctx, grantID, customerSlug)
 	if err != nil {
 		if errors.Is(err, ErrOAuthGrantNotFound) {
@@ -148,6 +184,17 @@ func (s *ConnectionService) CreateGoogleConnection(ctx context.Context, customer
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build connection credentials: %w", err)
+	}
+
+	// Reconnect: same account, same connection. The display name is left
+	// alone — the customer re-authorized an account, they did not rename it.
+	if prior := findGoogleConnectionByEmail(existing, grant.Email); prior != nil {
+		if err := s.Connections.ReauthorizeConnection(ctx, customerSlug, prior.ID, creds); err != nil {
+			return nil, err
+		}
+		prior.Status = "active"
+		prior.Credentials = creds
+		return prior, nil
 	}
 
 	name = strings.TrimSpace(name)
@@ -171,6 +218,24 @@ func (s *ConnectionService) CreateGoogleConnection(ctx context.Context, customer
 		return nil, err
 	}
 	return c, nil
+}
+
+// findGoogleConnectionByEmail returns the workspace's existing connection for
+// a Google account, or nil. An empty email matches nothing: Google normally
+// returns one, but a consent that did not yield an identity must fall through
+// to a fresh connection rather than collide with an arbitrary earlier one.
+func findGoogleConnectionByEmail(conns []Connection, email string) *Connection {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil
+	}
+	for i := range conns {
+		c := &conns[i]
+		if c.Type == ConnectionTypeGoogle && strings.EqualFold(c.GoogleEmail(), email) {
+			return c
+		}
+	}
+	return nil
 }
 
 // ListConnections returns the workspace's connections.

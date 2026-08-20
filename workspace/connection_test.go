@@ -21,6 +21,16 @@ func (f *fakeConnectionStore) CreateConnection(_ context.Context, c *Connection)
 	return nil
 }
 
+func (f *fakeConnectionStore) ReauthorizeConnection(_ context.Context, slug, id string, creds json.RawMessage) error {
+	c, ok := f.conns[id]
+	if !ok || c.CustomerSlug != slug {
+		return ErrConnectionNotFound
+	}
+	c.Credentials = creds
+	c.Status = "active"
+	return nil
+}
+
 func (f *fakeConnectionStore) GetConnection(_ context.Context, slug, id string) (*Connection, error) {
 	c, ok := f.conns[id]
 	if !ok || c.CustomerSlug != slug {
@@ -127,6 +137,93 @@ func TestCreateGoogleConnectionConsumesGrant(t *testing.T) {
 	if _, err := svc.CreateGoogleConnection(context.Background(), "acme", "g1", ""); !errors.Is(err, ErrOAuthGrantNotFound) {
 		t.Fatalf("expected ErrOAuthGrantNotFound on reuse, got %v", err)
 	}
+}
+
+// Reconnecting an account that is already connected must re-authorize the
+// EXISTING connection, keeping its id — every pipeline references it by id, so
+// minting a second connection would leave all of them on the dead token, and
+// refusing (the old behaviour) made the documented fix for a stale grant the
+// one operation the API could not perform.
+func TestCreateGoogleConnectionReauthorizesSameAccount(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeConnectionStore{}
+	_ = store.CreateConnection(ctx, googleConn("c1", "acme", "rt-old", "alice@corp.com", "old-client"))
+
+	grants := &fakeGrantStore{grant: &GoogleOAuthGrant{
+		GrantID: "g2", CustomerSlug: "acme",
+		RefreshToken: "rt-new", Email: "alice@corp.com", ClientID: "new-client",
+	}}
+	svc := &ConnectionService{Connections: store, GoogleOAuth: grants}
+
+	c, err := svc.CreateGoogleConnection(ctx, "acme", "g2", "")
+	if err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
+	if c.ID != "c1" {
+		t.Fatalf("reconnect must keep the connection id, got %q", c.ID)
+	}
+	if len(store.conns) != 1 {
+		t.Fatalf("reconnect must not fork a second connection, got %d", len(store.conns))
+	}
+	gc, err := store.conns["c1"].googleCredentials()
+	if err != nil {
+		t.Fatalf("googleCredentials: %v", err)
+	}
+	if gc.RefreshToken != "rt-new" || gc.ClientID != "new-client" {
+		t.Fatalf("stored credentials not replaced: %+v", gc)
+	}
+}
+
+// A DIFFERENT account signing in is a new connection, never a rebind of the
+// existing one — pipelines referencing it would silently start reading another
+// person's sheets.
+func TestCreateGoogleConnectionDistinctAccountIsSeparate(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeConnectionStore{}
+	_ = store.CreateConnection(ctx, googleConn("c1", "acme", "rt-1", "alice@corp.com", "client-1"))
+
+	grants := &fakeGrantStore{grant: &GoogleOAuthGrant{
+		GrantID: "g2", CustomerSlug: "acme",
+		RefreshToken: "rt-2", Email: "bob@corp.com", ClientID: "client-1",
+	}}
+	svc := &ConnectionService{Connections: store, GoogleOAuth: grants}
+
+	c, err := svc.CreateGoogleConnection(ctx, "acme", "g2", "")
+	if err != nil {
+		t.Fatalf("connect second account: %v", err)
+	}
+	if c.ID == "c1" {
+		t.Fatal("a different Google account must not rebind an existing connection")
+	}
+	if len(store.conns) != 2 {
+		t.Fatalf("expected two connections, got %d", len(store.conns))
+	}
+}
+
+// The connection read happens BEFORE the grant is redeemed: a grant is
+// one-time and unspendable twice, so a failure that could have been detected
+// first must not cost the customer another trip through Google's consent
+// screen.
+func TestCreateGoogleConnectionKeepsGrantWhenStoreFails(t *testing.T) {
+	grants := &fakeGrantStore{grant: &GoogleOAuthGrant{
+		GrantID: "g1", CustomerSlug: "acme",
+		RefreshToken: "rt-1", Email: "alice@corp.com", ClientID: "client-1",
+	}}
+	svc := &ConnectionService{Connections: &failingListStore{}, GoogleOAuth: grants}
+
+	if _, err := svc.CreateGoogleConnection(context.Background(), "acme", "g1", ""); err == nil {
+		t.Fatal("expected the list failure to surface")
+	}
+	if grants.grant == nil {
+		t.Fatal("the grant was consumed despite the save never being attempted")
+	}
+}
+
+// failingListStore fails the pre-redemption read and nothing else.
+type failingListStore struct{ fakeConnectionStore }
+
+func (*failingListStore) ListConnections(context.Context, string) ([]Connection, error) {
+	return nil, errors.New("postgres is down")
 }
 
 func TestDeleteConnectionRefusesWhileReferenced(t *testing.T) {

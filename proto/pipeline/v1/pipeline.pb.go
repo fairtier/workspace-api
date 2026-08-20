@@ -663,11 +663,21 @@ func (x *GetPipelineRequest) GetId() string {
 }
 
 type GetPipelineResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Pipeline      *Pipeline              `protobuf:"bytes,1,opt,name=pipeline,proto3" json:"pipeline,omitempty"`
-	RecentRuns    []*PipelineRun         `protobuf:"bytes,2,rep,name=recent_runs,json=recentRuns,proto3" json:"recent_runs,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Pipeline   *Pipeline              `protobuf:"bytes,1,opt,name=pipeline,proto3" json:"pipeline,omitempty"`
+	RecentRuns []*PipelineRun         `protobuf:"bytes,2,rep,name=recent_runs,json=recentRuns,proto3" json:"recent_runs,omitempty"`
+	// The workspace Connection this pipeline's credentials reference, or empty
+	// when it holds its own credentials (or none). A reference, never
+	// credential material — the editor needs it to show WHICH account is
+	// attached, which is the difference between "keep existing" and a blank
+	// field that silently keeps something the user cannot see.
+	ConnectionId string `protobuf:"bytes,3,opt,name=connection_id,json=connectionId,proto3" json:"connection_id,omitempty"`
+	// Whether the pipeline has stored source credentials at all. Lets the
+	// editor say "keep existing" only when there is something to keep, and
+	// offer detach only when there is something to detach.
+	HasCredentials bool `protobuf:"varint,4,opt,name=has_credentials,json=hasCredentials,proto3" json:"has_credentials,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetPipelineResponse) Reset() {
@@ -714,6 +724,20 @@ func (x *GetPipelineResponse) GetRecentRuns() []*PipelineRun {
 	return nil
 }
 
+func (x *GetPipelineResponse) GetConnectionId() string {
+	if x != nil {
+		return x.ConnectionId
+	}
+	return ""
+}
+
+func (x *GetPipelineResponse) GetHasCredentials() bool {
+	if x != nil {
+		return x.HasCredentials
+	}
+	return false
+}
+
 type UpdatePipelineRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -729,8 +753,14 @@ type UpdatePipelineRequest struct {
 	Enabled           bool   `protobuf:"varint,9,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	// "upsert" or "" (empty = delete-insert default).
 	MergeStrategy string `protobuf:"bytes,10,opt,name=merge_strategy,json=mergeStrategy,proto3" json:"merge_strategy,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Drop the stored source credentials instead of keeping them. Needed
+	// because empty source_credentials means "keep existing", which leaves no
+	// way to say "detach": a pipeline referencing a workspace Connection could
+	// never let go of it, and the connection could never be deleted. Mutually
+	// exclusive with a non-empty source_credentials (INVALID_ARGUMENT).
+	ClearCredentials bool `protobuf:"varint,11,opt,name=clear_credentials,json=clearCredentials,proto3" json:"clear_credentials,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *UpdatePipelineRequest) Reset() {
@@ -831,6 +861,13 @@ func (x *UpdatePipelineRequest) GetMergeStrategy() string {
 		return x.MergeStrategy
 	}
 	return ""
+}
+
+func (x *UpdatePipelineRequest) GetClearCredentials() bool {
+	if x != nil {
+		return x.ClearCredentials
+	}
+	return false
 }
 
 type UpdatePipelineResponse struct {
@@ -1998,11 +2035,13 @@ const file_pipeline_proto_rawDesc = "" +
 	"\x15ListPipelinesResponse\x123\n" +
 	"\tpipelines\x18\x01 \x03(\v2\x15.pipeline.v1.PipelineR\tpipelines\"$\n" +
 	"\x12GetPipelineRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\x83\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\xd1\x01\n" +
 	"\x13GetPipelineResponse\x121\n" +
 	"\bpipeline\x18\x01 \x01(\v2\x15.pipeline.v1.PipelineR\bpipeline\x129\n" +
 	"\vrecent_runs\x18\x02 \x03(\v2\x18.pipeline.v1.PipelineRunR\n" +
-	"recentRuns\"\xdd\x02\n" +
+	"recentRuns\x12#\n" +
+	"\rconnection_id\x18\x03 \x01(\tR\fconnectionId\x12'\n" +
+	"\x0fhas_credentials\x18\x04 \x01(\bR\x0ehasCredentials\"\x8a\x03\n" +
 	"\x15UpdatePipelineRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
@@ -2015,7 +2054,8 @@ const file_pipeline_proto_rawDesc = "" +
 	"\x11write_disposition\x18\b \x01(\tR\x10writeDisposition\x12\x18\n" +
 	"\aenabled\x18\t \x01(\bR\aenabled\x12%\n" +
 	"\x0emerge_strategy\x18\n" +
-	" \x01(\tR\rmergeStrategy\"K\n" +
+	" \x01(\tR\rmergeStrategy\x12+\n" +
+	"\x11clear_credentials\x18\v \x01(\bR\x10clearCredentials\"K\n" +
 	"\x16UpdatePipelineResponse\x121\n" +
 	"\bpipeline\x18\x01 \x01(\v2\x15.pipeline.v1.PipelineR\bpipeline\"'\n" +
 	"\x15DeletePipelineRequest\x12\x0e\n" +

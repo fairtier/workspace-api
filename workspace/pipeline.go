@@ -350,8 +350,40 @@ func (s *PipelineService) GetPipeline(ctx context.Context, callerID core.UserID,
 	return pipeline, runs, nil
 }
 
+// UpdateOption tunes a pipeline save.
+type UpdateOption func(*updateOptions)
+
+type updateOptions struct{ clearCredentials bool }
+
+// ClearCredentials makes the save DROP the pipeline's stored source
+// credentials rather than preserve them.
+//
+// It exists because empty source credentials on an update already mean "keep
+// existing" — the right default for a write-only field the editor cannot show
+// back — which leaves no way at all to say "detach". Without an explicit
+// signal a pipeline referencing a workspace Connection can never let go of
+// it, so the connection's in-use guard can never be satisfied and the
+// connection can never be deleted: the customer is stuck with an unusable
+// pipeline AND an undeletable connection.
+func ClearCredentials() UpdateOption {
+	return func(o *updateOptions) { o.clearCredentials = true }
+}
+
+func newUpdateOptions(opts []UpdateOption) updateOptions {
+	var o updateOptions
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
 // UpdatePipeline updates a pipeline, verifying ownership.
-func (s *PipelineService) UpdatePipeline(ctx context.Context, callerID core.UserID, p *Pipeline) (*Pipeline, error) {
+func (s *PipelineService) UpdatePipeline(ctx context.Context, callerID core.UserID, p *Pipeline, opts ...UpdateOption) (*Pipeline, error) {
+	opt := newUpdateOptions(opts)
+	if opt.clearCredentials && !isEmptyJSON(p.SourceCredentials) {
+		return nil, &ErrInvalidSourceCredentials{Field: "source_credentials", Msg: "cannot clear and set source credentials in the same save"}
+	}
+
 	ws, err := s.Workspaces.GetWorkspaceByUser(ctx, callerID)
 	if err != nil {
 		return nil, fmt.Errorf("get customer: %w", err)
@@ -372,21 +404,26 @@ func (s *PipelineService) UpdatePipeline(ctx context.Context, callerID core.User
 		return nil, err
 	}
 	credsProvided := !isEmptyJSON(p.SourceCredentials)
-	if err := s.resolveUpdateCredentials(ctx, ws.Slug, p, existing); err != nil {
+	if err := s.resolveUpdateCredentials(ctx, ws.Slug, p, existing, opt); err != nil {
 		return nil, err
 	}
 
 	if err := s.Pipelines.UpdatePipeline(ctx, p); err != nil {
 		return nil, fmt.Errorf("update pipeline: %w", err)
 	}
-	return s.finishUpdate(ctx, callerID, ws.Slug, p, existing, credsProvided)
+	return s.finishUpdate(ctx, callerID, ws.Slug, p, existing, credsProvided || opt.clearCredentials)
 }
 
 // finishUpdate is the save tail after the cache row is written: reclaim an
-// externally-managed .age file when fresh credentials arrived, then mirror
+// externally-managed .age file when the stored credential changed, then mirror
 // (synchronously under GitPrimary, async-dispatched otherwise).
-func (s *PipelineService) finishUpdate(ctx context.Context, callerID core.UserID, customerSlug string, p, existing *Pipeline, credsProvided bool) (*Pipeline, error) {
-	if credsProvided && existing.CredentialsExternal {
+//
+// A clear counts as a change: without reclaiming, the box-owned .age file
+// survives the converge (external files are kept, never written) and the
+// detached pipeline would keep running against a token the customer believes
+// they revoked.
+func (s *PipelineService) finishUpdate(ctx context.Context, callerID core.UserID, customerSlug string, p, existing *Pipeline, credentialsTouched bool) (*Pipeline, error) {
+	if credentialsTouched && existing.CredentialsExternal {
 		s.reclaimCredentials(ctx, p.ID)
 	}
 	if s.GitPrimary {
@@ -420,9 +457,18 @@ func (s *PipelineService) reclaimCredentials(ctx context.Context, id PipelineID)
 }
 
 // resolveUpdateCredentials validates newly provided source credentials (and
-// redeems a Google sign-in grant) or, when the update carries none,
-// preserves the existing stored credentials.
-func (s *PipelineService) resolveUpdateCredentials(ctx context.Context, customerSlug string, p, existing *Pipeline) error {
+// redeems a Google sign-in grant) or, when the update carries none, preserves
+// the existing stored credentials — unless the caller explicitly asked to
+// clear them, the only way to detach a pipeline from a workspace Connection.
+//
+// A cleared pipeline is left credential-less on purpose: its runs then fail
+// on missing credentials, which is honest and recoverable, whereas keeping a
+// reference the customer asked to drop is neither.
+func (s *PipelineService) resolveUpdateCredentials(ctx context.Context, customerSlug string, p, existing *Pipeline, opt updateOptions) error {
+	if opt.clearCredentials {
+		p.SourceCredentials = nil
+		return nil
+	}
 	if isEmptyJSON(p.SourceCredentials) {
 		p.SourceCredentials = existing.SourceCredentials
 		return nil

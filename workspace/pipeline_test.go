@@ -280,6 +280,51 @@ func TestPipelineService_UpdatePipeline(t *testing.T) {
 		}
 	})
 
+	// Detach: the one way to say "drop them", as opposed to the empty-means-
+	// keep default. Without it a pipeline can never let go of a workspace
+	// Connection, so the connection's in-use guard can never be satisfied.
+	t.Run("clears creds when asked", func(t *testing.T) {
+		var updated *workspace.Pipeline
+
+		svc := &workspace.PipelineService{
+			Workspaces: newCustomerReader(),
+			Pipelines: &mockPipelineRepo{
+				getPipelineFn: func(context.Context, workspace.PipelineID) (*workspace.Pipeline, error) {
+					return existing, nil
+				},
+				updatePipelineFn: func(_ context.Context, p *workspace.Pipeline) error {
+					updated = p
+					return nil
+				},
+			},
+			Logger: slog.Default(),
+		}
+
+		p := &workspace.Pipeline{ID: "pipe-1", SourceType: "sql_database"}
+		if _, err := svc.UpdatePipeline(context.Background(), "user-1", p, workspace.ClearCredentials()); err != nil {
+			t.Fatalf("UpdatePipeline() error = %v", err)
+		}
+		if len(updated.SourceCredentials) != 0 {
+			t.Errorf("SourceCredentials = %s, want empty", updated.SourceCredentials)
+		}
+	})
+
+	t.Run("rejects clear together with new creds", func(t *testing.T) {
+		svc := &workspace.PipelineService{
+			Workspaces: newCustomerReader(),
+			Pipelines:  &mockPipelineRepo{},
+			Logger:     slog.Default(),
+		}
+
+		p := &workspace.Pipeline{
+			ID: "pipe-1", SourceType: "sql_database",
+			SourceCredentials: json.RawMessage(`{"connection_string":"postgres://u:p@localhost/db"}`),
+		}
+		if _, err := svc.UpdatePipeline(context.Background(), "user-1", p, workspace.ClearCredentials()); err == nil {
+			t.Fatal("expected a contradictory save to be rejected")
+		}
+	})
+
 	t.Run("replaces creds when provided", func(t *testing.T) {
 		var updated *workspace.Pipeline
 		newCreds := json.RawMessage(`{"connection_string":"postgres://u:p@localhost/newdb"}`)

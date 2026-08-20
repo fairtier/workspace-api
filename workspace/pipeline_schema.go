@@ -508,6 +508,22 @@ func googleSheetsConnectionID(sourceType string, raw json.RawMessage) (string, b
 	return creds.OAuth.ConnectionID, true
 }
 
+// ConnectionID returns the workspace Connection this pipeline's stored
+// credentials reference, or "" when it holds its own credentials (or none).
+// A reference is not credential material, so unlike the credentials
+// themselves it is safe to hand back to the editor — and necessary there: an
+// editor that cannot show which account is attached cannot offer to detach it.
+func (p *Pipeline) ConnectionID() string {
+	id, _ := googleSheetsConnectionID(p.SourceType, p.SourceCredentials)
+	return id
+}
+
+// HasCredentials reports whether the pipeline has stored source credentials.
+// Lets the editor distinguish "keep existing" from "there is nothing to keep".
+func (p *Pipeline) HasCredentials() bool {
+	return !isEmptyJSON(p.SourceCredentials)
+}
+
 // googleSheetsStoredOAuthCreds builds the persisted credential JSON for an
 // OAuth grant: the refresh token, the granting email (for display), and the
 // customer OAuth client that minted it.

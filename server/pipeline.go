@@ -131,9 +131,14 @@ func (s *PipelineServer) GetPipeline(ctx context.Context, req *connect.Request[p
 		}
 	}
 
+	// The connection reference and the has-credentials flag are detail-view
+	// only: the list path never selects credentials, so deriving them there
+	// would silently report "no connection" for every pipeline.
 	return connect.NewResponse(&pipelinev1.GetPipelineResponse{
-		Pipeline:   pipelineToPB(pipeline),
-		RecentRuns: runsPB,
+		Pipeline:       pipelineToPB(pipeline),
+		RecentRuns:     runsPB,
+		ConnectionId:   pipeline.ConnectionID(),
+		HasCredentials: pipeline.HasCredentials(),
 	}), nil
 }
 
@@ -160,7 +165,12 @@ func (s *PipelineServer) UpdatePipeline(ctx context.Context, req *connect.Reques
 		Enabled:           req.Msg.Enabled,
 	}
 
-	result, err := s.Service.UpdatePipeline(ctx, callerID, p)
+	var opts []workspace.UpdateOption
+	if req.Msg.ClearCredentials {
+		opts = append(opts, workspace.ClearCredentials())
+	}
+
+	result, err := s.Service.UpdatePipeline(ctx, callerID, p, opts...)
 	if err != nil {
 		return nil, domainError(err)
 	}

@@ -190,7 +190,13 @@ func run() error {
 		StripPollCredentials: os.Getenv("POLL_SOURCE_CREDENTIALS") != "on",
 		GitPrimary:           pipelinesGitPrimary,
 		Connections:          repo,
-		Logger:               logger,
+		// The box mints its own grants since the consent flow moved here
+		// (0.16.0), so a save carrying {"oauth":{"grant_id":…}} — the
+		// Console's fallback when the connection promotion is unavailable —
+		// must redeem locally too. Left unwired in 0.16.0, which failed such
+		// saves with "Sign in with Google is not enabled on this server".
+		GoogleOAuth: repo,
+		Logger:      logger,
 	}
 
 	fileDropSvc := &workspace.FileDropService{

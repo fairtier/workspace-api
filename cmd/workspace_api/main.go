@@ -121,12 +121,17 @@ func run() error {
 
 	repo := &postgres.Repository{DB: db, Encryptor: enc}
 	resolver := &workspace.StaticResolver{Workspace: *ws}
+	// TrimSpace on every value: these come from Kubernetes Secrets, and a
+	// Secret created --from-file (dlt-age holds age-keygen's output verbatim)
+	// carries a trailing newline that the central deposit path always trimmed
+	// server-side. Untrimmed, the age key fails .age rendering with "malformed
+	// recipient" and a token fails auth looking exactly like a wrong token.
 	boxCreds := &workspace.StaticBoxCredentials{
 		Slug:          ws.Slug,
-		GitUsername:   cmp.Or(os.Getenv("BOX_GIT_USERNAME"), "fairtier-admin"),
-		GitToken:      os.Getenv("BOX_GIT_TOKEN"),
-		SnapshotToken: os.Getenv("BOX_SNAPSHOT_TOKEN"),
-		AgePublicKey:  os.Getenv("BOX_AGE_PUBLIC_KEY"),
+		GitUsername:   cmp.Or(strings.TrimSpace(os.Getenv("BOX_GIT_USERNAME")), "fairtier-admin"),
+		GitToken:      strings.TrimSpace(os.Getenv("BOX_GIT_TOKEN")),
+		SnapshotToken: strings.TrimSpace(os.Getenv("BOX_SNAPSHOT_TOKEN")),
+		AgePublicKey:  strings.TrimSpace(os.Getenv("BOX_AGE_PUBLIC_KEY")),
 	}
 	if boxCreds.GitToken == "" {
 		logger.Warn("BOX_GIT_TOKEN not set; repo-backed features (pipelines mirror, transformations, box repo editor) will report the credential as missing")

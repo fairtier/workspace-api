@@ -44,6 +44,7 @@ import (
 	"github.com/fairtier/workspace-api/gitea"
 	"github.com/fairtier/workspace-api/lakekeeper"
 	"github.com/fairtier/workspace-api/llm"
+	"github.com/fairtier/workspace-api/oauthgoogle"
 	"github.com/fairtier/workspace-api/objstore"
 	"github.com/fairtier/workspace-api/postgres"
 	"github.com/fairtier/workspace-api/proto/boxcredential/v1/boxcredentialv1connect"
@@ -269,13 +270,13 @@ func run() error {
 		Logger:     logger,
 	}
 
-	if os.Getenv("GOOGLE_OAUTH_REDIRECT_URL") != "" {
-		// Storing the customer's own OAuth app works here (the box owns the
-		// table and the mirror reads it to render .age files), but running a
-		// consent round-trip needs a redirect URI registered for THIS host, so
-		// the popup stays central until box-local OAuth ships.
-		logger.Warn("GOOGLE_OAUTH_REDIRECT_URL is set but the consent flow is not served by the box binary yet; new google_sheets connections must be made from the central Console")
-	}
+	// Box-local "Sign in with Google": for a cut-over tenant the central
+	// consent flow is unusable by design (central's write freeze refuses the
+	// grant redemption), so the box serves its own — the customer registers
+	// https://api.customer-<slug>.<baseDomain>/oauth/google/callback in their
+	// own Google app. Nil (envs unset) keeps the old behavior: /oauth/google/*
+	// answers 501, GetOAuthClient reports flow_available=false.
+	googleOAuth := buildGoogleOAuth(logger)
 
 	pipelineAssistServer, assistServer := buildAssistServers(resolver, logger)
 
@@ -293,14 +294,12 @@ func run() error {
 		Demo:            demoServer,
 		Notifications:   &server.NotificationServer{Service: notificationSvc},
 		Query:           &server.QueryServer{Workspaces: resolver, Executor: duckflight.NewClient()},
-		// OAuth is nil: the box stores the customer's own Google app (its
-		// mirror needs the pair to render .age files) but cannot serve the
-		// consent popup, so GetOAuthClient reports flow_available=false and
-		// the Console points at the central Console for new connections.
-		OAuthClients: &server.OAuthClientServer{Workspaces: resolver, Clients: repo, Logger: logger},
-		// Connections list/delete work box-locally; creating one needs the
-		// consent popup, which stays central until box-local OAuth ships (a
-		// grant minted centrally is not redeemable here — different DB).
+		// OAuth carries the deployment-wide half (redirect URL + state key);
+		// nil when the envs are unset, and GetOAuthClient then reports
+		// flow_available=false exactly as before.
+		OAuthClients: &server.OAuthClientServer{Workspaces: resolver, Clients: repo, OAuth: googleOAuth, Logger: logger},
+		// Connections are fully box-local: the consent popup below mints the
+		// grant into THIS database, so CreateConnection redeems it here too.
 		Connections: &server.ConnectionServer{
 			Workspaces: resolver,
 			Service: &workspace.ConnectionService{
@@ -312,10 +311,9 @@ func run() error {
 			Logger: logger,
 		},
 	}, authOpts)
-	// oauthClients is wired even though googleOAuth is nil: the box owns the
-	// customer_oauth_clients row, and its mirror needs the pair to render the
-	// .age credential files for Sheets pipelines connected before cutover.
-	server.RegisterWorkspacePlainHTTP(mux, logger, userAuth, db, nil, nil, repo, fileDropSvc, nil, firstCORSOrigin())
+	// With googleOAuth nil the OAuth pair below answers 501 before touching
+	// resolver/grants, so passing them unconditionally is safe either way.
+	server.RegisterWorkspacePlainHTTP(mux, logger, userAuth, db, resolver, repo, repo, fileDropSvc, googleOAuth, firstCORSOrigin())
 	// The pre-authentication discovery document.
 	server.RegisterWorkspaceBootstrap(mux, logger,
 		server.BootstrapFromWorkspace(ws, consoleClientID(logger), fileDropSvc != nil, false))
@@ -331,12 +329,8 @@ func run() error {
 		return err
 	}
 	internalMux := http.NewServeMux()
-	server.RegisterWorkspaceInternal(internalMux, server.WorkspaceInternalServers{
-		Pipelines:       server.NewInternalPipelineServer(pipelineSvc),
-		Transformations: server.NewInternalTransformationServer(transformationSvc),
-	}, internalOpts)
-
-	serviceNames := workspaceServiceNamesWithoutBoxCredential()
+	internalServers, serviceNames := buildInternalServers(pipelineSvc, transformationSvc, googleOAuth, repo, logger)
+	server.RegisterWorkspaceInternal(internalMux, internalServers, internalOpts)
 	internalMux.Handle(grpchealth.NewHandler(grpchealth.NewStaticChecker(serviceNames...)))
 	internalMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(serviceNames...)))
 
@@ -349,6 +343,11 @@ func run() error {
 		PipelinesGitPrimary:       pipelinesGitPrimary,
 		TransformationsGitPrimary: transformationsGitPrimary,
 	})
+	if googleOAuth != nil {
+		// This binary now mints grants, so it inherits the abandoned-grant
+		// sweep (a row left by a closed popup holds a live refresh token).
+		go workspace.SweepExpiredGrants(ctx, repo, loadDurationEnv("OAUTH_GRANT_SWEEP_INTERVAL", time.Hour), logger)
+	}
 
 	corsHandler := wrapPublicHandler(mux, corsAllowedOrigins(), logger)
 
@@ -618,6 +617,64 @@ func buildInternalOpts(_ context.Context, logger *slog.Logger, ws *workspace.Wor
 
 	boxTrust := server.NewPinnedBoxTrust(ws.CasdoorIssuer, ws.Slug, jwks)
 	return connect.WithInterceptors(otelInterceptor, server.NewInternalAuthInterceptor(jwks, boxTrust, logger)), nil
+}
+
+// buildInternalServers bundles the worker-facing handlers plus the health/
+// reflection service-name list that matches what is actually mounted. When the
+// box serves its own Google consent flow it also mounts a minter-only
+// BoxCredentialService: FetchBoxSecrets renders the DuckFlight reconcile SQL
+// from this database's connections (a cut-over box's connections live HERE, so
+// central cannot mint them), and the box-secrets sync loop queries this
+// endpoint beside central's and merges, local winning. Deposits stay
+// central-only — every store is nil and answers Unimplemented.
+func buildInternalServers(
+	pipelineSvc *workspace.PipelineService,
+	transformationSvc *workspace.TransformationService,
+	googleOAuth *oauthgoogle.Client,
+	repo *postgres.Repository,
+	logger *slog.Logger,
+) (server.WorkspaceInternalServers, []string) {
+	servers := server.WorkspaceInternalServers{
+		Pipelines:       server.NewInternalPipelineServer(pipelineSvc),
+		Transformations: server.NewInternalTransformationServer(transformationSvc),
+	}
+	if googleOAuth == nil {
+		return servers, workspaceServiceNamesWithoutBoxCredential()
+	}
+	servers.BoxCredentials = &server.BoxCredentialServer{
+		Minter: &workspace.ConnectionBoxSecrets{
+			Connections:  repo,
+			OAuthClients: repo,
+			Google:       googleOAuth,
+			Logger:       logger,
+		},
+		Logger: logger,
+	}
+	return servers, server.WorkspaceServiceNames
+}
+
+// buildGoogleOAuth wires the box-local "Sign in with Google" consent flow from
+// GOOGLE_OAUTH_REDIRECT_URL + GOOGLE_OAUTH_STATE_SECRET — the deployment-wide
+// half only; the client pair is the customer's own, looked up per call. Nil
+// (both unset) keeps the flow off: /oauth/google/* answers 501 and the Console
+// falls back exactly as before. Half-set configuration is a warning, not a
+// fatal: a box must keep serving lake queries whatever the OAuth wiring says.
+func buildGoogleOAuth(logger *slog.Logger) *oauthgoogle.Client {
+	redirectURL := os.Getenv("GOOGLE_OAUTH_REDIRECT_URL")
+	stateSecret := os.Getenv("GOOGLE_OAUTH_STATE_SECRET")
+	if redirectURL == "" && stateSecret == "" {
+		return nil
+	}
+	if redirectURL == "" || stateSecret == "" {
+		logger.Warn("google oauth disabled: GOOGLE_OAUTH_REDIRECT_URL and GOOGLE_OAUTH_STATE_SECRET must both be set")
+		return nil
+	}
+	client, err := oauthgoogle.New(redirectURL, stateSecret)
+	if err != nil {
+		logger.Warn("google oauth disabled", "err", err)
+		return nil
+	}
+	return client
 }
 
 // workspaceServiceNamesWithoutBoxCredential filters the central service-name

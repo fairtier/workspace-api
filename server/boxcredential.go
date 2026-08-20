@@ -19,15 +19,21 @@ import (
 // token, its snapshot-sidecar bearer, and its age public key — the
 // "credential inversion": the box pushes credentials up, central never holds
 // box admin credentials.
+//
+// The box binary registers this too, but minter-only: deposits are a
+// central-transition mechanism (nil stores answer Unimplemented), while
+// FetchBoxSecrets is how a CUT-OVER box's own sync loop obtains locally-minted
+// secrets — its connections live in the box database, which central cannot
+// mint from.
 type BoxCredentialServer struct {
 	Store      workspace.BoxGitCredentialStore
 	Snapshots  workspace.BoxSnapshotCredentialStore
 	AgeKeys    workspace.BoxAgeKeyStore
 	Federation workspace.BoxFederationClientStore
 	// Secrets serves FetchBoxSecrets, the one direction that runs
-	// central→box. Optional: a deployment without it answers Unimplemented
-	// rather than an empty map, so a box can tell "central has no secrets for
-	// me" from "central cannot serve them yet".
+	// central→box. Optional: a deployment with neither it nor a Minter answers
+	// Unimplemented rather than an empty map, so a box can tell "central has
+	// no secrets for me" from "central cannot serve them yet".
 	Secrets workspace.BoxSecretStore
 	// Minter, when set, contributes dynamically-minted secrets to
 	// FetchBoxSecrets on top of the static box_secrets rows (minted wins on a
@@ -49,6 +55,9 @@ type BoxCredentialServer struct {
 // an unauthenticated log-mode call) is rejected: unlike the dlt-worker RPCs
 // there is no legacy shared-substrate caller to grandfather in.
 func (s *BoxCredentialServer) DepositGitToken(ctx context.Context, req *connect.Request[boxcredentialv1.DepositGitTokenRequest]) (*connect.Response[boxcredentialv1.DepositGitTokenResponse], error) {
+	if s.Store == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this deployment does not accept credential deposits"))
+	}
 	caller := InternalCallerFromContext(ctx)
 	if caller.Slug == "" {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("credential deposit requires a box service token"))
@@ -80,6 +89,9 @@ func (s *BoxCredentialServer) DepositGitToken(ctx context.Context, req *connect.
 // Same trust rules as DepositGitToken: box-issued service token only, slug
 // bound by issuer trust.
 func (s *BoxCredentialServer) DepositSnapshotToken(ctx context.Context, req *connect.Request[boxcredentialv1.DepositSnapshotTokenRequest]) (*connect.Response[boxcredentialv1.DepositSnapshotTokenResponse], error) {
+	if s.Snapshots == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this deployment does not accept credential deposits"))
+	}
 	caller := InternalCallerFromContext(ctx)
 	if caller.Slug == "" {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("credential deposit requires a box service token"))
@@ -111,6 +123,9 @@ func (s *BoxCredentialServer) DepositSnapshotToken(ctx context.Context, req *con
 // trust rules as the other deposits: box-issued service token only, slug
 // bound by issuer trust.
 func (s *BoxCredentialServer) DepositAgePublicKey(ctx context.Context, req *connect.Request[boxcredentialv1.DepositAgePublicKeyRequest]) (*connect.Response[boxcredentialv1.DepositAgePublicKeyResponse], error) {
+	if s.AgeKeys == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this deployment does not accept credential deposits"))
+	}
 	caller := InternalCallerFromContext(ctx)
 	if caller.Slug == "" {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("credential deposit requires a box service token"))
@@ -154,6 +169,9 @@ func (s *BoxCredentialServer) DepositAgePublicKey(ctx context.Context, req *conn
 // A re-deposit with a different secret is a rotation the customer initiated;
 // central converges both ends on the next reconcile.
 func (s *BoxCredentialServer) DepositFederationClient(ctx context.Context, req *connect.Request[boxcredentialv1.DepositFederationClientRequest]) (*connect.Response[boxcredentialv1.DepositFederationClientResponse], error) {
+	if s.Federation == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this deployment does not accept credential deposits"))
+	}
 	caller := InternalCallerFromContext(ctx)
 	if caller.Slug == "" {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("credential deposit requires a box service token"))
@@ -194,7 +212,7 @@ func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.
 	if caller.Slug == "" {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("secret fetch requires a box service token"))
 	}
-	if s.Secrets == nil {
+	if s.Secrets == nil && s.Minter == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this deployment does not serve box secrets"))
 	}
 
@@ -205,9 +223,14 @@ func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.
 		}
 	}
 
-	secrets, err := s.Secrets.GetBoxSecrets(ctx, caller.Slug, keys)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	// Minter-only deployments (the box binary) have no static rows to read.
+	var secrets map[string]string
+	if s.Secrets != nil {
+		var err error
+		secrets, err = s.Secrets.GetBoxSecrets(ctx, caller.Slug, keys)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
 	}
 
 	secrets = s.mergeMintedSecrets(ctx, caller.Slug, keys, secrets)

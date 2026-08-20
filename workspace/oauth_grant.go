@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
@@ -38,4 +39,35 @@ type GoogleOAuthGrantStore interface {
 	// DeleteExpiredGoogleOAuthGrants removes expired grants and returns the count
 	// deleted (periodic sweep).
 	DeleteExpiredGoogleOAuthGrants(ctx context.Context) (int64, error)
+}
+
+// SweepExpiredGrants deletes expired google_oauth_grants rows on a loop, once
+// immediately and then every interval, until ctx is done.
+//
+// A grant is a one-time, 15-minute reference the Console swaps for a stored
+// refresh token, and redeeming it deletes the row — the normal path cleans up
+// after itself. Abandoned consents (the popup closed, the wizard never
+// finished) are what stay behind, and each holds a live Google refresh token,
+// encrypted but well past the TTL that is supposed to bound it. Lives in the
+// module so both binaries that mint grants — central and a box serving its
+// own consent flow — inherit the same sweep.
+func SweepExpiredGrants(ctx context.Context, grants GoogleOAuthGrantStore, interval time.Duration, logger *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		// Sweep on start too: a binary restarting more often than the
+		// interval would otherwise never run one.
+		n, err := grants.DeleteExpiredGoogleOAuthGrants(ctx)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			logger.Warn("oauth grant sweep failed", "error", err)
+		case n > 0:
+			logger.Info("oauth grant sweep removed expired grants", "count", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

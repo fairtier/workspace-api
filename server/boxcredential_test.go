@@ -229,3 +229,66 @@ func TestFetchBoxSecrets_StoreFailureIsInternal(t *testing.T) {
 		t.Fatalf("code = %v, want Internal", connect.CodeOf(err))
 	}
 }
+
+type fakeMinter struct {
+	minted  map[string]string
+	err     error
+	gotSlug string
+}
+
+func (f *fakeMinter) MintBoxSecrets(_ context.Context, slug string) (map[string]string, error) {
+	f.gotSlug = slug
+	return f.minted, f.err
+}
+
+func TestFetchBoxSecrets_MinterOnlyDeploymentServesMintedKeys(t *testing.T) {
+	// The box binary's shape: no static store at all, only the connection
+	// minter. Before minter-only serving this answered Unimplemented, which
+	// read as "this deployment cannot serve secrets" to the box sync loop.
+	minter := &fakeMinter{minted: map[string]string{"duckflight_reconcile_sql": "LOAD x;"}}
+	srv := &BoxCredentialServer{Minter: minter}
+
+	resp, err := srv.FetchBoxSecrets(withBoxCaller("dlt-worker", "acme"), fetchSecrets())
+	if err != nil {
+		t.Fatalf("FetchBoxSecrets: %v", err)
+	}
+	if minter.gotSlug != "acme" {
+		t.Errorf("minter slug = %q, want acme (issuer-bound, never request-named)", minter.gotSlug)
+	}
+	if got := resp.Msg.Secrets["duckflight_reconcile_sql"]; got != "LOAD x;" {
+		t.Errorf("secrets = %v, want the minted key", resp.Msg.Secrets)
+	}
+}
+
+func TestFetchBoxSecrets_MinterOnlyHonorsTheKeyFilter(t *testing.T) {
+	minter := &fakeMinter{minted: map[string]string{"duckflight_reconcile_sql": "LOAD x;"}}
+	srv := &BoxCredentialServer{Minter: minter}
+
+	resp, err := srv.FetchBoxSecrets(withBoxCaller("dlt-worker", "acme"), fetchSecrets("something_else"))
+	if err != nil {
+		t.Fatalf("FetchBoxSecrets: %v", err)
+	}
+	if len(resp.Msg.Secrets) != 0 {
+		t.Errorf("secrets = %v, want none (minted key was not requested)", resp.Msg.Secrets)
+	}
+}
+
+func TestDeposits_UnwiredStoresAreUnimplemented(t *testing.T) {
+	// The minter-only server mounts the whole service, so the deposit RPCs
+	// become reachable on a box; nil stores must refuse cleanly, not panic.
+	srv := &BoxCredentialServer{Minter: &fakeMinter{}}
+	caller := withBoxCaller("dlt-worker", "acme")
+
+	if _, err := srv.DepositGitToken(caller, connect.NewRequest(&boxcredentialv1.DepositGitTokenRequest{Username: "u", Token: "t"})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Errorf("DepositGitToken code = %v, want Unimplemented", connect.CodeOf(err))
+	}
+	if _, err := srv.DepositSnapshotToken(caller, connect.NewRequest(&boxcredentialv1.DepositSnapshotTokenRequest{Token: "t"})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Errorf("DepositSnapshotToken code = %v, want Unimplemented", connect.CodeOf(err))
+	}
+	if _, err := srv.DepositAgePublicKey(caller, connect.NewRequest(&boxcredentialv1.DepositAgePublicKeyRequest{PublicKey: "age1"})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Errorf("DepositAgePublicKey code = %v, want Unimplemented", connect.CodeOf(err))
+	}
+	if _, err := srv.DepositFederationClient(caller, depositFederation("cid", "csecret")); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Errorf("DepositFederationClient code = %v, want Unimplemented", connect.CodeOf(err))
+	}
+}

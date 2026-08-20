@@ -16,7 +16,7 @@ require (
 	filippo.io/age v1.3.1
 	github.com/MicahParks/jwkset v0.11.3
 	github.com/MicahParks/keyfunc/v3 v3.8.1
-	github.com/anthropics/anthropic-sdk-go v1.61.0
+	github.com/anthropics/anthropic-sdk-go v1.66.0
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/casdoor/casdoor-go-sdk v1.44.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -36,8 +36,8 @@ require (
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/sdk/metric v1.45.0
 	go.opentelemetry.io/otel/trace v1.45.0
-	google.golang.org/grpc v1.83.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/grpc v1.83.1
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 

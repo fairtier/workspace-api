@@ -83,6 +83,12 @@ type PipelineMirror struct {
 	// us on every other customer's consent screen, on every box that has one
 	// Sheets pipeline. Nil = no injection.
 	OAuthClients OAuthClientStore
+	// Connections resolves workspace-level Connection references
+	// (oauth.connection_id) into their stored refresh tokens before
+	// encryption, so a connection-referencing pipeline renders the exact
+	// worker-facing shape an embedded credential does. Nil = references are
+	// rendered unresolved (the run then fails on a missing refresh_token).
+	Connections ConnectionStore
 	// NewClient builds a Gitea client for a box (same factory shape as
 	// BoxRepoService.NewClient).
 	NewClient func(baseURL, username, token string) RepoFileClient
@@ -281,7 +287,7 @@ func (m *PipelineMirror) desiredCredentialFiles(ctx context.Context, customerSlu
 }
 
 func (m *PipelineMirror) buildCredentialFiles(ctx context.Context, customerSlug string, pipelines []Pipeline, slugs map[PipelineID]string, credentials map[PipelineID]json.RawMessage) map[string]credentialFile {
-	oauth := newOAuthClientResolver(m.OAuthClients, customerSlug)
+	oauth := newOAuthClientResolver(m.OAuthClients, m.Connections, customerSlug)
 	files := make(map[string]credentialFile)
 	for _, p := range pipelines {
 		filePath := "pipelines/" + slugs[p.ID] + ".credentials.age"

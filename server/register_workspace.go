@@ -11,6 +11,7 @@ import (
 	"github.com/fairtier/workspace-api/proto/assist/v1/assistv1connect"
 	"github.com/fairtier/workspace-api/proto/boxcredential/v1/boxcredentialv1connect"
 	"github.com/fairtier/workspace-api/proto/boxrepo/v1/boxrepov1connect"
+	"github.com/fairtier/workspace-api/proto/connection/v1/connectionv1connect"
 	"github.com/fairtier/workspace-api/proto/demo/v1/demov1connect"
 	"github.com/fairtier/workspace-api/proto/lakekeeper_user/v1/lakekeeperuserv1connect"
 	"github.com/fairtier/workspace-api/proto/notification/v1/notificationv1connect"
@@ -52,6 +53,10 @@ type WorkspacePlaneServers struct {
 	// (Google, for Sheets). Optional: nil simply does not mount the service,
 	// and the Console then hides the Integrations card.
 	OAuthClients *OAuthClientServer
+	// Connections manages workspace-level Connections (connect Google once;
+	// pipelines and the query engine both consume it). Optional: nil does not
+	// mount the service, and the Console hides the surface.
+	Connections *ConnectionServer
 }
 
 // RegisterWorkspacePlane mounts the workspace plane's Connect services on the
@@ -89,6 +94,9 @@ func RegisterWorkspacePlane(mux *http.ServeMux, s WorkspacePlaneServers, opts co
 	mux.Handle(queryv1connect.NewQueryServiceHandler(s.Query, opts))
 	if s.OAuthClients != nil {
 		mux.Handle(oauthclientv1connect.NewOAuthClientServiceHandler(s.OAuthClients, opts))
+	}
+	if s.Connections != nil {
+		mux.Handle(connectionv1connect.NewConnectionServiceHandler(s.Connections, opts))
 	}
 }
 

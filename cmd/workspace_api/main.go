@@ -157,6 +157,7 @@ func run() error {
 		DefinitionRenders:   repo,
 		Notifications:       notificationSvc,
 		Ownership:           repo,
+		Connections:         repo,
 		NewClient:           gitea.NewClient,
 		Logger:              logger,
 	}
@@ -187,6 +188,7 @@ func run() error {
 		// saves commit synchronously.
 		StripPollCredentials: os.Getenv("POLL_SOURCE_CREDENTIALS") != "on",
 		GitPrimary:           pipelinesGitPrimary,
+		Connections:          repo,
 		Logger:               logger,
 	}
 
@@ -296,6 +298,19 @@ func run() error {
 		// consent popup, so GetOAuthClient reports flow_available=false and
 		// the Console points at the central Console for new connections.
 		OAuthClients: &server.OAuthClientServer{Workspaces: resolver, Clients: repo, Logger: logger},
+		// Connections list/delete work box-locally; creating one needs the
+		// consent popup, which stays central until box-local OAuth ships (a
+		// grant minted centrally is not redeemable here — different DB).
+		Connections: &server.ConnectionServer{
+			Workspaces: resolver,
+			Service: &workspace.ConnectionService{
+				Connections:         repo,
+				GoogleOAuth:         repo,
+				PipelineCredentials: repo,
+			},
+			Mirror: pipelineMirror,
+			Logger: logger,
+		},
 	}, authOpts)
 	// oauthClients is wired even though googleOAuth is nil: the box owns the
 	// customer_oauth_clients row, and its mirror needs the pair to render the

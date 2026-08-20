@@ -29,6 +29,12 @@ type BoxCredentialServer struct {
 	// rather than an empty map, so a box can tell "central has no secrets for
 	// me" from "central cannot serve them yet".
 	Secrets workspace.BoxSecretStore
+	// Minter, when set, contributes dynamically-minted secrets to
+	// FetchBoxSecrets on top of the static box_secrets rows (minted wins on a
+	// key collision). Short-lived credentials — the DuckFlight reconcile SQL
+	// with its ~1h Google access token — are minted fresh per fetch, so the
+	// */15 sync loop always delivers a token with most of its life ahead.
+	Minter workspace.BoxSecretMinter
 	// Mirror, when set, re-renders the depositing tenant's pipelines repo
 	// after an age-key deposit so existing pipelines get their
 	// .credentials.age files immediately (the data migration for free).
@@ -204,6 +210,8 @@ func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	secrets = s.mergeMintedSecrets(ctx, caller.Slug, keys, secrets)
+
 	if s.Logger != nil {
 		// Key names and a count only. The values are the payload; none of
 		// them belongs in a log line, and neither does a per-key hit/miss
@@ -211,4 +219,46 @@ func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.
 		s.Logger.Info("box secrets fetched", "slug", caller.Slug, "requested", len(keys), "returned", len(secrets))
 	}
 	return connect.NewResponse(&boxcredentialv1.FetchBoxSecretsResponse{Secrets: secrets}), nil
+}
+
+// mergeMintedSecrets overlays the Minter's dynamically-minted keys onto the
+// static box_secrets rows (minted wins). A minting failure is logged and
+// surfaces as omission, never as an error: failing the whole fetch over one
+// unmintable key would starve the unrelated static secrets in the same sync
+// cycle.
+func (s *BoxCredentialServer) mergeMintedSecrets(ctx context.Context, slug string, keys []string, secrets map[string]string) map[string]string {
+	if s.Minter == nil {
+		return secrets
+	}
+	minted, err := s.Minter.MintBoxSecrets(ctx, slug)
+	if err != nil && s.Logger != nil {
+		s.Logger.WarnContext(ctx, "mint box secrets", "slug", slug, "err", err)
+	}
+	if len(minted) == 0 {
+		return secrets
+	}
+	if secrets == nil {
+		secrets = make(map[string]string, len(minted))
+	}
+	for k, v := range minted {
+		if wantKey(keys, k) {
+			secrets[k] = v
+		}
+	}
+	return secrets
+}
+
+// wantKey applies FetchBoxSecrets' key filter to a minted key: an empty
+// request means "everything", otherwise only requested keys are returned —
+// the same contract the static store honors.
+func wantKey(keys []string, k string) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	for _, want := range keys {
+		if want == k {
+			return true
+		}
+	}
+	return false
 }

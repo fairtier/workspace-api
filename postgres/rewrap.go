@@ -57,6 +57,7 @@ func WorkspaceEncryptedColumns() []EncryptedColumn {
 		{Table: "transformations", KeyColumns: []string{"id"}, Column: "git_credentials"},
 		{Table: "google_oauth_grants", KeyColumns: []string{"grant_id"}, Column: "refresh_token"},
 		{Table: "customer_oauth_clients", KeyColumns: []string{"customer_slug", "provider"}, Column: "client_secret"},
+		{Table: "connections", KeyColumns: []string{"id"}, Column: "credentials"},
 	}
 }
 

@@ -226,6 +226,45 @@ func (c *Client) Exchange(ctx context.Context, code, clientID, clientSecret stri
 	}, nil
 }
 
+// AccessToken mints a short-lived access token from a stored refresh token,
+// under the customer's own OAuth client (a refresh token is only refreshable
+// by the client it was issued to). Implements workspace.GoogleTokenMinter:
+// the box-secrets fetch path mints one per sync cycle so the box engine
+// always holds a token with most of its ~1h lifetime ahead of it.
+func (c *Client) AccessToken(ctx context.Context, refreshToken, clientID, clientSecret string) (string, time.Duration, error) {
+	form := url.Values{}
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", clientID)
+	form.Set("client_secret", clientSecret)
+	form.Set("grant_type", "refresh_token")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", 0, fmt.Errorf("oauthgoogle: build refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("oauthgoogle: token refresh: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	var tr tokenResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		return "", 0, fmt.Errorf("oauthgoogle: decode refresh response (status %d): %w", resp.StatusCode, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || tr.Error != "" {
+		return "", 0, fmt.Errorf("oauthgoogle: token refresh failed (status %d): %s %s", resp.StatusCode, tr.Error, tr.ErrorDesc)
+	}
+	if tr.AccessToken == "" {
+		return "", 0, errors.New("oauthgoogle: no access_token in refresh response")
+	}
+	return tr.AccessToken, time.Duration(tr.ExpiresIn) * time.Second, nil
+}
+
 // emailFromIDToken reads the "email" claim from a Google id_token without
 // verifying the signature — the token came straight from Google's token
 // endpoint over TLS, and it is used for display only. Returns "" on any problem.

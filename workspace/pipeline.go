@@ -151,6 +151,11 @@ type PipelineService struct {
 	// tokens. Per customer rather than one shared app because the pair travels
 	// with the credential onto the customer's own machine. Nil = no injection.
 	OAuthClients OAuthClientStore
+	// Connections resolves workspace-level Connection references
+	// (oauth.connection_id) into their stored refresh tokens at serve time,
+	// and validates the reference on create/update. Nil = connection
+	// references are rejected on save and left unresolved on serve.
+	Connections ConnectionStore
 	// StripPollCredentials removes source_credentials from the worker-facing
 	// GetEnabledPipelines response (pipelines-as-files Phase 3 kill-switch,
 	// env POLL_SOURCE_CREDENTIALS=off) — flip only once the fleet's workers
@@ -269,6 +274,22 @@ func (s *PipelineService) mirrorPipelines(ctx context.Context, callerID core.Use
 // or already-stored credentials. The grant is consumed (one-time use) and its
 // tenant is checked against customerSlug.
 func (s *PipelineService) swapGoogleSheetsGrant(ctx context.Context, customerSlug string, p *Pipeline) error {
+	// A connection reference is stored as-is (resolved at serve/render time so
+	// it follows the connection's lifecycle), but it must exist and belong to
+	// this tenant — otherwise the save would only defer the failure to a run.
+	if connID, ok := googleSheetsConnectionID(p.SourceType, p.SourceCredentials); ok {
+		if s.Connections == nil {
+			return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: connections are not enabled on this server"}
+		}
+		if _, err := s.Connections.GetConnection(ctx, customerSlug, connID); err != nil {
+			if errors.Is(err, ErrConnectionNotFound) {
+				return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: the referenced Google connection does not exist; reconnect in Integrations"}
+			}
+			return fmt.Errorf("resolve connection: %w", err)
+		}
+		return nil
+	}
+
 	grantID, ok := googleSheetsGrantID(p.SourceType, p.SourceCredentials)
 	if !ok {
 		return nil
@@ -548,7 +569,7 @@ func (s *PipelineService) GetEnabledPipelines(ctx context.Context, customerSlug 
 	}
 
 	var storage *core.S3Config // resolved once, only if a file_upload pipeline exists
-	oauth := newOAuthClientResolver(s.OAuthClients, customerSlug)
+	oauth := newOAuthClientResolver(s.OAuthClients, s.Connections, customerSlug)
 	out := pipelines[:0]
 	for _, p := range pipelines {
 		if p.SourceType != SourceTypeFileUpload {
@@ -579,23 +600,62 @@ func (s *PipelineService) GetEnabledPipelines(ctx context.Context, customerSlug 
 }
 
 // oauthClientResolver looks a customer's own Google OAuth app up at most once
-// per batch and injects it into each OAuth google_sheets credential. The lookup
-// is lazy because most batches contain no Sheets pipeline at all, and cached
-// because both callers iterate every pipeline of one customer.
+// per batch and injects it into each OAuth google_sheets credential — first
+// resolving a workspace Connection reference (oauth.connection_id) into the
+// connection's refresh token, so the served credential shape is identical
+// whether the pipeline embeds its token or references a connection. The
+// lookup is lazy because most batches contain no Sheets pipeline at all, and
+// cached because both callers iterate every pipeline of one customer.
 //
 // Shared by the worker poll (GetEnabledPipelines) and the .age render
 // (PipelineMirror): the two must agree byte-for-byte, since the render
 // fingerprint is taken over the injected plaintext.
 type oauthClientResolver struct {
 	clients      OAuthClientStore
+	connections  ConnectionStore
 	customerSlug string
 	resolved     bool
 	clientID     string
 	clientSecret string
+	// connCache caches per-connection resolution for the batch; nil value =
+	// lookup failed (do not retry within the batch).
+	connCache map[string]*googleConnectionCredentials
 }
 
-func newOAuthClientResolver(clients OAuthClientStore, customerSlug string) *oauthClientResolver {
-	return &oauthClientResolver{clients: clients, customerSlug: customerSlug}
+func newOAuthClientResolver(clients OAuthClientStore, connections ConnectionStore, customerSlug string) *oauthClientResolver {
+	return &oauthClientResolver{clients: clients, connections: connections, customerSlug: customerSlug}
+}
+
+// resolveConnectionCredential expands a connection-referencing credential into
+// the embedded-token shape ({"oauth":{refresh_token,email,client_id}}), or
+// returns (nil, false) when the credential does not reference a connection or
+// the connection cannot be resolved. The connection_id is deliberately absent
+// from the output: the worker-facing shape must be byte-identical to an
+// embedded credential's.
+func (r *oauthClientResolver) resolveConnectionCredential(ctx context.Context, sourceType string, raw json.RawMessage) (json.RawMessage, bool) {
+	connID, ok := googleSheetsConnectionID(sourceType, raw)
+	if !ok || r.connections == nil {
+		return nil, false
+	}
+	if r.connCache == nil {
+		r.connCache = make(map[string]*googleConnectionCredentials)
+	}
+	gc, cached := r.connCache[connID]
+	if !cached {
+		gc = nil
+		if conn, err := r.connections.GetConnection(ctx, r.customerSlug, connID); err == nil {
+			gc, _ = conn.googleCredentials()
+		}
+		r.connCache[connID] = gc
+	}
+	if gc == nil {
+		return nil, false
+	}
+	resolved, err := googleSheetsStoredOAuthCreds(gc.RefreshToken, gc.Email, gc.ClientID)
+	if err != nil {
+		return nil, false
+	}
+	return resolved, true
 }
 
 // load fetches the customer's app once. A missing app is cached as the empty
@@ -617,25 +677,53 @@ func (r *oauthClientResolver) load(ctx context.Context) {
 	r.clientID, r.clientSecret = cc.ClientID, cc.ClientSecret
 }
 
-// inject returns the credential with the customer's client pair added, or
-// (nil, false) to leave it untouched.
+// inject returns the credential with a referenced connection expanded and the
+// customer's client pair added, or (nil, false) to leave it untouched.
+//
+// A connection-resolved credential is returned even when the client pair
+// cannot be injected (no app connected, or a client-id mismatch): rendering
+// the refresh token without its pair fails the run on a missing client_id —
+// the same honest signal an embedded credential gives — whereas returning the
+// raw connection_id would fail on a missing refresh_token, one step further
+// from the cause.
 func (r *oauthClientResolver) inject(ctx context.Context, p *Pipeline) (json.RawMessage, bool) {
 	if p.SourceType != "google_sheets" {
 		return nil, false
 	}
+	raw := p.SourceCredentials
+	resolvedFromConnection := false
+	if resolved, ok := r.resolveConnectionCredential(ctx, p.SourceType, raw); ok {
+		raw = resolved
+		resolvedFromConnection = true
+	}
 	r.load(ctx)
 	if r.clientID == "" || r.clientSecret == "" {
+		if resolvedFromConnection {
+			return raw, true
+		}
 		return nil, false
 	}
-	return injectGoogleSheetsOAuthClient(p.SourceType, p.SourceCredentials, r.clientID, r.clientSecret)
+	if injected, ok := injectGoogleSheetsOAuthClient(p.SourceType, raw, r.clientID, r.clientSecret); ok {
+		return injected, true
+	}
+	if resolvedFromConnection {
+		return raw, true
+	}
+	return nil, false
 }
 
 // staleClientID reports whether a stored OAuth credential names a client other
 // than the customer's current one — i.e. the connection is dead and needs a
-// reconnect. Returns false when there is nothing to compare against, so a
-// customer who has not connected an app yet is not nagged about it.
+// reconnect. Connection references are resolved first, so a pipeline hanging
+// off a stale workspace connection is reported the same way as one with a
+// stale embedded token. Returns false when there is nothing to compare
+// against, so a customer who has not connected an app yet is not nagged.
 func (r *oauthClientResolver) staleClientID(ctx context.Context, p *Pipeline) bool {
-	storedID, isOAuth := googleSheetsOAuthClientID(p.SourceType, p.SourceCredentials)
+	raw := p.SourceCredentials
+	if resolved, ok := r.resolveConnectionCredential(ctx, p.SourceType, raw); ok {
+		raw = resolved
+	}
+	storedID, isOAuth := googleSheetsOAuthClientID(p.SourceType, raw)
 	if !isOAuth {
 		return false
 	}

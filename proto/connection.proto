@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package connection.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/connection/v1;connectionv1";
+
+// ConnectionService manages workspace-level Connections: one authorization to
+// an external system, consumed by more than one feature. The customer
+// connects Google ONCE; DLT pipelines reference the connection instead of
+// embedding a refresh token, and the box query engine receives short-lived
+// tokens minted from it (query-time federation). Deleting the connection
+// kills every consumer — which is what "disconnect Google" should mean.
+//
+// All RPCs are tenant-scoped from the caller's JWT; there is no slug
+// parameter. Credentials are write-only by construction: creation consumes a
+// server-side grant reference, and no RPC ever returns a token.
+service ConnectionService {
+  // ListConnections returns the workspace's connections, newest first.
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse) {}
+
+  // CreateConnection creates a connection from a provider-specific source.
+  // For Google, the source is a grant_id from the "Sign in with Google"
+  // popup — one-time use, minted by /oauth/google/callback.
+  rpc CreateConnection(CreateConnectionRequest) returns (CreateConnectionResponse) {}
+
+  // DeleteConnection removes a connection. Refused with FailedPrecondition
+  // while a pipeline still references it — detach or delete those first.
+  // The box engine's minted token expires on its own shortly after.
+  rpc DeleteConnection(DeleteConnectionRequest) returns (DeleteConnectionResponse) {}
+}
+
+// Connection is the wire shape of one workspace connection. No credential
+// material, ever — email is display metadata from the consent.
+message Connection {
+  string id = 1;
+  // Type key: "google" today.
+  string type = 2;
+  // Display name; defaults to the granting account's email.
+  string name = 3;
+  string status = 4;
+  // Granting account email, for display (google connections).
+  string email = 5;
+  // RFC 3339 creation timestamp.
+  string created_at = 6;
+}
+
+message ListConnectionsRequest {}
+
+message ListConnectionsResponse {
+  repeated Connection connections = 1;
+}
+
+message CreateConnectionRequest {
+  // Optional display name; defaults to the granting account's email.
+  string name = 1;
+  // Provider-specific source of the authorization.
+  oneof source {
+    // A grant_id from the Google consent popup (one-time use).
+    string google_grant_id = 2;
+  }
+}
+
+message CreateConnectionResponse {
+  Connection connection = 1;
+}
+
+message DeleteConnectionRequest {
+  string id = 1;
+}
+
+message DeleteConnectionResponse {}

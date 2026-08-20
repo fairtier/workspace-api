@@ -384,17 +384,23 @@ type googleSheetsCreds struct {
 }
 
 // googleSheetsOAuth is the delegated-user OAuth credential for Google Sheets.
-// It takes three shapes across its lifecycle:
+// It takes several shapes across its lifecycle:
 //
-//   - Console input (create/update): only GrantID is set — a reference to a
-//     short-lived server-side grant minted by the /oauth/google/callback flow.
-//     PipelineService swaps it for the stored RefreshToken before persisting so
-//     the refresh token never travels through the browser.
+//   - Console input (create/update): either GrantID — a reference to a
+//     short-lived server-side grant minted by the /oauth/google/callback flow,
+//     which PipelineService swaps for the stored RefreshToken before
+//     persisting so the refresh token never travels through the browser — or
+//     ConnectionID, a reference to a workspace-level Connection (the "connect
+//     Google once" entity) that stays a reference at rest.
 //   - Stored (encrypted at rest): RefreshToken (+ Email for display, + ClientID
-//     recording which of the customer's OAuth apps minted the token).
+//     recording which of the customer's OAuth apps minted the token), OR just
+//     ConnectionID for connection-referencing pipelines.
 //   - Served to the worker: RefreshToken plus ClientID/ClientSecret, resolved
-//     per customer from their own OAuth app (OAuthClientStore) by
-//     GetEnabledPipelines and by the mirror's .age render.
+//     per customer from their own OAuth app (OAuthClientStore) — and, for
+//     ConnectionID rows, the refresh token resolved from the Connection first —
+//     by GetEnabledPipelines and by the mirror's .age render. The served shape
+//     is identical for both storage forms, so the worker never learns which
+//     one a pipeline uses.
 //
 // ClientID is stored but ClientSecret never is. Storing the id is what lets a
 // stale connection be reported rather than merely failing: a refresh token is
@@ -403,6 +409,7 @@ type googleSheetsCreds struct {
 // against the current one is the only way to know that before the run.
 type googleSheetsOAuth struct {
 	GrantID      string `json:"grant_id,omitempty"`
+	ConnectionID string `json:"connection_id,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	Email        string `json:"email,omitempty"`
 	ClientID     string `json:"client_id,omitempty"`
@@ -436,11 +443,12 @@ func validateGoogleSheetsCreds(raw json.RawMessage) error {
 	}
 }
 
-// validateGoogleSheetsOAuth accepts either shape the Console/store can present:
-// a grant_id (create/update input) or a refresh_token (already-stored form).
+// validateGoogleSheetsOAuth accepts any shape the Console/store can present:
+// a grant_id (one-shot Sign in with Google), a connection_id (workspace-level
+// Google connection), or a refresh_token (already-stored form).
 func validateGoogleSheetsOAuth(o *googleSheetsOAuth) error {
-	if o.GrantID == "" && o.RefreshToken == "" {
-		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: oauth requires grant_id (from Sign in with Google) or refresh_token"}
+	if o.GrantID == "" && o.ConnectionID == "" && o.RefreshToken == "" {
+		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: oauth requires grant_id (from Sign in with Google), connection_id, or refresh_token"}
 	}
 	return nil
 }
@@ -480,6 +488,24 @@ func googleSheetsGrantID(sourceType string, raw json.RawMessage) (string, bool) 
 		return "", false
 	}
 	return creds.OAuth.GrantID, true
+}
+
+// googleSheetsConnectionID returns the workspace Connection referenced by a
+// google_sheets pipeline's credentials, or ("", false) when the pipeline is
+// not google_sheets, carries no oauth.connection_id, or already embeds a
+// refresh token (embedded wins: it is the resolved form).
+func googleSheetsConnectionID(sourceType string, raw json.RawMessage) (string, bool) {
+	if sourceType != "google_sheets" || isEmptyJSON(raw) {
+		return "", false
+	}
+	var creds googleSheetsCreds
+	if err := json.Unmarshal(raw, &creds); err != nil || creds.OAuth == nil {
+		return "", false
+	}
+	if creds.OAuth.ConnectionID == "" || creds.OAuth.RefreshToken != "" {
+		return "", false
+	}
+	return creds.OAuth.ConnectionID, true
 }
 
 // googleSheetsStoredOAuthCreds builds the persisted credential JSON for an

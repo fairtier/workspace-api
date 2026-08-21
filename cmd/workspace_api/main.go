@@ -327,7 +327,7 @@ func run() error {
 	server.RegisterWorkspacePlainHTTP(mux, logger, userAuth, db, resolver, repo, repo, fileDropSvc, googleOAuth, firstCORSOrigin())
 	// The pre-authentication discovery document.
 	server.RegisterWorkspaceBootstrap(mux, logger,
-		server.BootstrapFromWorkspace(ws, consoleClientID(logger), fileDropSvc != nil, false))
+		server.BootstrapFromWorkspace(ws, consoleClientID(logger), fileDropSvc != nil, googleOAuth != nil))
 
 	// Internal mux (:8081): the local dlt-worker's poll + run reporting.
 	// The worker authenticates with a token from the box's own Casdoor;

@@ -169,21 +169,9 @@ func (s *ConnectionService) CreateGoogleConnection(ctx context.Context, customer
 		return nil, fmt.Errorf("list connections: %w", err)
 	}
 
-	grant, err := s.GoogleOAuth.ConsumeGoogleOAuthGrant(ctx, grantID, customerSlug)
+	grant, creds, err := s.redeemGoogleGrant(ctx, customerSlug, grantID)
 	if err != nil {
-		if errors.Is(err, ErrOAuthGrantNotFound) {
-			return nil, ErrOAuthGrantNotFound
-		}
-		return nil, fmt.Errorf("consume oauth grant: %w", err)
-	}
-
-	creds, err := json.Marshal(googleConnectionCredentials{
-		RefreshToken: grant.RefreshToken,
-		Email:        grant.Email,
-		ClientID:     grant.ClientID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build connection credentials: %w", err)
+		return nil, err
 	}
 
 	// Reconnect: same account, same connection. The display name is left
@@ -197,19 +185,11 @@ func (s *ConnectionService) CreateGoogleConnection(ctx context.Context, customer
 		return prior, nil
 	}
 
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = grant.Email
-	}
-	if name == "" {
-		name = "Google"
-	}
-
 	c := &Connection{
 		ID:           newConnectionID(),
 		CustomerSlug: customerSlug,
 		Type:         ConnectionTypeGoogle,
-		Name:         name,
+		Name:         googleConnectionName(name, grant.Email),
 		Status:       "active",
 		Config:       json.RawMessage(`{}`),
 		Credentials:  creds,
@@ -218,6 +198,43 @@ func (s *ConnectionService) CreateGoogleConnection(ctx context.Context, customer
 		return nil, err
 	}
 	return c, nil
+}
+
+// redeemGoogleGrant consumes the one-time grant and packs it into the stored
+// credential form. Split out of CreateGoogleConnection so the create/reconnect
+// decision reads at one level.
+func (s *ConnectionService) redeemGoogleGrant(ctx context.Context, customerSlug, grantID string) (*GoogleOAuthGrant, json.RawMessage, error) {
+	grant, err := s.GoogleOAuth.ConsumeGoogleOAuthGrant(ctx, grantID, customerSlug)
+	if err != nil {
+		if errors.Is(err, ErrOAuthGrantNotFound) {
+			return nil, nil, ErrOAuthGrantNotFound
+		}
+		return nil, nil, fmt.Errorf("consume oauth grant: %w", err)
+	}
+
+	creds, err := json.Marshal(googleConnectionCredentials{
+		RefreshToken: grant.RefreshToken,
+		Email:        grant.Email,
+		ClientID:     grant.ClientID,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("build connection credentials: %w", err)
+	}
+	return grant, creds, nil
+}
+
+// googleConnectionName picks a fresh connection's display name: the caller's
+// explicit name, else the granting email, else a literal fallback for the
+// rare consent that yields no identity.
+func googleConnectionName(name, email string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = email
+	}
+	if name == "" {
+		name = "Google"
+	}
+	return name
 }
 
 // findGoogleConnectionByEmail returns the workspace's existing connection for

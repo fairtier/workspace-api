@@ -42,6 +42,20 @@ type WorkspaceBootstrap struct {
 	// advertises no sign-in rather than starting a flow that cannot finish.
 	ConsoleClientID string `json:"console_client_id"`
 
+	// Public endpoints of the workspace's sibling services, so the Console
+	// can render the catalog connection card and launch links without a
+	// second discovery call. Same disclosure class as CustomerDomain: all
+	// are public DNS names under the customer domain (or the operator's
+	// explicitly configured equivalents), and the warehouse is a label, not
+	// a credential — the DuckFlight *token* stays out, as ever. Rill and
+	// Cube travel only while the app is enabled, so the document never
+	// advertises an endpoint nothing serves.
+	LakekeeperURL       string `json:"lakekeeper_url"`
+	LakekeeperWarehouse string `json:"lakekeeper_warehouse"`
+	RillURL             string `json:"rill_url,omitempty"`
+	CubeURL             string `json:"cube_url,omitempty"`
+	DuckFlightURL       string `json:"duckflight_url"`
+
 	Capabilities WorkspaceCapabilities `json:"capabilities"`
 }
 
@@ -79,12 +93,24 @@ type WorkspaceCapabilities struct {
 // answer 501 when absent, so the capability has to follow what was actually
 // mounted.
 func BootstrapFromWorkspace(ws *workspace.Workspace, consoleClientID string, fileDrop, googleOAuth bool) *WorkspaceBootstrap {
+	rillURL, cubeURL := "", ""
+	if ws.RillEnabled {
+		rillURL = ws.RillURL
+	}
+	if ws.CubeEnabled {
+		cubeURL = ws.CubeURL
+	}
 	return &WorkspaceBootstrap{
-		Slug:            ws.Slug,
-		CustomerDomain:  ws.CustomerDomain,
-		CasdoorIssuer:   ws.CasdoorIssuer,
-		CasdoorOrg:      ws.CasdoorOrg,
-		ConsoleClientID: consoleClientID,
+		Slug:                ws.Slug,
+		CustomerDomain:      ws.CustomerDomain,
+		CasdoorIssuer:       ws.CasdoorIssuer,
+		CasdoorOrg:          ws.CasdoorOrg,
+		ConsoleClientID:     consoleClientID,
+		LakekeeperURL:       ws.LakekeeperURL,
+		LakekeeperWarehouse: ws.LakekeeperWarehouse,
+		RillURL:             rillURL,
+		CubeURL:             cubeURL,
+		DuckFlightURL:       ws.DuckFlightURL,
 		Capabilities: WorkspaceCapabilities{
 			ControlPlane: false,
 			Rill:         ws.RillEnabled,

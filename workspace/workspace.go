@@ -54,6 +54,12 @@ type Workspace struct {
 
 	RillEnabled bool
 	CubeEnabled bool
+
+	// RillURL / CubeURL are the external (browser-facing) UIs of the
+	// respective apps, for the Console to link out to. Meaningful only while
+	// the app is enabled.
+	RillURL string
+	CubeURL string
 }
 
 // LakekeeperServiceURL returns the cluster-internal Lakekeeper URL on the

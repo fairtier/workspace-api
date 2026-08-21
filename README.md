@@ -83,6 +83,7 @@ for co-located workers and should not be published.
 | `WORKSPACE_OIDC_CLIENT_ID`, `WORKSPACE_OIDC_CLIENT_SECRET` | | Client credentials used to manage catalog service accounts. |
 | `WORKSPACE_LAKEKEEPER_URL`, `WORKSPACE_LAKEKEEPER_WAREHOUSE` | | Iceberg REST catalog endpoint and warehouse name. |
 | `WORKSPACE_DUCKFLIGHT_URL`, `WORKSPACE_DUCKFLIGHT_AUTH_TOKEN` | | Flight SQL endpoint backing the query service. |
+| `WORKSPACE_RILL_URL`, `WORKSPACE_CUBE_URL` | | Browser-facing UI URLs of the Rill / Cube apps, published to the Console via the bootstrap document while the app is enabled. Default to `https://rill.<domain>` / `https://cube.<domain>`. |
 | `WORKSPACE_S3_*` | | Object storage for uploads and snapshots: `ENDPOINT`, `REGION`, `BUCKET`, `KEY_PREFIX`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`. |
 | `CREDENTIAL_ENCRYPTION_KEY` | | Base64 32-byte key used to encrypt stored source credentials at rest. Set it in any real deployment. Every process sharing the database must be given the same one. |
 | `CREDENTIAL_ENCRYPTION_KEYS_PREVIOUS` | | Comma-separated base64 keys that are no longer written under but must still decrypt. Set only while [rotating](#rotating-the-credential-encryption-key). |

@@ -490,6 +490,8 @@ func loadStaticWorkspace() (*workspace.Workspace, error) {
 		EffectiveS3:         loadS3Config(),
 		RillEnabled:         os.Getenv("WORKSPACE_RILL_ENABLED") != "false",
 		CubeEnabled:         os.Getenv("WORKSPACE_CUBE_ENABLED") == "true",
+		RillURL:             cmp.Or(os.Getenv("WORKSPACE_RILL_URL"), "https://rill."+customerDomain),
+		CubeURL:             cmp.Or(os.Getenv("WORKSPACE_CUBE_URL"), "https://cube."+customerDomain),
 	}, nil
 }
 

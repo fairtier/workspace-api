@@ -25,14 +25,22 @@ func TestBootstrapLeaksNoSecret(t *testing.T) {
 	// The fields a caller with no token is allowed to learn. Every one is
 	// public by construction — see the WorkspaceBootstrap doc comment.
 	public := map[string]bool{
-		"Slug":           true,
-		"CustomerDomain": true,
-		"CasdoorIssuer":  true,
-		"CasdoorOrg":     true,
+		"Slug":                true,
+		"CustomerDomain":      true,
+		"CasdoorIssuer":       true,
+		"CasdoorOrg":          true,
+		"LakekeeperURL":       true,
+		"LakekeeperWarehouse": true,
+		"RillURL":             true,
+		"CubeURL":             true,
+		"DuckFlightURL":       true,
 	}
 
 	var ws workspace.Workspace
 	sentinels := fillStrings(reflect.ValueOf(&ws).Elem(), "")
+	// Rill/Cube URLs only travel while the app is enabled; enable both so
+	// their sentinels must appear (and everything else still must not).
+	ws.RillEnabled, ws.CubeEnabled = true, true
 
 	doc := BootstrapFromWorkspace(&ws, "console-client-id", true, true)
 	encoded, err := json.Marshal(doc)
@@ -104,6 +112,28 @@ func TestBootstrapCapabilities(t *testing.T) {
 	}
 }
 
+// The endpoint URLs of the optional apps must follow their enablement: a
+// disabled app's URL still sits on the Workspace (env defaults fill it), and
+// publishing it would advertise an endpoint nothing serves.
+func TestBootstrapEndpointsFollowEnablement(t *testing.T) {
+	ws := &workspace.Workspace{
+		Slug:        "acme",
+		RillEnabled: true,
+		RillURL:     "https://rill.customer-acme.example.com",
+		// CubeEnabled stays false.
+		CubeURL: "https://cube.customer-acme.example.com",
+	}
+
+	doc := BootstrapFromWorkspace(ws, "console", false, false)
+
+	if doc.RillURL != ws.RillURL {
+		t.Errorf("RillURL = %q, want %q (rill is enabled)", doc.RillURL, ws.RillURL)
+	}
+	if doc.CubeURL != "" {
+		t.Errorf("CubeURL = %q, want empty (cube is disabled)", doc.CubeURL)
+	}
+}
+
 // The Console reads this document before it can authenticate, so the handler
 // must answer without a token and in the shape the Console parses.
 func TestBootstrapHandlerServesJSONUnauthenticated(t *testing.T) {
@@ -129,7 +159,7 @@ func TestBootstrapHandlerServesJSONUnauthenticated(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	for _, key := range []string{"slug", "customer_domain", "casdoor_issuer", "casdoor_org", "console_client_id", "capabilities"} {
+	for _, key := range []string{"slug", "customer_domain", "casdoor_issuer", "casdoor_org", "console_client_id", "lakekeeper_url", "lakekeeper_warehouse", "duckflight_url", "capabilities"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("bootstrap document is missing %q: %s", key, rec.Body.String())
 		}

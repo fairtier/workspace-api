@@ -495,33 +495,40 @@ func (m *PipelineMirror) clientFor(ctx context.Context, customerSlug string) (Re
 }
 
 // boxMirrorClientFor is the scope gate shared by the pipeline and
-// transformation mirrors: VM substrate, a resolvable box domain, and a
-// deposited box git credential. ok=false means the customer is out of mirror
-// scope, and the caller skips them.
+// transformation mirrors: a credential source at all, VM substrate, a
+// resolvable box domain, and a box git credential for that slug. ok=false
+// means the customer is out of mirror scope, and the caller skips them.
 //
-// Only ONE of the three ways to be out of scope is legitimate — a non-VM
-// customer has no box to mirror to, and that is the steady state for every
-// frozen shared-K3s tenant. The other two say a customer who SHOULD be
-// mirrored cannot be, and they are logged rather than passed over, because
-// the caller cannot tell them apart from the legitimate case: every skip
-// returns the same (false, nil), converge and adopt then do nothing, and a
-// git-primary save still reports success having written no commit.
+// Only TWO of the four ways to be out of scope are legitimate — a deployment
+// with no credential source cannot converge any box repo (which is central
+// after split Phase 3E: the deposits are gone and a box writes its own
+// repos), and a non-VM customer has no box to converge against at all (the
+// steady state for every frozen shared-K3s tenant). Both are structural, so
+// both are silent.
 //
-// That distinction is load-bearing for the deposit retirement (split Phase
-// 3E). Removing box_git_credentials turns the credential branch below into
-// the answer for EVERY not-yet-cut-over customer at once, which without a
-// log is a fleet-wide no-op that looks exactly like a clean deletion.
+// The other two say a customer who SHOULD be mirrored cannot be, and they are
+// logged rather than passed over, because the caller cannot tell them apart
+// from the legitimate cases: every skip returns the same (false, nil),
+// converge and adopt then do nothing, and a git-primary save still reports
+// success having written no commit.
 //
 // Deliberately not deduped across sweeps. A warning that fires once and then
 // goes quiet is the failure shape this exists to prevent; a customer stuck
 // here is still broken on the tenth pass, and the log should keep saying so.
 func boxMirrorClientFor(ctx context.Context, workspaces Resolver, credentials BoxGitCredentialStore, newClient func(baseURL, username, token string) RepoFileClient, customerSlug string, logger *slog.Logger) (RepoFileClient, *Workspace, bool, error) {
+	if credentials == nil {
+		// Structural, not per-customer: this deployment holds no box git
+		// credential for anyone, so there is nothing to say about this slug
+		// that is not equally true of every other. Logged once at wiring
+		// time by the caller, not once per customer per sweep.
+		return nil, nil, false, nil
+	}
 	ws, err := workspaces.GetWorkspace(ctx, customerSlug)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("get customer: %w", err)
 	}
 	if !ws.OnVM {
-		// The one legitimate skip: no box exists to converge against.
+		// Legitimate skip: no box exists to converge against.
 		return nil, nil, false, nil
 	}
 	domainName := strings.TrimPrefix(ws.CustomerDomain, "*.")

@@ -274,20 +274,11 @@ func TestFetchBoxSecrets_MinterOnlyHonorsTheKeyFilter(t *testing.T) {
 }
 
 func TestDeposits_UnwiredStoresAreUnimplemented(t *testing.T) {
-	// The minter-only server mounts the whole service, so the deposit RPCs
-	// become reachable on a box; nil stores must refuse cleanly, not panic.
+	// The minter-only server mounts the whole service, so the deposit RPC
+	// becomes reachable on a box; a nil store must refuse cleanly, not panic.
 	srv := &BoxCredentialServer{Minter: &fakeMinter{}}
 	caller := withBoxCaller("dlt-worker", "acme")
 
-	if _, err := srv.DepositGitToken(caller, connect.NewRequest(&boxcredentialv1.DepositGitTokenRequest{Username: "u", Token: "t"})); connect.CodeOf(err) != connect.CodeUnimplemented {
-		t.Errorf("DepositGitToken code = %v, want Unimplemented", connect.CodeOf(err))
-	}
-	if _, err := srv.DepositSnapshotToken(caller, connect.NewRequest(&boxcredentialv1.DepositSnapshotTokenRequest{Token: "t"})); connect.CodeOf(err) != connect.CodeUnimplemented {
-		t.Errorf("DepositSnapshotToken code = %v, want Unimplemented", connect.CodeOf(err))
-	}
-	if _, err := srv.DepositAgePublicKey(caller, connect.NewRequest(&boxcredentialv1.DepositAgePublicKeyRequest{PublicKey: "age1"})); connect.CodeOf(err) != connect.CodeUnimplemented {
-		t.Errorf("DepositAgePublicKey code = %v, want Unimplemented", connect.CodeOf(err))
-	}
 	if _, err := srv.DepositFederationClient(caller, depositFederation("cid", "csecret")); connect.CodeOf(err) != connect.CodeUnimplemented {
 		t.Errorf("DepositFederationClient code = %v, want Unimplemented", connect.CodeOf(err))
 	}

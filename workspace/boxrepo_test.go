@@ -148,6 +148,17 @@ func TestBoxRepoService_Gates(t *testing.T) {
 		}
 	})
 
+	t.Run("no credential store at all is unavailable, not a panic", func(t *testing.T) {
+		// Central after split Phase 3E: the deposits are retired, so nothing
+		// wires a credential source and every box's repo editor is served by
+		// the box itself. The gate must answer before the store is touched.
+		svc := boxRepoService(boxCustomer(), nil, &fakeRepoClient{})
+		_, err := svc.ListFiles(context.Background(), "u1", "rill")
+		if !errors.Is(err, workspace.ErrBoxRepoUnavailable) {
+			t.Fatalf("want ErrBoxRepoUnavailable, got %v", err)
+		}
+	})
+
 	t.Run("requires deposited credential", func(t *testing.T) {
 		svc := boxRepoService(boxCustomer(), &fakeCredStore{err: workspace.ErrBoxCredentialNotFound}, &fakeRepoClient{})
 		_, err := svc.ListFiles(context.Background(), "u1", "rill")

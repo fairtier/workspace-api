@@ -40,6 +40,12 @@ func (s *SnapshotServer) sidecarTarget(ctx context.Context, ws *workspace.Worksp
 		if ws.CustomerDomain == "" {
 			return "", "", connect.NewError(connect.CodeFailedPrecondition, errors.New("customer not yet provisioned"))
 		}
+		if s.Snapshots == nil {
+			// No credential source at all: this deployment cannot reach any
+			// box's snapshot sidecar. That is central after split Phase 3E —
+			// the box's own workspace plane serves its snapshots.
+			return "", "", connect.NewError(connect.CodeUnimplemented, errors.New("snapshots for a dedicated-VM box are served by the box's own workspace API"))
+		}
 		cred, err := s.Snapshots.GetBoxSnapshotCredential(ctx, ws.Slug)
 		if errors.Is(err, workspace.ErrBoxCredentialNotFound) {
 			return "", "", connect.NewError(connect.CodeFailedPrecondition, errors.New("the box has not deposited its snapshot token yet — retry after its next sync"))

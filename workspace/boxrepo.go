@@ -361,6 +361,12 @@ func (s *BoxRepoService) mirrorClientFor(ctx context.Context, callerID core.User
 // and mirror surfaces and returns the box's Gitea base URL plus the
 // deposited credential.
 func (s *BoxRepoService) boxGitea(ctx context.Context, callerID core.UserID, repo string) (string, *BoxGitCredential, error) {
+	if s.Credentials == nil {
+		// No credential source at all: this deployment cannot reach any
+		// box's Gitea. That is central after split Phase 3E — the box repo
+		// editor is served by the box's own workspace plane.
+		return "", nil, ErrBoxRepoUnavailable
+	}
 	ws, err := s.Workspaces.GetWorkspaceByUser(ctx, callerID)
 	if err != nil {
 		return "", nil, fmt.Errorf("get customer: %w", err)

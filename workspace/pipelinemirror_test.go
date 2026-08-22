@@ -928,6 +928,25 @@ func TestPipelineMirror_GateSkipsAreLogged(t *testing.T) {
 		warned(t, *records)
 	})
 
+	t.Run("no credential store at all stays silent", func(t *testing.T) {
+		logger, records := newCapture()
+		m := mirrorFor(boxCustomer(), newFakeMirrorRepo(nil), nil)
+		m.Pipelines = pipelinesMustNotBeListed
+		m.Credentials = nil // central after split Phase 3E
+		m.Logger = logger
+		if err := m.SyncCustomer(context.Background(), "acme", nil); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+		// The other legitimate skip, and the reason it is not the same as
+		// the one above: with no store there is nothing true of THIS
+		// customer that is not equally true of every other, so a per-customer
+		// warning would fire on the whole fleet every sweep and say only
+		// that the deployment is wired the way it is meant to be.
+		if len(*records) != 0 {
+			t.Fatalf("a deployment that holds no box credentials must not warn per customer, got %d records", len(*records))
+		}
+	})
+
 	t.Run("a nil logger is still only a skip", func(t *testing.T) {
 		m := mirrorFor(boxCustomer(), newFakeMirrorRepo(nil), nil)
 		m.Pipelines = pipelinesMustNotBeListed

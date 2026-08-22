@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -852,6 +853,106 @@ func TestPipelineMirror_Gates(t *testing.T) {
 		}
 	})
 }
+
+// TestPipelineMirror_GateSkipsAreLogged pins WHICH skips are silent. All four
+// gates above return the same (false, nil) and converge nothing, so silence is
+// the only thing separating "this customer has no box" from "this customer has
+// a box we cannot reach". Retiring the central deposits (split Phase 3E) turns
+// the credential gate into the answer for every not-yet-cut-over customer at
+// once; without a log that reads as a clean deletion instead of a fleet-wide
+// no-op.
+func TestPipelineMirror_GateSkipsAreLogged(t *testing.T) {
+	pipelinesMustNotBeListed := &mockPipelineRepo{
+		listPipelinesByCustomerFn: func(context.Context, string) ([]workspace.Pipeline, error) {
+			return nil, errors.New("must not be called")
+		},
+	}
+
+	// Captures records rather than bytes, so the assertion is on level and
+	// not on the formatting of a message.
+	newCapture := func() (*slog.Logger, *[]slog.Record) {
+		var got []slog.Record
+		h := &captureHandler{records: &got}
+		return slog.New(h), &got
+	}
+
+	warned := func(t *testing.T, records []slog.Record) {
+		t.Helper()
+		for _, r := range records {
+			if r.Level == slog.LevelWarn {
+				return
+			}
+		}
+		t.Fatalf("a customer that should be mirrored but cannot be must warn, got %d records", len(records))
+	}
+
+	t.Run("shared substrate stays silent", func(t *testing.T) {
+		logger, records := newCapture()
+		ws := &workspace.Workspace{Slug: "acme"} // OnVM=false = shared
+		m := mirrorFor(ws, newFakeMirrorRepo(nil), nil)
+		m.Pipelines = pipelinesMustNotBeListed
+		m.Logger = logger
+		if err := m.SyncCustomer(context.Background(), "acme", nil); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+		// The one legitimate skip: warning here would cry wolf on every
+		// frozen shared-K3s tenant, every sweep, forever — which is how a
+		// real warning stops being read.
+		if len(*records) != 0 {
+			t.Fatalf("a customer with no box must not warn, got %d records", len(*records))
+		}
+	})
+
+	t.Run("missing deposited credential warns", func(t *testing.T) {
+		logger, records := newCapture()
+		m := mirrorFor(boxCustomer(), newFakeMirrorRepo(nil), nil)
+		m.Pipelines = pipelinesMustNotBeListed
+		m.Credentials = &fakeCredStore{err: workspace.ErrBoxCredentialNotFound}
+		m.Logger = logger
+		if err := m.SyncCustomer(context.Background(), "acme", nil); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+		warned(t, *records)
+	})
+
+	t.Run("VM customer with no domain warns", func(t *testing.T) {
+		logger, records := newCapture()
+		ws := boxCustomer()
+		ws.CustomerDomain = ""
+		m := mirrorFor(ws, newFakeMirrorRepo(nil), nil)
+		m.Pipelines = pipelinesMustNotBeListed
+		m.Logger = logger
+		if err := m.SyncCustomer(context.Background(), "acme", nil); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+		warned(t, *records)
+	})
+
+	t.Run("a nil logger is still only a skip", func(t *testing.T) {
+		m := mirrorFor(boxCustomer(), newFakeMirrorRepo(nil), nil)
+		m.Pipelines = pipelinesMustNotBeListed
+		m.Credentials = &fakeCredStore{err: workspace.ErrBoxCredentialNotFound}
+		m.Logger = nil
+		if err := m.SyncCustomer(context.Background(), "acme", nil); err != nil {
+			t.Fatalf("a nil logger must not turn a skip into an error, got %v", err)
+		}
+	})
+}
+
+type captureHandler struct {
+	records *[]slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r)
+	return nil
+}
+
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *captureHandler) WithGroup(string) slog.Handler { return h }
 
 func TestPipelineMirror_Versions(t *testing.T) {
 	pipe := workspace.Pipeline{

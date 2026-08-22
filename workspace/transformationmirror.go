@@ -120,7 +120,7 @@ func (m *TransformationMirror) SyncCustomer(ctx context.Context, customerSlug st
 	started, inScope := time.Now(), false
 	defer func() { recordSync(ctx, span, planeTransformations, started, err, inScope) }()
 
-	client, _, ok, err := boxMirrorClientFor(ctx, m.Workspaces, m.Credentials, m.NewClient, customerSlug)
+	client, _, ok, err := boxMirrorClientFor(ctx, m.Workspaces, m.Credentials, m.NewClient, customerSlug, m.Logger)
 	if err != nil || !ok {
 		return err
 	}

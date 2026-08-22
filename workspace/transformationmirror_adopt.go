@@ -40,7 +40,7 @@ func (m *TransformationMirror) AdoptCustomer(ctx context.Context, customerSlug s
 	))
 	defer func() { endSpan(span, err) }()
 
-	client, _, ok, err := boxMirrorClientFor(ctx, m.Workspaces, m.Credentials, m.NewClient, customerSlug)
+	client, _, ok, err := boxMirrorClientFor(ctx, m.Workspaces, m.Credentials, m.NewClient, customerSlug, m.Logger)
 	if err != nil || !ok {
 		return err
 	}

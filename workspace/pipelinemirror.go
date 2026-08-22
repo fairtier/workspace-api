@@ -491,27 +491,58 @@ func (m *PipelineMirror) versionClient(ctx context.Context, customerSlug string,
 // can reach EffectiveS3 (for file_upload → filesystem rewriting) without a
 // second lookup.
 func (m *PipelineMirror) clientFor(ctx context.Context, customerSlug string) (RepoFileClient, *Workspace, bool, error) {
-	return boxMirrorClientFor(ctx, m.Workspaces, m.Credentials, m.NewClient, customerSlug)
+	return boxMirrorClientFor(ctx, m.Workspaces, m.Credentials, m.NewClient, customerSlug, m.Logger)
 }
 
 // boxMirrorClientFor is the scope gate shared by the pipeline and
 // transformation mirrors: VM substrate, a resolvable box domain, and a
 // deposited box git credential. ok=false means the customer is out of mirror
-// scope (silently skipped).
-func boxMirrorClientFor(ctx context.Context, workspaces Resolver, credentials BoxGitCredentialStore, newClient func(baseURL, username, token string) RepoFileClient, customerSlug string) (RepoFileClient, *Workspace, bool, error) {
+// scope, and the caller skips them.
+//
+// Only ONE of the three ways to be out of scope is legitimate — a non-VM
+// customer has no box to mirror to, and that is the steady state for every
+// frozen shared-K3s tenant. The other two say a customer who SHOULD be
+// mirrored cannot be, and they are logged rather than passed over, because
+// the caller cannot tell them apart from the legitimate case: every skip
+// returns the same (false, nil), converge and adopt then do nothing, and a
+// git-primary save still reports success having written no commit.
+//
+// That distinction is load-bearing for the deposit retirement (split Phase
+// 3E). Removing box_git_credentials turns the credential branch below into
+// the answer for EVERY not-yet-cut-over customer at once, which without a
+// log is a fleet-wide no-op that looks exactly like a clean deletion.
+//
+// Deliberately not deduped across sweeps. A warning that fires once and then
+// goes quiet is the failure shape this exists to prevent; a customer stuck
+// here is still broken on the tenth pass, and the log should keep saying so.
+func boxMirrorClientFor(ctx context.Context, workspaces Resolver, credentials BoxGitCredentialStore, newClient func(baseURL, username, token string) RepoFileClient, customerSlug string, logger *slog.Logger) (RepoFileClient, *Workspace, bool, error) {
 	ws, err := workspaces.GetWorkspace(ctx, customerSlug)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("get customer: %w", err)
 	}
 	if !ws.OnVM {
+		// The one legitimate skip: no box exists to converge against.
 		return nil, nil, false, nil
 	}
 	domainName := strings.TrimPrefix(ws.CustomerDomain, "*.")
 	if domainName == "" {
+		if logger != nil {
+			logger.WarnContext(ctx, "mirror skipped: VM customer has no box domain, so its repos cannot be converged",
+				"customer", ws.Slug)
+		}
 		return nil, nil, false, nil
 	}
 	cred, err := credentials.GetBoxGitCredential(ctx, ws.Slug)
 	if errors.Is(err, ErrBoxCredentialNotFound) {
+		// Transient while a box is still provisioning (it deposits on its
+		// first ArgoCD sync), permanent if the deposit path is gone.
+		// Indistinguishable from here — the workspace plane holds no
+		// provisioning status — so it warns either way and lets the
+		// frequency tell the operator which one it is.
+		if logger != nil {
+			logger.WarnContext(ctx, "mirror skipped: no box git credential deposited, so converge and adopt are a no-op for this customer",
+				"customer", ws.Slug)
+		}
 		return nil, nil, false, nil
 	}
 	if err != nil {

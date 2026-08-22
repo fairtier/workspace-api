@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 
+	"github.com/fairtier/workspace-api/core"
 	transformationv1 "github.com/fairtier/workspace-api/proto/transformation/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -36,7 +37,7 @@ func NewInternalTransformationServer(svc *workspace.TransformationService) *Tran
 // --- User-facing RPCs ---
 
 func (s *TransformationServer) CreateTransformation(ctx context.Context, req *connect.Request[transformationv1.CreateTransformationRequest]) (*connect.Response[transformationv1.CreateTransformationResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -71,7 +72,7 @@ func (s *TransformationServer) CreateTransformation(ctx context.Context, req *co
 }
 
 func (s *TransformationServer) ListTransformations(ctx context.Context, _ *connect.Request[transformationv1.ListTransformationsRequest]) (*connect.Response[transformationv1.ListTransformationsResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -92,7 +93,7 @@ func (s *TransformationServer) ListTransformations(ctx context.Context, _ *conne
 }
 
 func (s *TransformationServer) GetTransformation(ctx context.Context, req *connect.Request[transformationv1.GetTransformationRequest]) (*connect.Response[transformationv1.GetTransformationResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -130,7 +131,7 @@ func (s *TransformationServer) GetTransformation(ctx context.Context, req *conne
 }
 
 func (s *TransformationServer) UpdateTransformation(ctx context.Context, req *connect.Request[transformationv1.UpdateTransformationRequest]) (*connect.Response[transformationv1.UpdateTransformationResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -167,7 +168,7 @@ func (s *TransformationServer) UpdateTransformation(ctx context.Context, req *co
 }
 
 func (s *TransformationServer) DeleteTransformation(ctx context.Context, req *connect.Request[transformationv1.DeleteTransformationRequest]) (*connect.Response[transformationv1.DeleteTransformationResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -184,7 +185,7 @@ func (s *TransformationServer) DeleteTransformation(ctx context.Context, req *co
 }
 
 func (s *TransformationServer) TriggerTransformation(ctx context.Context, req *connect.Request[transformationv1.TriggerTransformationRequest]) (*connect.Response[transformationv1.TriggerTransformationResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

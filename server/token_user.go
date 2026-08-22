@@ -34,7 +34,7 @@ type TokenUserReader struct{}
 // ErrUserNotFound falls back to platform attribution, which is what this whole
 // path degrades to anyway.
 func (TokenUserReader) GetCommitUser(ctx context.Context, callerID core.UserID) (*workspace.UserInfo, error) {
-	profile, ok := TokenProfileFromContext(ctx)
+	profile, ok := core.TokenProfileFromContext(ctx)
 	if !ok || profile.Subject != string(callerID) {
 		return nil, core.ErrUserNotFound
 	}

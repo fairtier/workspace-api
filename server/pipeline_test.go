@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	pipelinev1 "github.com/fairtier/workspace-api/proto/pipeline/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -23,16 +24,16 @@ func (s stubPipelineRepo) GetEnabledPipelines(context.Context, string) ([]worksp
 	return s.enabled, nil
 }
 
-// withInternalCaller mirrors what NewInternalAuthInterceptor puts in context
+// withInternalCaller mirrors what core.NewInternalAuthInterceptor puts in context
 // for a central (shared-substrate) service token.
 func withInternalCaller(app string) context.Context {
-	return context.WithValue(context.Background(), internalCallerKey, InternalCaller{App: app})
+	return core.ContextWithInternalCaller(context.Background(), core.InternalCaller{App: app})
 }
 
 // withBoxCaller mirrors a box token: the slug is bound from the verified
 // issuer host, the app name is the box's base-named Casdoor app.
 func withBoxCaller(app, slug string) context.Context {
-	return context.WithValue(context.Background(), internalCallerKey, InternalCaller{
+	return core.ContextWithInternalCaller(context.Background(), core.InternalCaller{
 		App: app, Slug: slug, Issuer: "https://auth.customer-" + slug + ".fairtier.com",
 	})
 }

@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	"github.com/fairtier/workspace-api/oauthgoogle"
 	"github.com/fairtier/workspace-api/proto/assist/v1/assistv1connect"
 	"github.com/fairtier/workspace-api/proto/boxcredential/v1/boxcredentialv1connect"
@@ -144,7 +145,7 @@ func RegisterWorkspaceInternal(mux *http.ServeMux, s WorkspaceInternalServers, o
 // The OAuth app is the CUSTOMER's on every tier — they register their own Google
 // client and it is looked up per tenant — so this deployment supplies only the
 // redirect URL and the state-signing key.
-func RegisterWorkspacePlainHTTP(mux *http.ServeMux, logger *slog.Logger, auth UserAuth, db *sql.DB,
+func RegisterWorkspacePlainHTTP(mux *http.ServeMux, logger *slog.Logger, auth core.UserAuth, db *sql.DB,
 	workspaces workspace.Resolver, grants workspace.GoogleOAuthGrantStore,
 	oauthClients workspace.OAuthClientStore,
 	fileDropSvc *workspace.FileDropService, googleOAuth *oauthgoogle.Client, consoleOrigin string,

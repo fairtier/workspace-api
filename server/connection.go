@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	connectionv1 "github.com/fairtier/workspace-api/proto/connection/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -94,7 +95,7 @@ func (s *ConnectionServer) DeleteConnection(ctx context.Context, req *connect.Re
 
 // resolve binds the caller to their workspace.
 func (s *ConnectionServer) resolve(ctx context.Context) (string, error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

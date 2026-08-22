@@ -14,6 +14,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/fairtier/workspace-api/core"
 	"github.com/fairtier/workspace-api/oauthgoogle"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -77,7 +78,7 @@ func testOAuthClient(t *testing.T, tokenEndpoint string) *oauthgoogle.Client {
 }
 
 func TestGoogleOAuthStart_DisabledReturns501(t *testing.T) {
-	h := GoogleOAuthStartHandler(slog.Default(), UserAuth{}, nil, nil, nil)
+	h := GoogleOAuthStartHandler(slog.Default(), core.UserAuth{}, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/oauth/google/start", nil))
 	if rec.Code != http.StatusNotImplemented {
@@ -91,7 +92,7 @@ func startHandlerFor(t *testing.T, clients workspace.OAuthClientStore) (http.Han
 	t.Helper()
 	jwks, sign := testJWKS(t)
 	const iss = "https://auth.customer-acme.example.com"
-	auth := UserAuth{JWKS: jwks, Issuer: iss}
+	auth := core.UserAuth{JWKS: jwks, Issuer: iss}
 	ws := &workspace.Workspace{Slug: "acme"}
 	token := sign(jwt.MapClaims{
 		"sub": "customer-acme/alice",

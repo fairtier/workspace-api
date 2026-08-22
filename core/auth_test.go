@@ -1,4 +1,4 @@
-package server
+package core
 
 import (
 	"context"
@@ -13,9 +13,7 @@ import (
 	"github.com/MicahParks/jwkset"
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
-
-	"github.com/fairtier/workspace-api/core"
-	pipelinev1 "github.com/fairtier/workspace-api/proto/pipeline/v1"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestTokenFromHeader(t *testing.T) {
@@ -142,10 +140,10 @@ func TestNewInternalAuthInterceptor(t *testing.T) {
 			var gotCaller InternalCaller
 			next := func(ctx context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 				gotCaller = InternalCallerFromContext(ctx)
-				return connect.NewResponse(&pipelinev1.GetPipelineConfigsResponse{}), nil
+				return connect.NewResponse(&emptypb.Empty{}), nil
 			}
 
-			req := connect.NewRequest(&pipelinev1.GetPipelineConfigsRequest{CustomerSlug: "acme"})
+			req := connect.NewRequest(&emptypb.Empty{})
 			if tt.authHeader != "" {
 				req.Header().Set("Authorization", tt.authHeader)
 			}
@@ -310,10 +308,10 @@ func TestNewInternalAuthInterceptorBoxIssuer(t *testing.T) {
 			var gotCaller InternalCaller
 			next := func(ctx context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 				gotCaller = InternalCallerFromContext(ctx)
-				return connect.NewResponse(&pipelinev1.GetPipelineConfigsResponse{}), nil
+				return connect.NewResponse(&emptypb.Empty{}), nil
 			}
 
-			req := connect.NewRequest(&pipelinev1.GetPipelineConfigsRequest{CustomerSlug: "acme"})
+			req := connect.NewRequest(&emptypb.Empty{})
 			req.Header().Set("Authorization", tt.authHeader)
 
 			_, err := interceptor(next)(context.Background(), req)
@@ -345,11 +343,11 @@ func TestBoxIssuerTrustCachesKeyfunc(t *testing.T) {
 	trust, fetches := testBoxTrust(t, "fairtier.com", &fakeCustomerChecker{vmSlugs: map[string]bool{"acme": true}}, boxJWKS)
 	interceptor := NewInternalAuthInterceptor(centralJWKS, trust, slog.Default())
 	next := func(ctx context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
-		return connect.NewResponse(&pipelinev1.GetPipelineConfigsResponse{}), nil
+		return connect.NewResponse(&emptypb.Empty{}), nil
 	}
 
 	for range 3 {
-		req := connect.NewRequest(&pipelinev1.GetPipelineConfigsRequest{CustomerSlug: "acme"})
+		req := connect.NewRequest(&emptypb.Empty{})
 		req.Header().Set("Authorization", "Bearer "+signBox(jwt.MapClaims{"sub": "admin/dlt-worker", "iss": iss, "exp": exp}))
 		if _, err := interceptor(next)(context.Background(), req); err != nil {
 			t.Fatalf("interceptor error = %v", err)
@@ -416,10 +414,10 @@ func TestNewInternalAuthInterceptorPinnedBox(t *testing.T) {
 			var gotCaller InternalCaller
 			next := func(ctx context.Context, _ connect.AnyRequest) (connect.AnyResponse, error) {
 				gotCaller = InternalCallerFromContext(ctx)
-				return connect.NewResponse(&pipelinev1.GetPipelineConfigsResponse{}), nil
+				return connect.NewResponse(&emptypb.Empty{}), nil
 			}
 
-			req := connect.NewRequest(&pipelinev1.GetPipelineConfigsRequest{CustomerSlug: "acme"})
+			req := connect.NewRequest(&emptypb.Empty{})
 			req.Header().Set("Authorization", tt.authHeader)
 
 			_, err := interceptor(next)(context.Background(), req)
@@ -467,7 +465,7 @@ func TestAuthInterceptorStreamingHandler(t *testing.T) {
 		name       string
 		authHeader string
 		wantCode   connect.Code // 0 = expect success
-		wantUserID core.UserID
+		wantUserID UserID
 	}{
 		{
 			name:       "valid token reaches handler with user in context",
@@ -497,7 +495,7 @@ func TestAuthInterceptorStreamingHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			interceptor := NewAuthInterceptor(UserAuth{JWKS: jwks, Issuer: iss})
 
-			var gotUserID core.UserID
+			var gotUserID UserID
 			called := false
 			next := func(ctx context.Context, _ connect.StreamingHandlerConn) error {
 				called = true
@@ -537,11 +535,11 @@ func TestUserIDFromContext(t *testing.T) {
 	tests := []struct {
 		name string
 		ctx  context.Context
-		want core.UserID
+		want UserID
 	}{
 		{
 			name: "with user ID",
-			ctx:  context.WithValue(context.Background(), userIDKey, core.UserID("user-123")),
+			ctx:  context.WithValue(context.Background(), userIDKey, UserID("user-123")),
 			want: "user-123",
 		},
 		{
@@ -592,7 +590,7 @@ func TestUserIDFromBearerRejectsServiceAccounts(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("UserIDFromBearer() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if !tt.wantErr && got != core.UserID(tt.sub) {
+			if !tt.wantErr && got != UserID(tt.sub) {
 				t.Errorf("UserIDFromBearer() = %q, want %q", got, tt.sub)
 			}
 		})
@@ -649,5 +647,102 @@ func TestUserAuthAudience(t *testing.T) {
 				t.Fatalf("UserIDFromBearer() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestTokenProfileClaimFormats pins the mapping the whole box-side attribution
+// path rests on. The two Casdoor token formats disagree about "name" and the
+// standard one is the counter-intuitive direction, so reading it wrong yields
+// commits authored by a workspace's admin login instead of a person's name —
+// wrong but plausible, i.e. the kind of bug nobody reports.
+func TestTokenProfileClaimFormats(t *testing.T) {
+	tests := []struct {
+		name   string
+		claims jwt.MapClaims
+		want   TokenProfile
+	}{
+		{
+			// tokenFormat "JWT-Standard" (Casdoor UserStandard): the username
+			// is preferred_username and "name" is the DISPLAY name.
+			name: "standard format",
+			claims: jwt.MapClaims{
+				"sub":                "u-1",
+				"preferred_username": "rich",
+				"name":               "Tomáš Procházka",
+				"email":              "rich@example.com",
+			},
+			want: TokenProfile{Subject: "u-1", Name: "rich", DisplayName: "Tomáš Procházka", Email: "rich@example.com"},
+		},
+		{
+			// tokenFormat "JWT" embeds the user object: "name" is the username
+			// and the display name is its own claim.
+			name: "full user-object format",
+			claims: jwt.MapClaims{
+				"sub":         "u-2",
+				"name":        "rich",
+				"displayName": "Tomáš Procházka",
+				"email":       "rich@example.com",
+			},
+			want: TokenProfile{Subject: "u-2", Name: "rich", DisplayName: "Tomáš Procházka", Email: "rich@example.com"},
+		},
+		{
+			// Every standard-format field is omitempty, so a user with no
+			// display name simply has no "name" claim.
+			name:   "standard format without a display name",
+			claims: jwt.MapClaims{"sub": "u-3", "preferred_username": "rich", "email": "rich@example.com"},
+			want:   TokenProfile{Subject: "u-3", Name: "rich", Email: "rich@example.com"},
+		},
+		{
+			name:   "no profile claims at all",
+			claims: jwt.MapClaims{"sub": "u-4"},
+			want:   TokenProfile{Subject: "u-4"},
+		},
+		{
+			// A claim of the wrong JSON type must not panic the auth path.
+			name:   "non-string claims are ignored",
+			claims: jwt.MapClaims{"sub": "u-5", "email": 42, "name": []string{"x"}},
+			want:   TokenProfile{Subject: "u-5"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tokenProfile(tt.want.Subject, tt.claims); got != tt.want {
+				t.Errorf("tokenProfile() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAuthInterceptorSetsTokenProfile proves the claims survive the actual
+// interceptor, not just the parser: this is the wiring commit attribution
+// depends on, and a context value is exactly the kind of thing a refactor
+// drops silently.
+func TestAuthInterceptorSetsTokenProfile(t *testing.T) {
+	jwks, sign := testJWKS(t)
+	auth := UserAuth{JWKS: jwks, Issuer: "https://auth.example.com"}
+	token := sign(jwt.MapClaims{
+		"sub":                "u-1",
+		"iss":                "https://auth.example.com",
+		"exp":                time.Now().Add(time.Hour).Unix(),
+		"preferred_username": "rich",
+		"name":               "Rich",
+		"email":              "rich@example.com",
+	})
+
+	ctx, err := auth.authenticateBearer(t.Context(), "Bearer "+token)
+	if err != nil {
+		t.Fatalf("authenticateBearer() error = %v", err)
+	}
+	if got := UserIDFromContext(ctx); got != UserID("u-1") {
+		t.Errorf("UserIDFromContext() = %q, want u-1", got)
+	}
+	got, ok := TokenProfileFromContext(ctx)
+	if !ok {
+		t.Fatal("TokenProfileFromContext() not set")
+	}
+	want := TokenProfile{Subject: "u-1", Name: "rich", DisplayName: "Rich", Email: "rich@example.com"}
+	if got != want {
+		t.Errorf("TokenProfileFromContext() = %+v, want %+v", got, want)
 	}
 }

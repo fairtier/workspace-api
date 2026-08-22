@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	demov1 "github.com/fairtier/workspace-api/proto/demo/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -19,7 +20,7 @@ type DemoServer struct {
 }
 
 func (s *DemoServer) GetDemoStatus(ctx context.Context, _ *connect.Request[demov1.GetDemoStatusRequest]) (*connect.Response[demov1.GetDemoStatusResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -31,7 +32,7 @@ func (s *DemoServer) GetDemoStatus(ctx context.Context, _ *connect.Request[demov
 }
 
 func (s *DemoServer) LoadDemoProject(ctx context.Context, req *connect.Request[demov1.LoadDemoProjectRequest]) (*connect.Response[demov1.LoadDemoProjectResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -43,7 +44,7 @@ func (s *DemoServer) LoadDemoProject(ctx context.Context, req *connect.Request[d
 }
 
 func (s *DemoServer) RemoveDemoProject(ctx context.Context, _ *connect.Request[demov1.RemoveDemoProjectRequest]) (*connect.Response[demov1.RemoveDemoProjectResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

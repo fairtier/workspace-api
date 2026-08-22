@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	"github.com/fairtier/workspace-api/workspace"
 )
 
@@ -17,9 +18,9 @@ import (
 // body should stream through to the customer's bucket without buffering.
 //
 // Auth mirrors the public RPC mux: a Casdoor JWT bearer validated under the
-// same UserAuth policy. Responses are JSON: the recorded UploadedFile on
+// same core.UserAuth policy. Responses are JSON: the recorded UploadedFile on
 // success, or {"error": "..."} with a matching HTTP status.
-func FileDropUploadHandler(logger *slog.Logger, auth UserAuth, svc *workspace.FileDropService) http.HandlerFunc {
+func FileDropUploadHandler(logger *slog.Logger, auth core.UserAuth, svc *workspace.FileDropService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 

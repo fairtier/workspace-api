@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+	"github.com/fairtier/workspace-api/core"
 )
 
 // workerAuth gates the worker-facing RPCs that PipelineService and
@@ -49,7 +50,7 @@ func (w workerAuth) callerSlug(ctx context.Context) (string, error) {
 			errors.New("worker RPC is served on the internal API only"))
 	}
 
-	caller := InternalCallerFromContext(ctx)
+	caller := core.InternalCallerFromContext(ctx)
 	if caller.Slug != "" {
 		return caller.Slug, nil
 	}

@@ -37,7 +37,7 @@ func (m *mockExecutor) Execute(ctx context.Context, endpoint, token, sql string,
 }
 
 func authedCtx() context.Context {
-	return context.WithValue(context.Background(), userIDKey, core.UserID("user-1"))
+	return core.ContextWithUserID(context.Background(), core.UserID("user-1"))
 }
 
 func provisionedCustomer() *workspace.Workspace {

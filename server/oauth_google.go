@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fairtier/workspace-api/core"
 	"github.com/fairtier/workspace-api/oauthgoogle"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -34,7 +35,7 @@ const oauthClientNotConfiguredCode = "oauth_client_not_configured"
 // Two distinct refusals: 501 when the deployment has no OAuth configuration at
 // all (Console falls back to the service-account path), 412 when this customer
 // has not connected their own Google app yet.
-func GoogleOAuthStartHandler(logger *slog.Logger, auth UserAuth, client *oauthgoogle.Client, workspaces workspace.Resolver, clients workspace.OAuthClientStore) http.HandlerFunc {
+func GoogleOAuthStartHandler(logger *slog.Logger, auth core.UserAuth, client *oauthgoogle.Client, workspaces workspace.Resolver, clients workspace.OAuthClientStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		if client == nil || clients == nil {

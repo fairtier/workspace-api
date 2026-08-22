@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	"github.com/fairtier/workspace-api/oauthgoogle"
 	oauthclientv1 "github.com/fairtier/workspace-api/proto/oauthclient/v1"
 	"github.com/fairtier/workspace-api/workspace"
@@ -74,7 +75,7 @@ func (s *OAuthClientServer) SetOAuthClient(ctx context.Context, req *connect.Req
 		Provider:     provider,
 		ClientID:     req.Msg.ClientId,
 		ClientSecret: req.Msg.ClientSecret,
-		UpdatedBy:    string(UserIDFromContext(ctx)),
+		UpdatedBy:    string(core.UserIDFromContext(ctx)),
 	}
 	if err := workspace.ValidateOAuthClient(cc); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
@@ -115,7 +116,7 @@ func (s *OAuthClientServer) DeleteOAuthClient(ctx context.Context, req *connect.
 
 // resolve binds the caller to their workspace and normalises the provider key.
 func (s *OAuthClientServer) resolve(ctx context.Context, provider string) (slug, normalized string, err error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return "", "", connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

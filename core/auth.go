@@ -1,4 +1,10 @@
-package server
+// Caller identity and the interceptors that establish it. This lives in the
+// shared kernel because both planes authenticate the same tokens from the same
+// Casdoor, and because the control plane's own handlers read the caller out of
+// the context — obtaining central's identity plumbing from the workspace
+// plane's server package would make a control-plane auth change a release of
+// the public workspace module.
+package core
 
 import (
 	"context"
@@ -11,8 +17,6 @@ import (
 	"connectrpc.com/connect"
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
-
-	"github.com/fairtier/workspace-api/core"
 )
 
 type contextKey int
@@ -54,15 +58,15 @@ func ContextWithTokenProfile(ctx context.Context, p TokenProfile) context.Contex
 }
 
 // UserIDFromContext returns the authenticated user ID from the context.
-func UserIDFromContext(ctx context.Context) core.UserID {
-	v, _ := ctx.Value(userIDKey).(core.UserID)
+func UserIDFromContext(ctx context.Context) UserID {
+	v, _ := ctx.Value(userIDKey).(UserID)
 	return v
 }
 
 // ContextWithUserID returns a context carrying the given user ID as if the
 // auth interceptor had set it. For handler tests (both planes') and embedders
 // that authenticate outside the interceptor.
-func ContextWithUserID(ctx context.Context, id core.UserID) context.Context {
+func ContextWithUserID(ctx context.Context, id UserID) context.Context {
 	return context.WithValue(ctx, userIDKey, id)
 }
 
@@ -86,6 +90,13 @@ type InternalCaller struct {
 func InternalCallerFromContext(ctx context.Context) InternalCaller {
 	v, _ := ctx.Value(internalCallerKey).(InternalCaller)
 	return v
+}
+
+// ContextWithInternalCaller returns a context carrying the given caller as if
+// the internal auth interceptor had set it. For handler tests, which live in
+// the packages that serve the internal mux rather than in this one.
+func ContextWithInternalCaller(ctx context.Context, c InternalCaller) context.Context {
+	return context.WithValue(ctx, internalCallerKey, c)
 }
 
 // UserAuth validates Console-user bearer tokens: signature via the trusted
@@ -131,7 +142,7 @@ func (a UserAuth) parserOptions() []jwt.ParserOption {
 // UserIDFromBearer validates an Authorization header and returns the token's
 // subject. Shared by the RPC auth interceptors and the plain-HTTP endpoints
 // (file-drop upload, Google OAuth start) that live outside ConnectRPC.
-func (a UserAuth) UserIDFromBearer(ctx context.Context, authHeader string) (core.UserID, error) {
+func (a UserAuth) UserIDFromBearer(ctx context.Context, authHeader string) (UserID, error) {
 	token, err := tokenFromHeader(authHeader)
 	if err != nil {
 		return "", err
@@ -167,18 +178,18 @@ func (a UserAuth) authenticateToken(ctx context.Context, token string) (context.
 // userIDFromToken verifies a bearer token and returns the human user it
 // authenticates. Service-account subjects are rejected outright: the user
 // surfaces of both planes are for people, and a machine identity that
-// reaches them acts as a full workspace member (core.UserID.IsServiceAccount
+// reaches them acts as a full workspace member (UserID.IsServiceAccount
 // explains what that would buy an attacker on a box). Centrally no service
 // account has a users row either, so this only moves the denial from the
 // lookup to the token — the two planes answer the same way.
-func (a UserAuth) userIDFromToken(ctx context.Context, token string) (core.UserID, error) {
+func (a UserAuth) userIDFromToken(ctx context.Context, token string) (UserID, error) {
 	userID, _, err := a.parseToken(ctx, token)
 	return userID, err
 }
 
 // parseToken verifies a bearer token and returns the caller together with the
 // profile claims it carries.
-func (a UserAuth) parseToken(ctx context.Context, token string) (core.UserID, TokenProfile, error) {
+func (a UserAuth) parseToken(ctx context.Context, token string) (UserID, TokenProfile, error) {
 	parsed, err := jwt.Parse(token, a.JWKS.KeyfuncCtx(ctx), a.parserOptions()...)
 	if err != nil {
 		return "", TokenProfile{}, errors.New("invalid token")
@@ -188,10 +199,10 @@ func (a UserAuth) parseToken(ctx context.Context, token string) (core.UserID, To
 	if err != nil || sub == "" {
 		return "", TokenProfile{}, errors.New("missing subject")
 	}
-	if core.UserID(sub).IsServiceAccount() {
+	if UserID(sub).IsServiceAccount() {
 		return "", TokenProfile{}, errors.New("service-account token is not a user identity")
 	}
-	return core.UserID(sub), tokenProfile(sub, parsed.Claims), nil
+	return UserID(sub), tokenProfile(sub, parsed.Claims), nil
 }
 
 // tokenProfile reads the optional profile claims out of a verified token.
@@ -527,7 +538,7 @@ func serviceAppFromSubject(parsed *jwt.Token) (string, error) {
 	if err != nil || sub == "" {
 		return "", errors.New("missing subject")
 	}
-	app, ok := core.UserID(sub).ServiceAccountApp()
+	app, ok := UserID(sub).ServiceAccountApp()
 	if !ok {
 		return "", errors.New("not a service-account token")
 	}

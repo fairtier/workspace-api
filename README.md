@@ -39,9 +39,9 @@ Iceberg catalog, and it keeps working with no vendor service behind it.
 | Path | What it holds |
 | --- | --- |
 | `cmd/workspace_api/` | The binary: one workspace configured from `WORKSPACE_*` env, authenticated against a local OIDC issuer. |
-| `server/` | ConnectRPC handlers, auth interceptors, and the plain-HTTP endpoints (file upload, OAuth callback, probes). |
+| `server/` | ConnectRPC handlers and the plain-HTTP endpoints (file upload, OAuth callback, probes). |
 | `workspace/` | The services, and the ports through which infrastructure reaches them. |
-| `core/` | Shared plain types and error sentinels. |
+| `core/` | Shared plain types, error sentinels, and the caller-identity/auth-interceptor primitives both planes authenticate with. |
 | `proto/` | Service definitions plus their generated Go stubs. |
 | `postgres/` | The stores and the schema migrations. |
 | `telemetry/` | OpenTelemetry providers and the helpers adapters use to instrument outbound calls. |

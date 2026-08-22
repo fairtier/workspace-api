@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/fairtier/workspace-api/core"
 	"github.com/fairtier/workspace-api/duckflight"
 	queryv1 "github.com/fairtier/workspace-api/proto/query/v1"
 	"github.com/fairtier/workspace-api/workspace"
@@ -40,7 +41,7 @@ type QueryServer struct {
 // engine resolves the caller's DuckFlight endpoint. It is the tenant-binding
 // choke point every RPC in this service goes through.
 func (s *QueryServer) engine(ctx context.Context) (endpoint, token string, err error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return "", "", connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

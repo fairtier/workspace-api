@@ -6,6 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	lakekeeperuserv1 "github.com/fairtier/workspace-api/proto/lakekeeper_user/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -20,7 +21,7 @@ func (s *LakekeeperUserServer) AddUser(ctx context.Context, req *connect.Request
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("name, role, and warehouse_name are required"))
 	}
 
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -47,7 +48,7 @@ func (s *LakekeeperUserServer) RemoveUser(ctx context.Context, req *connect.Requ
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("user_id is required"))
 	}
 
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -60,7 +61,7 @@ func (s *LakekeeperUserServer) RemoveUser(ctx context.Context, req *connect.Requ
 }
 
 func (s *LakekeeperUserServer) ListUsers(ctx context.Context, _ *connect.Request[lakekeeperuserv1.ListUsersRequest]) (*connect.Response[lakekeeperuserv1.ListUsersResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

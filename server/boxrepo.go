@@ -6,6 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	boxrepov1 "github.com/fairtier/workspace-api/proto/boxrepo/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -19,7 +20,7 @@ type BoxRepoServer struct {
 
 // ListFiles returns the customer-authored file tree of a box repo.
 func (s *BoxRepoServer) ListFiles(ctx context.Context, req *connect.Request[boxrepov1.ListFilesRequest]) (*connect.Response[boxrepov1.ListFilesResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -38,7 +39,7 @@ func (s *BoxRepoServer) ListFiles(ctx context.Context, req *connect.Request[boxr
 
 // GetFile returns one file's content and blob sha.
 func (s *BoxRepoServer) GetFile(ctx context.Context, req *connect.Request[boxrepov1.GetFileRequest]) (*connect.Response[boxrepov1.GetFileResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -52,7 +53,7 @@ func (s *BoxRepoServer) GetFile(ctx context.Context, req *connect.Request[boxrep
 
 // PutFile creates or updates one file as a commit on the default branch.
 func (s *BoxRepoServer) PutFile(ctx context.Context, req *connect.Request[boxrepov1.PutFileRequest]) (*connect.Response[boxrepov1.PutFileResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -66,7 +67,7 @@ func (s *BoxRepoServer) PutFile(ctx context.Context, req *connect.Request[boxrep
 
 // ListFileHistory returns the newest-first commit history of one file.
 func (s *BoxRepoServer) ListFileHistory(ctx context.Context, req *connect.Request[boxrepov1.ListFileHistoryRequest]) (*connect.Response[boxrepov1.ListFileHistoryResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -90,7 +91,7 @@ func (s *BoxRepoServer) ListFileHistory(ctx context.Context, req *connect.Reques
 
 // GetFileAtRef returns one file's content as of a commit sha.
 func (s *BoxRepoServer) GetFileAtRef(ctx context.Context, req *connect.Request[boxrepov1.GetFileAtRefRequest]) (*connect.Response[boxrepov1.GetFileAtRefResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -106,7 +107,7 @@ func (s *BoxRepoServer) GetFileAtRef(ctx context.Context, req *connect.Request[b
 // customer's own remote. The remote credential passes through to the box's
 // Gitea and is never persisted centrally.
 func (s *BoxRepoServer) SetPushMirror(ctx context.Context, req *connect.Request[boxrepov1.SetPushMirrorRequest]) (*connect.Response[boxrepov1.SetPushMirrorResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -119,7 +120,7 @@ func (s *BoxRepoServer) SetPushMirror(ctx context.Context, req *connect.Request[
 
 // GetPushMirror returns a box repo's mirror status (credential-stripped).
 func (s *BoxRepoServer) GetPushMirror(ctx context.Context, req *connect.Request[boxrepov1.GetPushMirrorRequest]) (*connect.Response[boxrepov1.GetPushMirrorResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -141,7 +142,7 @@ func (s *BoxRepoServer) GetPushMirror(ctx context.Context, req *connect.Request[
 
 // DeletePushMirror removes a box repo's push mirror.
 func (s *BoxRepoServer) DeletePushMirror(ctx context.Context, req *connect.Request[boxrepov1.DeletePushMirrorRequest]) (*connect.Response[boxrepov1.DeletePushMirrorResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -154,7 +155,7 @@ func (s *BoxRepoServer) DeletePushMirror(ctx context.Context, req *connect.Reque
 
 // SyncPushMirror triggers an immediate push to the mirror remote.
 func (s *BoxRepoServer) SyncPushMirror(ctx context.Context, req *connect.Request[boxrepov1.SyncPushMirrorRequest]) (*connect.Response[boxrepov1.SyncPushMirrorResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

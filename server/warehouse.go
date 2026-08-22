@@ -17,7 +17,7 @@ type WarehouseServer struct {
 }
 
 func (s *WarehouseServer) ListWarehouses(ctx context.Context, _ *connect.Request[warehousev1.ListWarehousesRequest]) (*connect.Response[warehousev1.ListWarehousesResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -45,7 +45,7 @@ func (s *WarehouseServer) CreateWarehouse(ctx context.Context, req *connect.Requ
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("name is required"))
 	}
 
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

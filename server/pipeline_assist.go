@@ -6,6 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	pipelinev1 "github.com/fairtier/workspace-api/proto/pipeline/v1"
 	pipelineassistv1 "github.com/fairtier/workspace-api/proto/pipeline_assist/v1"
 	"github.com/fairtier/workspace-api/workspace"
@@ -19,7 +20,7 @@ type PipelineAssistServer struct {
 // DraftPipeline turns a natural-language prompt into a pre-validated draft of a
 // CreatePipeline request. The draft never includes credentials.
 func (s *PipelineAssistServer) DraftPipeline(ctx context.Context, req *connect.Request[pipelineassistv1.DraftPipelineRequest]) (*connect.Response[pipelineassistv1.DraftPipelineResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

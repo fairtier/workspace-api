@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	boxcredentialv1 "github.com/fairtier/workspace-api/proto/boxcredential/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -54,7 +55,7 @@ func (s *BoxCredentialServer) DepositFederationClient(ctx context.Context, req *
 	if s.Federation == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this deployment does not accept credential deposits"))
 	}
-	caller := InternalCallerFromContext(ctx)
+	caller := core.InternalCallerFromContext(ctx)
 	if caller.Slug == "" {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("credential deposit requires a box service token"))
 	}
@@ -90,7 +91,7 @@ func (s *BoxCredentialServer) DepositFederationClient(ctx context.Context, req *
 // Missing keys are omitted rather than errored. The caller is a sync loop, and
 // the common transient state is "central has not minted it yet".
 func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.Request[boxcredentialv1.FetchBoxSecretsRequest]) (*connect.Response[boxcredentialv1.FetchBoxSecretsResponse], error) {
-	caller := InternalCallerFromContext(ctx)
+	caller := core.InternalCallerFromContext(ctx)
 	if caller.Slug == "" {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("secret fetch requires a box service token"))
 	}

@@ -107,7 +107,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create JWKS keyfunc for %s: %w", jwksURL, err)
 	}
-	userAuth := server.UserAuth{
+	userAuth := core.UserAuth{
 		JWKS:      jwks,
 		Issuer:    ws.CasdoorIssuer,
 		Audiences: splitCSV(os.Getenv("AUTH_EXPECTED_AUDIENCES")),
@@ -117,7 +117,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create otelconnect interceptor: %w", err)
 	}
-	authOpts := connect.WithInterceptors(otelInterceptor, server.NewAuthInterceptor(userAuth))
+	authOpts := connect.WithInterceptors(otelInterceptor, core.NewAuthInterceptor(userAuth))
 
 	repo := &postgres.Repository{DB: db, Encryptor: enc}
 	resolver := &workspace.StaticResolver{Workspace: *ws}
@@ -635,8 +635,8 @@ func buildInternalOpts(_ context.Context, logger *slog.Logger, ws *workspace.Wor
 		return nil, fmt.Errorf("INTERNAL_AUTH_MODE %q is not supported: the internal API always enforces service auth; unset the variable", mode)
 	}
 
-	boxTrust := server.NewPinnedBoxTrust(ws.CasdoorIssuer, ws.Slug, jwks)
-	return connect.WithInterceptors(otelInterceptor, server.NewInternalAuthInterceptor(jwks, boxTrust, logger)), nil
+	boxTrust := core.NewPinnedBoxTrust(ws.CasdoorIssuer, ws.Slug, jwks)
+	return connect.WithInterceptors(otelInterceptor, core.NewInternalAuthInterceptor(jwks, boxTrust, logger)), nil
 }
 
 // buildInternalServers bundles the worker-facing handlers plus the health/

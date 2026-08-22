@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	oauthclientv1 "github.com/fairtier/workspace-api/proto/oauthclient/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -36,7 +37,7 @@ func testOAuthClientServer(mirror workspace.PipelineMirrorer) (*OAuthClientServe
 func TestSetOAuthClientConvergesPipelines(t *testing.T) {
 	mirror := &stubPipelineMirror{}
 	s, _ := testOAuthClientServer(mirror)
-	ctx := ContextWithUserID(context.Background(), "u1")
+	ctx := core.ContextWithUserID(context.Background(), "u1")
 
 	_, err := s.SetOAuthClient(ctx, connect.NewRequest(&oauthclientv1.SetOAuthClientRequest{
 		ClientId: "cid", ClientSecret: "csecret",
@@ -52,7 +53,7 @@ func TestSetOAuthClientConvergesPipelines(t *testing.T) {
 func TestDeleteOAuthClientConvergesPipelines(t *testing.T) {
 	mirror := &stubPipelineMirror{}
 	s, _ := testOAuthClientServer(mirror)
-	ctx := ContextWithUserID(context.Background(), "u1")
+	ctx := core.ContextWithUserID(context.Background(), "u1")
 
 	if _, err := s.DeleteOAuthClient(ctx, connect.NewRequest(&oauthclientv1.DeleteOAuthClientRequest{})); err != nil {
 		t.Fatalf("DeleteOAuthClient: %v", err)
@@ -67,7 +68,7 @@ func TestDeleteOAuthClientConvergesPipelines(t *testing.T) {
 func TestSetOAuthClientConvergeFailureDoesNotFailSave(t *testing.T) {
 	mirror := &stubPipelineMirror{err: errors.New("gitea down")}
 	s, _ := testOAuthClientServer(mirror)
-	ctx := ContextWithUserID(context.Background(), "u1")
+	ctx := core.ContextWithUserID(context.Background(), "u1")
 
 	if _, err := s.SetOAuthClient(ctx, connect.NewRequest(&oauthclientv1.SetOAuthClientRequest{
 		ClientId: "cid", ClientSecret: "csecret",
@@ -82,7 +83,7 @@ func TestSetOAuthClientStoreErrorSkipsConverge(t *testing.T) {
 	mirror := &stubPipelineMirror{}
 	s, clients := testOAuthClientServer(mirror)
 	clients.err = errors.New("db down")
-	ctx := ContextWithUserID(context.Background(), "u1")
+	ctx := core.ContextWithUserID(context.Background(), "u1")
 
 	if _, err := s.SetOAuthClient(ctx, connect.NewRequest(&oauthclientv1.SetOAuthClientRequest{
 		ClientId: "cid", ClientSecret: "csecret",
@@ -98,7 +99,7 @@ func TestSetOAuthClientStoreErrorSkipsConverge(t *testing.T) {
 // go.mod bump, and any deployment that renders elsewhere.
 func TestSetOAuthClientNilMirror(t *testing.T) {
 	s, _ := testOAuthClientServer(nil)
-	ctx := ContextWithUserID(context.Background(), "u1")
+	ctx := core.ContextWithUserID(context.Background(), "u1")
 
 	if _, err := s.SetOAuthClient(ctx, connect.NewRequest(&oauthclientv1.SetOAuthClientRequest{
 		ClientId: "cid", ClientSecret: "csecret",

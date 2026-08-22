@@ -57,7 +57,7 @@ func fileDropTestServer(t *testing.T) (*httptest.Server, *stubObjectStore, func(
 	t.Helper()
 	jwks, sign := testJWKS(t)
 	const iss = "https://auth.customer-acme.example.com"
-	auth := UserAuth{JWKS: jwks, Issuer: iss}
+	auth := core.UserAuth{JWKS: jwks, Issuer: iss}
 	signWithIss := func(claims jwt.MapClaims) string {
 		if _, ok := claims["iss"]; !ok {
 			claims["iss"] = iss

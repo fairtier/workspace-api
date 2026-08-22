@@ -6,6 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	assistv1 "github.com/fairtier/workspace-api/proto/assist/v1"
 	transformationv1 "github.com/fairtier/workspace-api/proto/transformation/v1"
 	"github.com/fairtier/workspace-api/workspace"
@@ -22,7 +23,7 @@ type AssistServer struct {
 // draft of a CreateTransformation request plus starter dbt model files. The
 // draft never includes credentials or repo URLs (hosted-repo mode).
 func (s *AssistServer) DraftTransformation(ctx context.Context, req *connect.Request[assistv1.DraftTransformationRequest]) (*connect.Response[assistv1.DraftTransformationResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -49,7 +50,7 @@ func (s *AssistServer) DraftTransformation(ctx context.Context, req *connect.Req
 // files, YAML-validated server-side and opened as unsaved buffers in the
 // Console editor.
 func (s *AssistServer) DraftRillDashboard(ctx context.Context, req *connect.Request[assistv1.DraftRillDashboardRequest]) (*connect.Response[assistv1.DraftRillDashboardResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

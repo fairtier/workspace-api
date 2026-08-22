@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	notificationv1 "github.com/fairtier/workspace-api/proto/notification/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -17,7 +18,7 @@ type NotificationServer struct {
 }
 
 func (s *NotificationServer) ListNotifications(ctx context.Context, _ *connect.Request[notificationv1.ListNotificationsRequest]) (*connect.Response[notificationv1.ListNotificationsResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -42,7 +43,7 @@ func (s *NotificationServer) ListNotifications(ctx context.Context, _ *connect.R
 }
 
 func (s *NotificationServer) GetUnreadCount(ctx context.Context, _ *connect.Request[notificationv1.GetUnreadCountRequest]) (*connect.Response[notificationv1.GetUnreadCountResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -54,7 +55,7 @@ func (s *NotificationServer) GetUnreadCount(ctx context.Context, _ *connect.Requ
 }
 
 func (s *NotificationServer) MarkRead(ctx context.Context, req *connect.Request[notificationv1.MarkReadRequest]) (*connect.Response[notificationv1.MarkReadResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -68,7 +69,7 @@ func (s *NotificationServer) MarkRead(ctx context.Context, req *connect.Request[
 }
 
 func (s *NotificationServer) MarkAllRead(ctx context.Context, _ *connect.Request[notificationv1.MarkAllReadRequest]) (*connect.Response[notificationv1.MarkAllReadResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -79,7 +80,7 @@ func (s *NotificationServer) MarkAllRead(ctx context.Context, _ *connect.Request
 }
 
 func (s *NotificationServer) StreamNotifications(ctx context.Context, _ *connect.Request[notificationv1.StreamNotificationsRequest], stream *connect.ServerStream[notificationv1.Notification]) error {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

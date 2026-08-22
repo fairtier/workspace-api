@@ -55,7 +55,8 @@ linters:
               desc: infra adapter — consume via a workspace port
             - pkg: github.com/fairtier/workspace-api/oauthgoogle
               desc: infra adapter — consume via a workspace port
-        # core is the shared kernel: plain types only, imports no plane.
+        # core is the shared kernel: plain types plus the auth primitives both
+        # planes authenticate with, and it imports no plane.
         shared-core:
           files:
             - "**/core/**"

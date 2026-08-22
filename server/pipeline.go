@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 
+	"github.com/fairtier/workspace-api/core"
 	pipelinev1 "github.com/fairtier/workspace-api/proto/pipeline/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -19,7 +20,7 @@ import (
 // User-facing RPCs require JWT auth (via auth interceptor on the mux).
 // Worker-facing RPCs (GetPipelineConfigs, ReportPipelineRun) are called by the
 // dlt-worker on the internal mux with a tenant-bound Casdoor service token
-// (see NewInternalAuthInterceptor); the handlers bind the token's tenant to
+// (see core.NewInternalAuthInterceptor); the handlers bind the token's tenant to
 // the requested customer. A PipelineServer built with a plain struct literal
 // serves the user-facing half only — use NewInternalPipelineServer for the
 // internal mux (see workerAuth).
@@ -42,7 +43,7 @@ func NewInternalPipelineServer(svc *workspace.PipelineService) *PipelineServer {
 // --- User-facing RPCs ---
 
 func (s *PipelineServer) CreatePipeline(ctx context.Context, req *connect.Request[pipelinev1.CreatePipelineRequest]) (*connect.Response[pipelinev1.CreatePipelineResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -79,7 +80,7 @@ func (s *PipelineServer) CreatePipeline(ctx context.Context, req *connect.Reques
 }
 
 func (s *PipelineServer) ListPipelines(ctx context.Context, _ *connect.Request[pipelinev1.ListPipelinesRequest]) (*connect.Response[pipelinev1.ListPipelinesResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -100,7 +101,7 @@ func (s *PipelineServer) ListPipelines(ctx context.Context, _ *connect.Request[p
 }
 
 func (s *PipelineServer) GetPipeline(ctx context.Context, req *connect.Request[pipelinev1.GetPipelineRequest]) (*connect.Response[pipelinev1.GetPipelineResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -143,7 +144,7 @@ func (s *PipelineServer) GetPipeline(ctx context.Context, req *connect.Request[p
 }
 
 func (s *PipelineServer) UpdatePipeline(ctx context.Context, req *connect.Request[pipelinev1.UpdatePipelineRequest]) (*connect.Response[pipelinev1.UpdatePipelineResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -181,7 +182,7 @@ func (s *PipelineServer) UpdatePipeline(ctx context.Context, req *connect.Reques
 }
 
 func (s *PipelineServer) DeletePipeline(ctx context.Context, req *connect.Request[pipelinev1.DeletePipelineRequest]) (*connect.Response[pipelinev1.DeletePipelineResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -198,7 +199,7 @@ func (s *PipelineServer) DeletePipeline(ctx context.Context, req *connect.Reques
 }
 
 func (s *PipelineServer) TriggerPipeline(ctx context.Context, req *connect.Request[pipelinev1.TriggerPipelineRequest]) (*connect.Response[pipelinev1.TriggerPipelineResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -220,7 +221,7 @@ func (s *PipelineServer) TriggerPipeline(ctx context.Context, req *connect.Reque
 // ListPipelineVersions returns the pipeline's rendered-file history from the
 // box repo (git-centric gaps #2).
 func (s *PipelineServer) ListPipelineVersions(ctx context.Context, req *connect.Request[pipelinev1.ListPipelineVersionsRequest]) (*connect.Response[pipelinev1.ListPipelineVersionsResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -248,7 +249,7 @@ func (s *PipelineServer) ListPipelineVersions(ctx context.Context, req *connect.
 // RestorePipelineVersion applies a historical definition through the normal
 // update path.
 func (s *PipelineServer) RestorePipelineVersion(ctx context.Context, req *connect.Request[pipelinev1.RestorePipelineVersionRequest]) (*connect.Response[pipelinev1.RestorePipelineVersionResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -268,7 +269,7 @@ func (s *PipelineServer) RestorePipelineVersion(ctx context.Context, req *connec
 // --- File drop RPCs (user-facing) ---
 
 func (s *PipelineServer) ListUploadedFiles(ctx context.Context, req *connect.Request[pipelinev1.ListUploadedFilesRequest]) (*connect.Response[pipelinev1.ListUploadedFilesResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -298,7 +299,7 @@ func (s *PipelineServer) ListUploadedFiles(ctx context.Context, req *connect.Req
 }
 
 func (s *PipelineServer) DeleteUploadedFile(ctx context.Context, req *connect.Request[pipelinev1.DeleteUploadedFileRequest]) (*connect.Response[pipelinev1.DeleteUploadedFileResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

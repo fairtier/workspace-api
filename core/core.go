@@ -1,7 +1,9 @@
 // Package core is the shared kernel between the control plane (domain) and
-// the workspace plane (workspace): plain types both planes need. It must
-// stay tiny — types only, no ports, no services, no I/O, and it may import
-// neither plane (enforced by depguard).
+// the workspace plane (workspace): the types both planes need, plus the
+// caller-identity and auth-interceptor primitives both planes authenticate
+// with ([auth.go]). It must stay tiny — no ports, no services, and no I/O
+// beyond token verification's own JWKS fetches — and it may import neither
+// plane (enforced by depguard).
 package core
 
 import "strings"

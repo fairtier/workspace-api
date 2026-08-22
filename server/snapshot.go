@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
 	snapshotv1 "github.com/fairtier/workspace-api/proto/snapshot/v1"
 	"github.com/fairtier/workspace-api/proto/snapshot/v1/snapshotv1connect"
 	"github.com/fairtier/workspace-api/workspace"
@@ -83,7 +84,7 @@ func sidecarURL(ws *workspace.Workspace, app string) (string, error) {
 }
 
 func (s *SnapshotServer) TriggerSnapshot(ctx context.Context, req *connect.Request[snapshotv1.TriggerSnapshotRequest]) (*connect.Response[snapshotv1.TriggerSnapshotResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
@@ -106,7 +107,7 @@ func (s *SnapshotServer) TriggerSnapshot(ctx context.Context, req *connect.Reque
 }
 
 func (s *SnapshotServer) ListSnapshots(ctx context.Context, req *connect.Request[snapshotv1.ListSnapshotsRequest]) (*connect.Response[snapshotv1.ListSnapshotsResponse], error) {
-	callerID := UserIDFromContext(ctx)
+	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}

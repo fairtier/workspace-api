@@ -164,8 +164,13 @@ func run() error {
 		Notifications:       notificationSvc,
 		Ownership:           repo,
 		Connections:         repo,
-		NewClient:           gitea.NewClient,
-		Logger:              logger,
+		// The .age render injects the customer's own OAuth client pair into
+		// google_sheets credentials; without this store the file carries the
+		// refresh token but no client_secret and every run fails at the
+		// worker (central wires it too — the two renders must agree).
+		OAuthClients: repo,
+		NewClient:    gitea.NewClient,
+		Logger:       logger,
 	}
 
 	// The box repo IS the source of truth here, so both git-primary levers
@@ -201,7 +206,9 @@ func run() error {
 		// must redeem locally too. Left unwired in 0.16.0, which failed such
 		// saves with "Sign in with Google is not enabled on this server".
 		GoogleOAuth: repo,
-		Logger:      logger,
+		// Serve-time parity with the mirror's .age render (see pipelineMirror).
+		OAuthClients: repo,
+		Logger:       logger,
 	}
 
 	fileDropSvc := &workspace.FileDropService{

@@ -15,10 +15,28 @@ on:
   # against the trigger present *on the requested ref*. An earlier commit stays
   # unverified until something else lands on master.
   workflow_dispatch:
+  # Daily dependency audit. Running govulncheck on push and pull_request only
+  # answers "did this change introduce a vulnerability?" — but most CVEs arrive
+  # the other way round: the advisory lands against a dependency nobody
+  # touched, and a repo that is quiet for a month never re-runs the scan. Only
+  # `govulncheck` runs on this trigger (see the `if:` on every other job).
+  #
+  # Two things about GitHub schedules worth knowing before editing this:
+  #   - a scheduled run always uses the workflow file on the DEFAULT branch, so
+  #     a change here does nothing until it is merged there;
+  #   - GitHub disables the schedule after 60 days with no repo activity, and
+  #     mails the owner when it does. A quiet repo is exactly the case this job
+  #     exists for, so treat that mail as an alert, not as noise.
+  schedule:
+    - cron: "57 6 * * *"
 
 jobs:
   lint:
     name: Lint
+    # A scheduled run exists to re-scan unchanged dependencies against a
+    # changed advisory database, so only `govulncheck` below has anything new
+    # to say — the other jobs would re-prove the same commit daily.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -37,6 +55,7 @@ jobs:
 
   test:
     name: Test
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -50,6 +69,7 @@ jobs:
 
   proto:
     name: Proto
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -98,6 +118,7 @@ jobs:
 
   docker:
     name: Docker build
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

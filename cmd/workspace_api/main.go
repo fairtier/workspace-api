@@ -315,7 +315,7 @@ func run() error {
 		// OAuth carries the deployment-wide half (redirect URL + state key);
 		// nil when the envs are unset, and GetOAuthClient then reports
 		// flow_available=false exactly as before.
-		OAuthClients: &server.OAuthClientServer{Workspaces: resolver, Clients: repo, OAuth: googleOAuth, Logger: logger},
+		OAuthClients: &server.OAuthClientServer{Workspaces: resolver, Clients: repo, OAuth: googleOAuth, Mirror: pipelineMirror, Logger: logger},
 		// Connections are fully box-local: the consent popup below mints the
 		// grant into THIS database, so CreateConnection redeems it here too.
 		Connections: &server.ConnectionServer{

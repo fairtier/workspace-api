@@ -26,8 +26,29 @@ type OAuthClientServer struct {
 	// redirect URI the customer must register, and whether this deployment can
 	// run a consent round-trip at all. Nil on a box, which stores the pair (its
 	// mirror needs it) but cannot serve the popup.
-	OAuth  *oauthgoogle.Client
+	OAuth *oauthgoogle.Client
+	// Mirror, when set, re-renders the tenant's pipelines repo after the pair
+	// changes. The .age render injects the pair into every OAuth google_sheets
+	// credential, so without this converge a rotated or newly entered secret
+	// only reaches a pipeline's file on that pipeline's next save — until then
+	// its runs keep failing on the stale render with nothing pointing at the
+	// fix.
+	Mirror workspace.PipelineMirrorer
 	Logger *slog.Logger
+}
+
+// convergePipelines best-effort re-renders the tenant's pipeline .age files
+// after the stored pair changed; a failure is logged, never surfaced — the
+// pair save itself succeeded, and the next pipeline save retries the render.
+func (s *OAuthClientServer) convergePipelines(ctx context.Context, slug string) {
+	if s.Mirror == nil {
+		return
+	}
+	mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := s.Mirror.SyncCustomer(mctx, slug, nil); err != nil && s.Logger != nil {
+		s.Logger.WarnContext(ctx, "post-pair-change pipeline mirror sync", "slug", slug, "err", err)
+	}
 }
 
 func (s *OAuthClientServer) GetOAuthClient(ctx context.Context, req *connect.Request[oauthclientv1.GetOAuthClientRequest]) (*connect.Response[oauthclientv1.GetOAuthClientResponse], error) {
@@ -66,6 +87,7 @@ func (s *OAuthClientServer) SetOAuthClient(ctx context.Context, req *connect.Req
 		s.Logger.InfoContext(ctx, "oauth client connected",
 			"slug", slug, "provider", provider, "client_id", cc.ClientID)
 	}
+	s.convergePipelines(ctx, slug)
 
 	out, err := s.state(ctx, slug, provider)
 	if err != nil {
@@ -85,6 +107,9 @@ func (s *OAuthClientServer) DeleteOAuthClient(ctx context.Context, req *connect.
 	if s.Logger != nil {
 		s.Logger.InfoContext(ctx, "oauth client disconnected", "slug", slug, "provider", provider)
 	}
+	// Re-render so the files drop the deleted pair rather than shipping a
+	// secret the customer just asked us to forget.
+	s.convergePipelines(ctx, slug)
 	return connect.NewResponse(&oauthclientv1.DeleteOAuthClientResponse{}), nil
 }
 

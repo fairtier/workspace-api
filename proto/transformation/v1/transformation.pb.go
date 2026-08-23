@@ -199,9 +199,13 @@ type TransformationRun struct {
 	ModelsFailed int32 `protobuf:"varint,8,opt,name=models_failed,json=modelsFailed,proto3" json:"models_failed,omitempty"`
 	TestsTotal   int32 `protobuf:"varint,9,opt,name=tests_total,json=testsTotal,proto3" json:"tests_total,omitempty"`
 	TestsFailed  int32 `protobuf:"varint,10,opt,name=tests_failed,json=testsFailed,proto3" json:"tests_failed,omitempty"`
-	// JSON array of per-node results:
+	// JSON array of per-node results, each entry carrying "name", "status",
+	// "execution_time" and "message".
 	//
-	//	[{"name", "status", "execution_time", "message"}, ...]
+	// (No indented lines here on purpose: protoc-gen-go runs the comment through
+	// gofmt's doc-comment formatter, which turns an indented block into a code
+	// block — and does it differently across Go releases, so the committed stub
+	// would drift from what CI's toolchain regenerates.)
 	ModelResults  string `protobuf:"bytes,11,opt,name=model_results,json=modelResults,proto3" json:"model_results,omitempty"`
 	ErrorMessage  string `protobuf:"bytes,12,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
 	CreatedAt     string `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`

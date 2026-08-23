@@ -2,11 +2,6 @@ module github.com/fairtier/workspace-api
 
 go 1.26
 
-// The Casdoor SDK is pinned to a public fork carrying fixes this module needs
-// that are not in the upstream v1.44.0 release. The fork is public, so
-// `go mod download` works without any extra configuration.
-replace github.com/casdoor/casdoor-go-sdk v1.44.0 => github.com/prochac/casdoor-go-sdk v0.0.0-20260217161045-02df06e23911
-
 require (
 	connectrpc.com/connect v1.20.0
 	connectrpc.com/cors v0.1.0
@@ -18,7 +13,7 @@ require (
 	github.com/MicahParks/keyfunc/v3 v3.8.1
 	github.com/anthropics/anthropic-sdk-go v1.66.0
 	github.com/apache/arrow-go/v18 v18.7.0
-	github.com/casdoor/casdoor-go-sdk v1.44.0
+	github.com/casdoor/casdoor-go-sdk v1.53.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0

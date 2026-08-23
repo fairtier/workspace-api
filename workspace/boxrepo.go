@@ -387,7 +387,7 @@ func (s *BoxRepoService) boxGitea(ctx context.Context, callerID core.UserID, rep
 		return "", nil, err
 	}
 
-	return "https://git." + domainName, cred, nil
+	return ws.BoxGiteaURL(), cred, nil
 }
 
 // ErrBoxRepoUnavailable means the box repo editor does not apply to this

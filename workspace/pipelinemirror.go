@@ -555,7 +555,7 @@ func boxMirrorClientFor(ctx context.Context, workspaces Resolver, credentials Bo
 	if err != nil {
 		return nil, nil, false, err
 	}
-	return newClient("https://git."+domainName, cred.Username, cred.Token), ws, true, nil
+	return newClient(ws.BoxGiteaURL(), cred.Username, cred.Token), ws, true, nil
 }
 
 // converge diffs the repo's pipelines/ directory against desired and applies

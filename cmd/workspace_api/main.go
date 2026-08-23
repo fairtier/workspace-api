@@ -499,6 +499,12 @@ func loadStaticWorkspace() (*workspace.Workspace, error) {
 		CubeEnabled:         os.Getenv("WORKSPACE_CUBE_ENABLED") == "true",
 		RillURL:             cmp.Or(os.Getenv("WORKSPACE_RILL_URL"), "https://rill."+customerDomain),
 		CubeURL:             cmp.Or(os.Getenv("WORKSPACE_CUBE_URL"), "https://cube."+customerDomain),
+		// Unset = the public hostname, exactly as before. Unlike every URL
+		// above, these two are only ever dialed by this process and never
+		// advertised, so an in-cluster value is safe here and would break the
+		// Console anywhere else — see Workspace.BoxGiteaURL.
+		GiteaURL:    os.Getenv("WORKSPACE_GITEA_URL"),
+		SnapshotURL: os.Getenv("WORKSPACE_RILL_SNAPSHOT_URL"),
 	}, nil
 }
 

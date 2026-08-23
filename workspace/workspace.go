@@ -7,7 +7,9 @@
 package workspace
 
 import (
+	"cmp"
 	"context"
+	"strings"
 
 	"github.com/fairtier/workspace-api/core"
 )
@@ -60,6 +62,41 @@ type Workspace struct {
 	// the app is enabled.
 	RillURL string
 	CubeURL string
+
+	// GiteaURL / SnapshotURL replace the public box hostnames this process
+	// would otherwise dial for its OWN services. Empty = derive the public
+	// form from CustomerDomain, which is what central always does.
+	//
+	// These are deliberately separate fields rather than reusing LakekeeperURL
+	// or DuckFlightURL. Those two are dual-purpose: BootstrapFromWorkspace
+	// publishes them in /.well-known/fairtier-workspace for the Console and
+	// for customer connection strings, so pointing either in-cluster would fix
+	// the dial and hand the customer's browser an unreachable address. Nothing
+	// advertises these two, so they are safe to override.
+	GiteaURL    string
+	SnapshotURL string
+}
+
+// BoxGiteaURL is the base URL for the box's own Gitea. Prefer an in-cluster
+// override: the public hostname hairpins pod → own node, which is this fleet's
+// recorded boot-flake shape (see the AUTH_JWKS_URL split in the box chart, and
+// the same move already made for duckflight and rill), and it additionally
+// waits on git.<domain>'s Let's Encrypt certificate — which the adopt and
+// hydration sweeps do not, since they run at process start.
+func (w *Workspace) BoxGiteaURL() string {
+	return cmp.Or(w.GiteaURL, "https://git."+w.BareDomain())
+}
+
+// BoxSnapshotURL is the base URL for the box's own Rill snapshot sidecar,
+// with the same override rationale as BoxGiteaURL.
+func (w *Workspace) BoxSnapshotURL() string {
+	return cmp.Or(w.SnapshotURL, "https://rill-snapshot."+w.BareDomain())
+}
+
+// BareDomain is CustomerDomain without the wildcard-certificate prefix. Every
+// derived endpoint needs this form; central rows may carry the "*." variant.
+func (w *Workspace) BareDomain() string {
+	return strings.TrimPrefix(w.CustomerDomain, "*.")
 }
 
 // LakekeeperServiceURL returns the cluster-internal Lakekeeper URL on the

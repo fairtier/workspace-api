@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"connectrpc.com/connect"
 
@@ -54,8 +53,7 @@ func (s *SnapshotServer) sidecarTarget(ctx context.Context, ws *workspace.Worksp
 		if err != nil {
 			return "", "", connect.NewError(connect.CodeInternal, err)
 		}
-		domainName := strings.TrimPrefix(ws.CustomerDomain, "*.")
-		return "https://rill-snapshot." + domainName, cred.Token, nil
+		return ws.BoxSnapshotURL(), cred.Token, nil
 	}
 
 	if ws.Namespace == "" {

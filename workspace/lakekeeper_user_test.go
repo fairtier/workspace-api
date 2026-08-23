@@ -28,10 +28,12 @@ func (m *mockResolver) GetWorkspaceByUser(context.Context, core.UserID) (*worksp
 // mockCasdoorAppManager satisfies workspace.CasdoorAppManager.
 type mockCasdoorAppManager struct {
 	listAppsFn  func(ctx context.Context, org string) ([]core.CasdoorApp, error)
+	addedApps   []string
 	deletedApps []string
 }
 
-func (m *mockCasdoorAppManager) AddApp(context.Context, string, string) (*core.CasdoorApp, error) {
+func (m *mockCasdoorAppManager) AddApp(_ context.Context, _, name string) (*core.CasdoorApp, error) {
+	m.addedApps = append(m.addedApps, name)
 	return &core.CasdoorApp{Name: "lk-acme-jane", ClientID: "app-cid", ClientSecret: "app-secret"}, nil
 }
 
@@ -97,10 +99,12 @@ func (m *mockLakekeeperClient) GetWarehouseAssignments(ctx context.Context, url,
 // Secret to converge.
 func TestAddUser_NilAudienceUpdater(t *testing.T) {
 	ws := &workspace.Workspace{
-		Slug:          "acme",
-		OnVM:          false,
-		LakekeeperURL: "https://lk.example.com",
-		CasdoorOrg:    "customer-acme",
+		Slug:             "acme",
+		OnVM:             false,
+		LakekeeperURL:    "https://lk.example.com",
+		CasdoorOrg:       "customer-acme",
+		OIDCClientID:     "cid",
+		OIDCClientSecret: "secret",
 	}
 
 	svc := &workspace.LakekeeperUserService{
@@ -122,6 +126,77 @@ func TestAddUser_NilAudienceUpdater(t *testing.T) {
 
 // TestRemoveUser_RejectsForeignAppNames pins the RemoveUser authorization
 // boundary: the Casdoor app deletion is keyed on the name alone, so any
+// A box whose WORKSPACE_OIDC_CLIENT_ID/_SECRET Secret exists but is empty can
+// reach neither Casdoor's admin API nor Lakekeeper. Before the guard, every
+// call failed as an opaque CodeInternal carrying whatever the Casdoor SDK
+// said; it must now be a typed, mappable precondition — and, crucially, must
+// not touch Casdoor or Lakekeeper on the way out.
+func TestLakekeeperUsers_UnavailableWithoutOIDCCredentials(t *testing.T) {
+	newService := func() (*workspace.LakekeeperUserService, *mockCasdoorAppManager, *mockLakekeeperClient) {
+		ws := &workspace.Workspace{
+			Slug:          "acme",
+			LakekeeperURL: "https://lk.example.com",
+			CasdoorOrg:    "customer-acme",
+			// OIDCClientID / OIDCClientSecret deliberately unset.
+		}
+		casdoor := &mockCasdoorAppManager{}
+		lakekeeper := &mockLakekeeperClient{}
+		return &workspace.LakekeeperUserService{
+			Workspaces:  &mockResolver{ws: ws},
+			CasdoorApps: casdoor,
+			Tokens:      &mockTokenProvider{},
+			Lakekeeper:  lakekeeper,
+			Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}, casdoor, lakekeeper
+	}
+
+	t.Run("AddUser", func(t *testing.T) {
+		svc, casdoor, lakekeeper := newService()
+		_, err := svc.AddUser(context.Background(), "caller", "jane", "reader", "default")
+		if !errors.Is(err, workspace.ErrLakekeeperUsersUnavailable) {
+			t.Errorf("AddUser = %v, want ErrLakekeeperUsersUnavailable", err)
+		}
+		if len(casdoor.addedApps) != 0 || len(lakekeeper.deletedUsers) != 0 {
+			t.Errorf("touched Casdoor/Lakekeeper: apps=%v users=%v", casdoor.addedApps, lakekeeper.deletedUsers)
+		}
+	})
+
+	t.Run("RemoveUser", func(t *testing.T) {
+		svc, casdoor, _ := newService()
+		err := svc.RemoveUser(context.Background(), "caller", "lk-acme-jane")
+		if !errors.Is(err, workspace.ErrLakekeeperUsersUnavailable) {
+			t.Errorf("RemoveUser = %v, want ErrLakekeeperUsersUnavailable", err)
+		}
+		if len(casdoor.deletedApps) != 0 {
+			t.Errorf("Casdoor apps deleted: %v, want none", casdoor.deletedApps)
+		}
+	})
+
+	t.Run("ListUsers", func(t *testing.T) {
+		svc, _, _ := newService()
+		if _, err := svc.ListUsers(context.Background(), "caller"); !errors.Is(err, workspace.ErrLakekeeperUsersUnavailable) {
+			t.Errorf("ListUsers = %v, want ErrLakekeeperUsersUnavailable", err)
+		}
+	})
+
+	// An unprovisioned customer must still report *that*, not the new error:
+	// "service account management is not available" would send an operator
+	// looking at the box's Casdoor Secret instead of at provisioning.
+	t.Run("no LakekeeperURL still reports not provisioned", func(t *testing.T) {
+		ws := &workspace.Workspace{Slug: "acme", CasdoorOrg: "customer-acme"}
+		svc := &workspace.LakekeeperUserService{
+			Workspaces:  &mockResolver{ws: ws},
+			CasdoorApps: &mockCasdoorAppManager{},
+			Tokens:      &mockTokenProvider{},
+			Lakekeeper:  &mockLakekeeperClient{},
+			Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+		if _, err := svc.ListUsers(context.Background(), "caller"); !errors.Is(err, workspace.ErrCustomerNotProvisioned) {
+			t.Errorf("ListUsers = %v, want ErrCustomerNotProvisioned", err)
+		}
+	})
+}
+
 // user_id outside the workspace's own "lk-<slug>-" namespace must be
 // rejected before Lakekeeper roles or the Casdoor app are touched.
 func TestRemoveUser_RejectsForeignAppNames(t *testing.T) {
@@ -135,9 +210,11 @@ func TestRemoveUser_RejectsForeignAppNames(t *testing.T) {
 	} {
 		t.Run(userID, func(t *testing.T) {
 			ws := &workspace.Workspace{
-				Slug:          "acme",
-				LakekeeperURL: "https://lk.example.com",
-				CasdoorOrg:    "customer-acme",
+				Slug:             "acme",
+				LakekeeperURL:    "https://lk.example.com",
+				CasdoorOrg:       "customer-acme",
+				OIDCClientID:     "cid",
+				OIDCClientSecret: "secret",
 			}
 			casdoor := &mockCasdoorAppManager{}
 			lakekeeper := &mockLakekeeperClient{
@@ -169,9 +246,11 @@ func TestRemoveUser_RejectsForeignAppNames(t *testing.T) {
 
 func TestRemoveUser_OwnNamespace(t *testing.T) {
 	ws := &workspace.Workspace{
-		Slug:          "acme",
-		LakekeeperURL: "https://lk.example.com",
-		CasdoorOrg:    "customer-acme",
+		Slug:             "acme",
+		LakekeeperURL:    "https://lk.example.com",
+		CasdoorOrg:       "customer-acme",
+		OIDCClientID:     "cid",
+		OIDCClientSecret: "secret",
 	}
 	casdoor := &mockCasdoorAppManager{}
 	lakekeeper := &mockLakekeeperClient{

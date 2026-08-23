@@ -2,12 +2,23 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/fairtier/workspace-api/core"
 )
+
+// ErrLakekeeperUsersUnavailable means this deployment cannot manage service
+// accounts because its Casdoor admin credential (WORKSPACE_OIDC_CLIENT_ID /
+// _SECRET) is missing. Distinct from ErrCustomerNotProvisioned on purpose: the
+// customer *is* provisioned, so reporting "customer not provisioned" would
+// send an operator looking at the wrong thing. Without this the whole surface
+// failed as an opaque CodeInternal carrying whatever the Casdoor SDK said —
+// the shape warnMissingOptionalConfig already warns about at boot, now typed
+// at the feature boundary too.
+var ErrLakekeeperUsersUnavailable = errors.New("service account management is not available for this workspace")
 
 // LakekeeperUserService orchestrates user management across Casdoor and Lakekeeper.
 type LakekeeperUserService struct {
@@ -22,6 +33,23 @@ type LakekeeperUserService struct {
 	Tokens         TokenProvider
 	Audiences      AudienceUpdater
 	Logger         *slog.Logger
+}
+
+// checkAvailable reports whether this deployment can serve service-account
+// management for ws at all, before any of it is attempted. Both conditions are
+// operator-side configuration, never caller error, so they answer
+// FailedPrecondition rather than surfacing as an Internal from three layers
+// down.
+func (s *LakekeeperUserService) checkAvailable(ws *Workspace) error {
+	if ws.LakekeeperURL == "" {
+		return ErrCustomerNotProvisioned
+	}
+	// Every path below mints or reads a Casdoor app through the admin API,
+	// which is exactly what this pair authenticates.
+	if ws.OIDCClientID == "" || ws.OIDCClientSecret == "" {
+		return ErrLakekeeperUsersUnavailable
+	}
+	return nil
 }
 
 // casdoorAppsFor picks the Casdoor app manager for a customer (box-local on
@@ -89,8 +117,8 @@ func (s *LakekeeperUserService) AddUser(ctx context.Context, callerID core.UserI
 		return nil, fmt.Errorf("get customer: %w", err)
 	}
 
-	if ws.LakekeeperURL == "" {
-		return nil, ErrCustomerNotProvisioned
+	if err := s.checkAvailable(ws); err != nil {
+		return nil, err
 	}
 
 	org := ws.CasdoorOrg
@@ -169,8 +197,8 @@ func (s *LakekeeperUserService) RemoveUser(ctx context.Context, callerID core.Us
 		return fmt.Errorf("get customer: %w", err)
 	}
 
-	if ws.LakekeeperURL == "" {
-		return ErrCustomerNotProvisioned
+	if err := s.checkAvailable(ws); err != nil {
+		return err
 	}
 
 	if !isDataPlatformApp(ws.Slug, userID) {
@@ -230,8 +258,8 @@ func (s *LakekeeperUserService) ListUsers(ctx context.Context, callerID core.Use
 		return nil, fmt.Errorf("get customer: %w", err)
 	}
 
-	if ws.LakekeeperURL == "" {
-		return nil, ErrCustomerNotProvisioned
+	if err := s.checkAvailable(ws); err != nil {
+		return nil, err
 	}
 
 	org := ws.CasdoorOrg

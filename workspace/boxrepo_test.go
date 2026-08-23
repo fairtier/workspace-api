@@ -227,8 +227,7 @@ func TestBoxRepoService_Files(t *testing.T) {
 		t.Run("put rejects "+tc.name, func(t *testing.T) {
 			svc := boxRepoService(boxCustomer(), store, &fakeRepoClient{putSHA: "new"})
 			_, err := svc.PutFile(context.Background(), "u1", "rill", tc.path, "x", "", "")
-			var invalid *workspace.ErrInvalidSourceConfig
-			if !errors.As(err, &invalid) {
+			if _, ok := errors.AsType[*workspace.ErrInvalidSourceConfig](err); !ok {
 				t.Fatalf("want path validation error for %q, got %v", tc.path, err)
 			}
 		})
@@ -347,8 +346,7 @@ func TestBoxRepoService_PushMirrors(t *testing.T) {
 			{"https://github.com/acme/x.git", "acme", ""},            // no token
 		} {
 			err := svc.SetPushMirror(context.Background(), "u1", "rill", tc.url, tc.user, tc.pass)
-			var invalid *workspace.ErrInvalidSourceConfig
-			if !errors.As(err, &invalid) {
+			if _, ok := errors.AsType[*workspace.ErrInvalidSourceConfig](err); !ok {
 				t.Fatalf("want validation error for %+v, got %v", tc, err)
 			}
 		}
@@ -360,8 +358,7 @@ func TestBoxRepoService_PushMirrors(t *testing.T) {
 			t.Fatalf("pipelines must be mirrorable: %v", err)
 		}
 		_, err := svc.ListFiles(context.Background(), "u1", "pipelines")
-		var invalid *workspace.ErrInvalidSourceConfig
-		if !errors.As(err, &invalid) {
+		if _, ok := errors.AsType[*workspace.ErrInvalidSourceConfig](err); !ok {
 			t.Fatalf("pipelines must not be file-editable, got %v", err)
 		}
 	})
@@ -419,8 +416,7 @@ func TestBoxRepoService_History(t *testing.T) {
 	t.Run("history rejects platform-managed paths", func(t *testing.T) {
 		svc := boxRepoService(boxCustomer(), store, &fakeRepoClient{})
 		_, err := svc.ListFileHistory(context.Background(), "u1", "rill", "duckdb.yaml")
-		var invalid *workspace.ErrInvalidSourceConfig
-		if !errors.As(err, &invalid) {
+		if _, ok := errors.AsType[*workspace.ErrInvalidSourceConfig](err); !ok {
 			t.Fatalf("want path validation error, got %v", err)
 		}
 	})

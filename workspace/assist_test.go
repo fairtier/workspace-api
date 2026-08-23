@@ -112,8 +112,7 @@ func TestAssistService_DraftTransformation(t *testing.T) {
 				}},
 			}
 			_, err := svc.DraftTransformation(context.Background(), "u1", "p")
-			var invalid *workspace.ErrInvalidSourceConfig
-			if !errors.As(err, &invalid) {
+			if _, ok := errors.AsType[*workspace.ErrInvalidSourceConfig](err); !ok {
 				t.Fatalf("want validation error for %q, got %v", tc.path, err)
 			}
 		})

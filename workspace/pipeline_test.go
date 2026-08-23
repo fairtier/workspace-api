@@ -924,8 +924,10 @@ func TestPipelineService_GitPrimary(t *testing.T) {
 	})
 
 	t.Run("update restores previous row on mirror failure", func(t *testing.T) {
-		existing := &workspace.Pipeline{ID: "p1", CustomerSlug: "acme", Name: "old",
-			SourceType: "rest_api", SourceConfig: json.RawMessage(`{"base_url":"https://old","resources":[{"name":"users","endpoint":"/users"}]}`)}
+		existing := &workspace.Pipeline{
+			ID: "p1", CustomerSlug: "acme", Name: "old",
+			SourceType: "rest_api", SourceConfig: json.RawMessage(`{"base_url":"https://old","resources":[{"name":"users","endpoint":"/users"}]}`),
+		}
 		var updates []string
 		svc := &workspace.PipelineService{
 			Workspaces: acmeResolver,
@@ -942,8 +944,10 @@ func TestPipelineService_GitPrimary(t *testing.T) {
 			GitPrimary: true,
 			Logger:     slog.Default(),
 		}
-		_, err := svc.UpdatePipeline(context.Background(), "u1", &workspace.Pipeline{ID: "p1", Name: "new",
-			SourceType: "rest_api", SourceConfig: json.RawMessage(`{"base_url":"https://new","resources":[{"name":"users","endpoint":"/users"}]}`)})
+		_, err := svc.UpdatePipeline(context.Background(), "u1", &workspace.Pipeline{
+			ID: "p1", Name: "new",
+			SourceType: "rest_api", SourceConfig: json.RawMessage(`{"base_url":"https://new","resources":[{"name":"users","endpoint":"/users"}]}`),
+		})
 		if !errors.Is(err, workspace.ErrBoxUnreachable) {
 			t.Fatalf("err = %v, want ErrBoxUnreachable", err)
 		}

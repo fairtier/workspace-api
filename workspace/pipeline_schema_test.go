@@ -199,8 +199,7 @@ func TestValidateSourceConfig(t *testing.T) {
 			}
 			if tt.wantErr {
 				if tt.wantCfgErr {
-					var cfgErr *ErrInvalidSourceConfig
-					if !errors.As(err, &cfgErr) {
+					if _, ok := errors.AsType[*ErrInvalidSourceConfig](err); !ok {
 						t.Errorf("expected *ErrInvalidSourceConfig, got %T", err)
 					}
 				}
@@ -407,8 +406,7 @@ func TestValidateSourceCredentials(t *testing.T) {
 			}
 			if tt.wantErr {
 				if tt.wantCredsErr {
-					var credsErr *ErrInvalidSourceCredentials
-					if !errors.As(err, &credsErr) {
+					if _, ok := errors.AsType[*ErrInvalidSourceCredentials](err); !ok {
 						t.Errorf("expected *ErrInvalidSourceCredentials, got %T", err)
 					}
 				}

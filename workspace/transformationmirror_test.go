@@ -3,6 +3,7 @@ package workspace_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 
@@ -26,9 +27,7 @@ func (f *fakeTransformationRenderStore) UpsertTransformationDefinitionRender(_ c
 
 func (f *fakeTransformationRenderStore) GetTransformationDefinitionRenders(context.Context, string) (map[workspace.TransformationID]workspace.TransformationDefinitionRender, error) {
 	out := make(map[workspace.TransformationID]workspace.TransformationDefinitionRender, len(f.rows))
-	for k, v := range f.rows {
-		out[k] = v
-	}
+	maps.Copy(out, f.rows)
 	return out, nil
 }
 

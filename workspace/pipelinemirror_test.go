@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -321,6 +322,7 @@ type fakeAgeKeyStore struct {
 }
 
 func (f *fakeAgeKeyStore) UpsertBoxAgeKey(context.Context, *workspace.BoxAgeKey) error { return nil }
+
 func (f *fakeAgeKeyStore) GetBoxAgeKey(context.Context, string) (*workspace.BoxAgeKey, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -1069,9 +1071,7 @@ func (f *fakeDefRenderStore) UpsertPipelineDefinitionRender(_ context.Context, r
 
 func (f *fakeDefRenderStore) GetPipelineDefinitionRenders(context.Context, string) (map[workspace.PipelineID]workspace.PipelineDefinitionRender, error) {
 	out := make(map[workspace.PipelineID]workspace.PipelineDefinitionRender, len(f.rows))
-	for k, v := range f.rows {
-		out[k] = v
-	}
+	maps.Copy(out, f.rows)
 	return out, nil
 }
 

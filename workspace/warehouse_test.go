@@ -36,8 +36,8 @@ func TestValidateS3Endpoint(t *testing.T) {
 		"https://192.168.1.1:9000",
 		"https://[fd00::1]",
 		"https://0.0.0.0",
-		"https://minio",      // single-label internal hostname
-		"https://localhost",  // single label, and loopback by convention
+		"https://minio",     // single-label internal hostname
+		"https://localhost", // single label, and loopback by convention
 		"https://minio.local",
 		"https://vault.internal",
 		"https://svc.ns.svc.cluster.local",

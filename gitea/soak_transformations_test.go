@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"strings"
 	"sync"
@@ -94,12 +95,15 @@ func (s *soakTransformationStore) DeleteTransformation(_ context.Context, id wor
 func (s *soakTransformationStore) GetEnabledTransformations(context.Context, string) ([]workspace.Transformation, error) {
 	return nil, nil
 }
+
 func (s *soakTransformationStore) CreateTransformationRun(context.Context, *workspace.TransformationRun) error {
 	return nil
 }
+
 func (s *soakTransformationStore) UpdateTransformationRun(context.Context, *workspace.TransformationRun) error {
 	return nil
 }
+
 func (s *soakTransformationStore) ListRecentTransformationRuns(context.Context, workspace.TransformationID, int) ([]workspace.TransformationRun, error) {
 	return nil, nil
 }
@@ -122,9 +126,7 @@ func (f *soakTransformationRenderStore) GetTransformationDefinitionRenders(conte
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make(map[workspace.TransformationID]workspace.TransformationDefinitionRender, len(f.rows))
-	for k, v := range f.rows {
-		out[k] = v
-	}
+	maps.Copy(out, f.rows)
 	return out, nil
 }
 

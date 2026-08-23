@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -82,9 +83,7 @@ func fillStrings(v reflect.Value, prefix string) map[string]string {
 			fv.SetString(sentinel)
 			out[path] = sentinel
 		case reflect.Struct:
-			for k, s := range fillStrings(fv, path) {
-				out[k] = s
-			}
+			maps.Copy(out, fillStrings(fv, path))
 		}
 	}
 	return out

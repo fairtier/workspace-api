@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -161,10 +162,5 @@ func wantKey(keys []string, k string) bool {
 	if len(keys) == 0 {
 		return true
 	}
-	for _, want := range keys {
-		if want == k {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(keys, k)
 }

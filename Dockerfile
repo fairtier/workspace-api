@@ -1,12 +1,13 @@
 ############################
 # STEP 0 build arguments
 ############################
-# Patched Go: GO-2026-5037 (crypto/x509) + GO-2026-5039 (net/textproto)
-# stdlib fixes landed in 1.26.4, so this pin must not go below it. Also
-# matches the `go 1.26` in go.mod — move the two together (CI resolves its
-# toolchain from go.mod, this pin is the only hand-maintained copy;
-# Dependabot's docker ecosystem watches it).
-ARG GO_VERSION=1.26.5
+# Go 1.27.0 — the current stable release. It supersedes the 1.26.x stdlib
+# advisory pin this ARG used to carry (GO-2026-5037 crypto/x509 and
+# GO-2026-5039 net/textproto are both included). Matches the `go 1.27.0` in
+# go.mod — move the two together (CI resolves its toolchain from go.mod, this
+# pin is the only hand-maintained copy; Dependabot's docker ecosystem watches
+# it).
+ARG GO_VERSION=1.27.0
 ARG BASE_VARIANT=trixie
 
 ############################

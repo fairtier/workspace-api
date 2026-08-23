@@ -146,8 +146,7 @@ func TestCreatePipeline_GrantExpiredOrUsed(t *testing.T) {
 		DatasetName:       "ds",
 	}
 	_, err := svc.CreatePipeline(context.Background(), "user-1", p)
-	var credErr *workspace.ErrInvalidSourceCredentials
-	if !errors.As(err, &credErr) {
+	if _, ok := errors.AsType[*workspace.ErrInvalidSourceCredentials](err); !ok {
 		t.Fatalf("want ErrInvalidSourceCredentials, got %v", err)
 	}
 }

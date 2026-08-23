@@ -27,9 +27,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -125,6 +127,7 @@ func (s *soakStore) UpdatePipelineRun(context.Context, *workspace.PipelineRun) e
 func (s *soakStore) ListRecentRuns(context.Context, workspace.PipelineID, int) ([]workspace.PipelineRun, error) {
 	return nil, nil
 }
+
 func (s *soakStore) GetPendingRun(context.Context, workspace.PipelineID) (*workspace.PipelineRun, error) {
 	return nil, nil
 }
@@ -183,9 +186,7 @@ func (f *soakDefRenderStore) UpsertPipelineDefinitionRender(_ context.Context, r
 
 func (f *soakDefRenderStore) GetPipelineDefinitionRenders(context.Context, string) (map[workspace.PipelineID]workspace.PipelineDefinitionRender, error) {
 	out := make(map[workspace.PipelineID]workspace.PipelineDefinitionRender, len(f.rows))
-	for k, v := range f.rows {
-		out[k] = v
-	}
+	maps.Copy(out, f.rows)
 	return out, nil
 }
 
@@ -212,6 +213,7 @@ type soakResolver struct{ ws *workspace.Workspace }
 func (r *soakResolver) GetWorkspace(context.Context, string) (*workspace.Workspace, error) {
 	return r.ws, nil
 }
+
 func (r *soakResolver) GetWorkspaceByUser(context.Context, core.UserID) (*workspace.Workspace, error) {
 	return r.ws, nil
 }
@@ -221,6 +223,7 @@ type soakCredStore struct{ cred *workspace.BoxGitCredential }
 func (f *soakCredStore) UpsertBoxGitCredential(context.Context, *workspace.BoxGitCredential) error {
 	return nil
 }
+
 func (f *soakCredStore) GetBoxGitCredential(context.Context, string) (*workspace.BoxGitCredential, error) {
 	return f.cred, nil
 }
@@ -228,6 +231,7 @@ func (f *soakCredStore) GetBoxGitCredential(context.Context, string) (*workspace
 type soakAgeKeyStore struct{ key *workspace.BoxAgeKey }
 
 func (f *soakAgeKeyStore) UpsertBoxAgeKey(context.Context, *workspace.BoxAgeKey) error { return nil }
+
 func (f *soakAgeKeyStore) GetBoxAgeKey(context.Context, string) (*workspace.BoxAgeKey, error) {
 	return f.key, nil
 }
@@ -272,10 +276,8 @@ func soakGitea(t *testing.T, baseURL, token, repo string) {
 			t.Fatalf("gitea %s %s: %v", method, path, err)
 		}
 		defer resp.Body.Close()
-		for _, w := range want {
-			if resp.StatusCode == w {
-				return
-			}
+		if slices.Contains(want, resp.StatusCode) {
+			return
 		}
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		t.Fatalf("gitea %s %s: status %d: %s", method, path, resp.StatusCode, snippet)

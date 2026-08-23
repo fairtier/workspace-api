@@ -234,7 +234,8 @@ func TestNewInternalAuthInterceptorBoxIssuer(t *testing.T) {
 			name:    "unknown slug never fetches a JWKS",
 			vmSlugs: map[string]bool{},
 			authHeader: "Bearer " + signBox(jwt.MapClaims{
-				"sub": "admin/dlt-worker", "iss": "https://auth.customer-evil.fairtier.com", "exp": exp}),
+				"sub": "admin/dlt-worker", "iss": "https://auth.customer-evil.fairtier.com", "exp": exp,
+			}),
 			wantCode:    connect.CodeUnauthenticated,
 			wantFetches: 0,
 		},
@@ -242,7 +243,8 @@ func TestNewInternalAuthInterceptorBoxIssuer(t *testing.T) {
 			name:    "issuer suffix trick falls through to central and fails",
 			vmSlugs: map[string]bool{"acme": true},
 			authHeader: "Bearer " + signBox(jwt.MapClaims{
-				"sub": "admin/dlt-worker", "iss": "https://auth.customer-acme.fairtier.com.evil.com", "exp": exp}),
+				"sub": "admin/dlt-worker", "iss": "https://auth.customer-acme.fairtier.com.evil.com", "exp": exp,
+			}),
 			wantCode:    connect.CodeUnauthenticated,
 			wantFetches: 0,
 		},
@@ -250,7 +252,8 @@ func TestNewInternalAuthInterceptorBoxIssuer(t *testing.T) {
 			name:    "issuer with explicit port is not box-shaped",
 			vmSlugs: map[string]bool{"acme": true},
 			authHeader: "Bearer " + signBox(jwt.MapClaims{
-				"sub": "admin/dlt-worker", "iss": acmeIssuer + ":443", "exp": exp}),
+				"sub": "admin/dlt-worker", "iss": acmeIssuer + ":443", "exp": exp,
+			}),
 			wantCode:    connect.CodeUnauthenticated,
 			wantFetches: 0,
 		},
@@ -258,7 +261,8 @@ func TestNewInternalAuthInterceptorBoxIssuer(t *testing.T) {
 			name:    "uppercase issuer host is not box-shaped",
 			vmSlugs: map[string]bool{"acme": true},
 			authHeader: "Bearer " + signBox(jwt.MapClaims{
-				"sub": "admin/dlt-worker", "iss": "https://auth.customer-ACME.fairtier.com", "exp": exp}),
+				"sub": "admin/dlt-worker", "iss": "https://auth.customer-ACME.fairtier.com", "exp": exp,
+			}),
 			wantCode:    connect.CodeUnauthenticated,
 			wantFetches: 0,
 		},
@@ -266,7 +270,8 @@ func TestNewInternalAuthInterceptorBoxIssuer(t *testing.T) {
 			name:    "empty slug is not box-shaped",
 			vmSlugs: map[string]bool{"acme": true},
 			authHeader: "Bearer " + signBox(jwt.MapClaims{
-				"sub": "admin/dlt-worker", "iss": "https://auth.customer-.fairtier.com", "exp": exp}),
+				"sub": "admin/dlt-worker", "iss": "https://auth.customer-.fairtier.com", "exp": exp,
+			}),
 			wantCode:    connect.CodeUnauthenticated,
 			wantFetches: 0,
 		},

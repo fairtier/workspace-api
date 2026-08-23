@@ -130,13 +130,11 @@ func (c *Client) SignState(userSub, customerSlug string) (string, error) {
 	}
 	now := time.Now()
 	claims := stateClaims{
-		Slug: customerSlug,
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   userSub,
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(stateTTL)),
-			ID:        base64.RawURLEncoding.EncodeToString(nonce),
-		},
+		Slug:      customerSlug,
+		Subject:   userSub,
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(stateTTL)),
+		ID:        base64.RawURLEncoding.EncodeToString(nonce),
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := tok.SignedString(c.stateSecret)

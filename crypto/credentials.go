@@ -191,8 +191,8 @@ func (k *Keyring) Decrypt(stored string) ([]byte, error) {
 // splitEnvelope separates an optional key id from the base64 payload. Legacy
 // values have no id, and return "".
 func splitEnvelope(body string) (keyID, payload string) {
-	if i := strings.IndexByte(body, ':'); i >= 0 {
-		return body[:i], body[i+1:]
+	if before, after, ok := strings.Cut(body, ":"); ok {
+		return before, after
 	}
 	return "", body
 }

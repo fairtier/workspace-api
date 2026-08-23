@@ -39,6 +39,7 @@ type stubCustomers struct{ ws *workspace.Workspace }
 func (s *stubCustomers) GetWorkspace(context.Context, string) (*workspace.Workspace, error) {
 	return s.ws, nil
 }
+
 func (s *stubCustomers) GetWorkspaceByUser(context.Context, core.UserID) (*workspace.Workspace, error) {
 	return s.ws, nil
 }

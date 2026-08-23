@@ -31,9 +31,11 @@ func (s *stubGrantStore) CreateGoogleOAuthGrant(_ context.Context, g *workspace.
 	s.created = g
 	return nil
 }
+
 func (s *stubGrantStore) ConsumeGoogleOAuthGrant(context.Context, string, string) (*workspace.GoogleOAuthGrant, error) {
 	return nil, workspace.ErrOAuthGrantNotFound
 }
+
 func (s *stubGrantStore) DeleteExpiredGoogleOAuthGrants(context.Context) (int64, error) {
 	return 0, nil
 }
@@ -47,6 +49,7 @@ type stubOAuthClientStore struct {
 func (s *stubOAuthClientStore) UpsertOAuthClient(context.Context, *workspace.OAuthClient) error {
 	return s.err
 }
+
 func (s *stubOAuthClientStore) GetOAuthClient(_ context.Context, _, _ string) (*workspace.OAuthClient, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -56,6 +59,7 @@ func (s *stubOAuthClientStore) GetOAuthClient(_ context.Context, _, _ string) (*
 	}
 	return s.client, nil
 }
+
 func (s *stubOAuthClientStore) DeleteOAuthClient(context.Context, string, string) error { return s.err }
 
 func testCustomerClients() *stubOAuthClientStore {

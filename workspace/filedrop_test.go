@@ -238,8 +238,7 @@ func TestFileDropUpload(t *testing.T) {
 		svc := fileDropFixture(pipeline, &mockObjectStore{})
 		svc.MaxBytes = 10
 		_, err := svc.Upload(context.Background(), "u1", "pid-1", "a.csv", 11, strings.NewReader("x"))
-		var invalid *workspace.ErrInvalidUploadFile
-		if !errors.As(err, &invalid) {
+		if _, ok := errors.AsType[*workspace.ErrInvalidUploadFile](err); !ok {
 			t.Fatalf("err = %v, want ErrInvalidUploadFile", err)
 		}
 	})

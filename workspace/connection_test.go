@@ -59,6 +59,7 @@ func (f *fakeConnectionStore) DeleteConnection(_ context.Context, slug, id strin
 type fakeGrantStore struct{ grant *GoogleOAuthGrant }
 
 func (f *fakeGrantStore) CreateGoogleOAuthGrant(context.Context, *GoogleOAuthGrant) error { return nil }
+
 func (f *fakeGrantStore) ConsumeGoogleOAuthGrant(_ context.Context, grantID, slug string) (*GoogleOAuthGrant, error) {
 	if f.grant == nil || f.grant.GrantID != grantID || f.grant.CustomerSlug != slug {
 		return nil, ErrOAuthGrantNotFound
@@ -67,6 +68,7 @@ func (f *fakeGrantStore) ConsumeGoogleOAuthGrant(_ context.Context, grantID, slu
 	f.grant = nil // one-time use
 	return g, nil
 }
+
 func (f *fakeGrantStore) DeleteExpiredGoogleOAuthGrants(context.Context) (int64, error) {
 	return 0, nil
 }

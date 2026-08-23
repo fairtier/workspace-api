@@ -386,8 +386,8 @@ func resolveFileUploadPipeline(p *Pipeline, s3 core.S3Config) (bool, error) {
 		filesystemConfig
 		Tables []filesystemTable `json:"tables"`
 	}{
-		filesystemConfig: filesystemConfig{BucketURL: fileDropBucketURL(s3, p.ID)},
-		Tables:           tables,
+		BucketURL: fileDropBucketURL(s3, p.ID),
+		Tables:    tables,
 	})
 	if err != nil {
 		return false, fmt.Errorf("marshal filesystem config: %w", err)

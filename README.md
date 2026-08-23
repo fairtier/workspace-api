@@ -49,7 +49,7 @@ Iceberg catalog, and it keeps working with no vendor service behind it.
 
 ## Running it
 
-Requires Go 1.26+ and a Postgres database dedicated to this service — it manages
+Requires Go 1.27+ and a Postgres database dedicated to this service — it manages
 its own schema on startup.
 
 ```bash

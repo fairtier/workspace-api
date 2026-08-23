@@ -79,3 +79,13 @@ linters:
         linters:
           - gocyclo
           - gocognit
+
+# gofumpt, newly enforced with the Go 1.27 bump. It had never been enabled, so
+# the tree carried years of small drift that no CI job could see; that backlog
+# was flushed in the same commit. Declaring it here makes `golangci-lint run` —
+# and therefore CI — the thing that catches it, which also means a golangci-lint
+# bump that adds a gofumpt rule now fails the lint job instead of showing up as
+# mystery diff in an unrelated PR. Run `golangci-lint fmt` to apply.
+formatters:
+  enable:
+    - gofumpt

@@ -429,8 +429,8 @@ func (s *DemoService) demoSourceConfig(table string, files []string) json.RawMes
 			filesystemConfig
 			Tables []filesystemTable `json:"tables"`
 		}{
-			filesystemConfig: filesystemConfig{BucketURL: strings.TrimSuffix(s.Bucket.PublicBaseURL, "/")},
-			Tables:           []filesystemTable{{Name: table, Files: files0(prefixed)}},
+			BucketURL: strings.TrimSuffix(s.Bucket.PublicBaseURL, "/"),
+			Tables:    []filesystemTable{{Name: table, Files: files0(prefixed)}},
 		})
 		return raw
 	}
@@ -438,8 +438,8 @@ func (s *DemoService) demoSourceConfig(table string, files []string) json.RawMes
 		filesystemConfig
 		Tables []filesystemTable `json:"tables"`
 	}{
-		filesystemConfig: filesystemConfig{BucketURL: "s3://" + s.Bucket.Bucket + "/" + demo.BucketPrefix},
-		Tables:           []filesystemTable{{Name: table, FileGlob: s3Glob(files)}},
+		BucketURL: "s3://" + s.Bucket.Bucket + "/" + demo.BucketPrefix,
+		Tables:    []filesystemTable{{Name: table, FileGlob: s3Glob(files)}},
 	})
 	return raw
 }

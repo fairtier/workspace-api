@@ -417,9 +417,14 @@ Rules:
 - NEVER include credentials of any kind.
 - If the request is ambiguous, make a reasonable choice and explain it in notes.
 - If the schema listing holds NOTHING relevant to the request (the user asks about data that was
-  never ingested), return an empty sql and use notes to say what is missing and what would need to
-  be ingested first. A fabricated query against unrelated tables is worse than no query: ambiguous
-  means several listed tables could plausibly answer — pick one; irrelevant means none can — refuse.`
+  never ingested), return an empty sql ("") and use notes to say what is missing and what would
+  need to be ingested first. A fabricated query against unrelated tables is worse than no query.
+- Ambiguity is about WHICH listed table answers the user's actual subject; it never licenses
+  changing the subject. If answering would mean reinterpreting the request as being about
+  different data than the user named (e.g. "Salesforce churn" answered from taxi-trip tables),
+  that is not an assumption — the schema holds nothing relevant, and sql must be "". Apply this
+  test before writing any SQL: does some listed table actually contain the thing the user asked
+  about? If no listed table does, refuse with an empty sql.`
 
 type sqlDraftOutput struct {
 	SQL   string `json:"sql"`

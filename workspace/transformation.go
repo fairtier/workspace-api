@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -115,27 +114,16 @@ type TransformationService struct {
 	// Notifications, when set, raises an in-app notification on each
 	// completed run reported by the worker. Optional (nil = no notifications).
 	Notifications Notifier
-	// Mirror, when set, dual-writes execution configs to the box's
-	// transformations repo after each successful create/update/delete.
-	// Best-effort by default: a mirror failure never fails the save. With
-	// GitPrimary the mirror commit joins the request path instead.
+	// Mirror, when set, writes execution configs to the box's transformations
+	// repo on the request path: create/update/delete converge the repo
+	// synchronously, and a failed commit hard-fails the save with the row
+	// compensated back. Same contract as PipelineService.Mirror, including
+	// the retirement of the legacy async dual-write.
 	Mirror TransformationMirrorer
-	// GitPrimary flips the source of truth to the box's transformations repo
-	// (Phase 2F, env TRANSFORMATIONS_GIT_PRIMARY=on): create/update/delete
-	// converge the repo synchronously, and a failed commit hard-fails the
-	// save with the central row compensated back. Off = async dual-write.
-	GitPrimary bool
 	// Users resolves the acting user so mirrored commits carry them as git
 	// author. Optional: nil keeps the plain platform attribution.
 	Users  UserReader
 	Logger *slog.Logger
-
-	// mirrorDispatcher runs box-repo mirror syncs off the request path,
-	// serialized and coalesced per customer with bounded retry (shared
-	// implementation with the pipeline dispatcher). Created lazily on first
-	// save so a zero-value TransformationService needs no constructor.
-	mirrorOnce       sync.Once
-	mirrorDispatcher *pipelineMirrorDispatcher
 }
 
 // commitMirror converges the box repo on the request path (git-first mode).
@@ -166,19 +154,6 @@ func (s *TransformationService) commitOrCompensate(ctx context.Context, callerID
 		s.Logger.ErrorContext(ctx, "git-first "+op+": failed to compensate cache row after mirror failure; converge will heal", "transformation", id, "error", compErr)
 	}
 	return err
-}
-
-// mirrorTransformations hands the customer's execution configs off to be
-// dual-written to the box repo, best-effort and OFF the request path (same
-// contract as PipelineService.mirrorPipelines).
-func (s *TransformationService) mirrorTransformations(ctx context.Context, callerID core.UserID, customerSlug string) {
-	if s.Mirror == nil {
-		return
-	}
-	s.mirrorOnce.Do(func() {
-		s.mirrorDispatcher = newPipelineMirrorDispatcher(s.Mirror, s.Users, s.Logger)
-	})
-	s.mirrorDispatcher.enqueue(ctx, callerID, customerSlug)
 }
 
 // validateTrigger verifies that a non-empty trigger pipeline belongs to the
@@ -222,15 +197,11 @@ func (s *TransformationService) CreateTransformation(ctx context.Context, caller
 		return nil, fmt.Errorf("create transformation: %w", err)
 	}
 
-	if s.GitPrimary {
-		if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "create", t.ID, func(ctx context.Context) error {
-			return s.Transformations.DeleteTransformation(ctx, t.ID)
-		}); err != nil {
-			return nil, err
-		}
-		return t, nil
+	if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "create", t.ID, func(ctx context.Context) error {
+		return s.Transformations.DeleteTransformation(ctx, t.ID)
+	}); err != nil {
+		return nil, err
 	}
-	s.mirrorTransformations(ctx, callerID, ws.Slug)
 	return t, nil
 }
 
@@ -306,15 +277,11 @@ func (s *TransformationService) UpdateTransformation(ctx context.Context, caller
 		return nil, fmt.Errorf("update transformation: %w", err)
 	}
 
-	if s.GitPrimary {
-		if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "update", t.ID, func(ctx context.Context) error {
-			return s.Transformations.UpdateTransformation(ctx, existing)
-		}); err != nil {
-			return nil, err
-		}
-		return t, nil
+	if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "update", t.ID, func(ctx context.Context) error {
+		return s.Transformations.UpdateTransformation(ctx, existing)
+	}); err != nil {
+		return nil, err
 	}
-	s.mirrorTransformations(ctx, callerID, ws.Slug)
 	return t, nil
 }
 
@@ -337,17 +304,13 @@ func (s *TransformationService) DeleteTransformation(ctx context.Context, caller
 		return fmt.Errorf("delete transformation: %w", err)
 	}
 
-	if s.GitPrimary {
-		// Compensation re-inserts the config under a new row id; the run
-		// history is already gone (FK cascade) — same loss as a successful
-		// delete, but the config survives, matching the repo state the
-		// failed commit left behind.
-		return s.commitOrCompensate(ctx, callerID, ws.Slug, "delete", id, func(ctx context.Context) error {
-			return s.Transformations.CreateTransformation(ctx, existing)
-		})
-	}
-	s.mirrorTransformations(ctx, callerID, ws.Slug)
-	return nil
+	// Compensation re-inserts the config under a new row id; the run
+	// history is already gone (FK cascade) — same loss as a successful
+	// delete, but the config survives, matching the repo state the
+	// failed commit left behind.
+	return s.commitOrCompensate(ctx, callerID, ws.Slug, "delete", id, func(ctx context.Context) error {
+		return s.Transformations.CreateTransformation(ctx, existing)
+	})
 }
 
 // TriggerTransformation creates a "pending" run entry, verifying ownership.

@@ -101,8 +101,11 @@ type PipelineServiceClient interface {
 	// DeleteUploadedFile removes one dropped file from the customer's storage
 	// and from the pipeline's configuration.
 	DeleteUploadedFile(context.Context, *connect.Request[v1.DeleteUploadedFileRequest]) (*connect.Response[v1.DeleteUploadedFileResponse], error)
-	// GetPipelineConfigs returns all enabled pipelines for a customer, including
-	// sensitive source credentials. Called by the dlt-worker poll loop.
+	// GetPipelineConfigs returns the worker's trigger feed for a customer:
+	// every enabled pipeline plus any disabled one with a pending (manually
+	// triggered) run, carrying triggers, file_upload storage credentials and
+	// the last-run watermark — not definitions. Called by the dlt-worker poll
+	// loop, which schedules from its pipelines checkout.
 	GetPipelineConfigs(context.Context, *connect.Request[v1.GetPipelineConfigsRequest]) (*connect.Response[v1.GetPipelineConfigsResponse], error)
 	// ReportPipelineRun records the result of a pipeline execution from the
 	// dlt-worker.
@@ -301,8 +304,11 @@ type PipelineServiceHandler interface {
 	// DeleteUploadedFile removes one dropped file from the customer's storage
 	// and from the pipeline's configuration.
 	DeleteUploadedFile(context.Context, *connect.Request[v1.DeleteUploadedFileRequest]) (*connect.Response[v1.DeleteUploadedFileResponse], error)
-	// GetPipelineConfigs returns all enabled pipelines for a customer, including
-	// sensitive source credentials. Called by the dlt-worker poll loop.
+	// GetPipelineConfigs returns the worker's trigger feed for a customer:
+	// every enabled pipeline plus any disabled one with a pending (manually
+	// triggered) run, carrying triggers, file_upload storage credentials and
+	// the last-run watermark — not definitions. Called by the dlt-worker poll
+	// loop, which schedules from its pipelines checkout.
 	GetPipelineConfigs(context.Context, *connect.Request[v1.GetPipelineConfigsRequest]) (*connect.Response[v1.GetPipelineConfigsResponse], error)
 	// ReportPipelineRun records the result of a pipeline execution from the
 	// dlt-worker.

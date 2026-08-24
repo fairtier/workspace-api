@@ -1,7 +1,10 @@
 package gitea_test
 
-// The PIPELINES_GIT_PRIMARY rollout soak: the four scenarios the flip is
-// gated on, driven end-to-end against a REAL Gitea through the real
+// The git-as-source-of-truth soak: the four scenarios the pipelines plane is
+// contractually held to — once the gate on the PIPELINES_GIT_PRIMARY flip,
+// now simply the contract, the flip and its legacy alternative having been
+// retired in the pipelines-as-files Phase 2.5 cleanup. Driven
+// end-to-end against a REAL Gitea through the real
 // gitea.Client — not the in-memory repo fakes the workspace unit tests use.
 // It lives in the adapter package
 // (not workspace) because the workspace plane must not import infra
@@ -347,7 +350,6 @@ func TestGiteaSoak_GitPrimary(t *testing.T) {
 			Workspaces: &soakResolver{ws: ws},
 			Pipelines:  store,
 			Mirror:     m,
-			GitPrimary: true,
 			Ownership:  store,
 			Logger:     logger,
 		}

@@ -137,8 +137,7 @@ const pipelineFileHeader = "# Rendered by the FairTier Console — a Console sav
 // a save can also backfill or heal other files, but those changes are still
 // the result of that user's save; the committer stays the platform identity.
 func (m *PipelineMirror) SyncCustomer(ctx context.Context, customerSlug string, author *CommitAuthor) (err error) {
-	// With git-primary on, this converge is on the request path of every
-	// Console save, so its span is the one that explains a slow save — the
+	// This converge is on the request path of every Console save, so its span is the one that explains a slow save — the
 	// child client spans show whether the time went to Gitea or to Postgres.
 	ctx, span := tracer.Start(ctx, "PipelineMirror.SyncCustomer", trace.WithAttributes(
 		attrSlug.String(customerSlug),
@@ -509,8 +508,8 @@ func (m *PipelineMirror) clientFor(ctx context.Context, customerSlug string) (Re
 // The other two say a customer who SHOULD be mirrored cannot be, and they are
 // logged rather than passed over, because the caller cannot tell them apart
 // from the legitimate cases: every skip returns the same (false, nil),
-// converge and adopt then do nothing, and a git-primary save still reports
-// success having written no commit.
+// converge and adopt then do nothing, and a save still reports success
+// having written no commit.
 //
 // Deliberately not deduped across sweeps. A warning that fires once and then
 // goes quiet is the failure shape this exists to prevent; a customer stuck

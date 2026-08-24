@@ -160,6 +160,10 @@ func (r *Repository) GetEnabledTransformations(ctx context.Context, customerSlug
 		     ORDER BY r.created_at DESC
 		     LIMIT 1
 		 ) lr ON true
+		 -- Deliberately stricter than GetEnabledPipelines, which also serves a
+		 -- disabled pipeline that has a pending run: for a transformation,
+		 -- disabled means it never runs — by schedule, by chain, or by
+		 -- trigger. The worker matches (main._should_run).
 		 WHERE t.customer_slug = $1 AND t.enabled = true
 		 ORDER BY t.created_at`,
 		customerSlug,

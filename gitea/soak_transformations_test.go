@@ -1,7 +1,8 @@
 package gitea_test
 
-// The TRANSFORMATIONS_GIT_PRIMARY rollout soak — the transformations twin
-// of TestGiteaSoak_GitPrimary, driven
+// The transformations twin of TestGiteaSoak_GitPrimary — once the
+// TRANSFORMATIONS_GIT_PRIMARY rollout soak, now the plane's standing
+// contract (see that test's header). Driven
 // against a REAL Gitea through the real gitea.Client. Same runner
 // (scripts/gitea-soak.sh); skips without GITEA_SOAK_URL/GITEA_SOAK_TOKEN.
 //
@@ -195,7 +196,6 @@ func TestGiteaSoak_TransformationsGitPrimary(t *testing.T) {
 			Transformations: store,
 			Pipelines:       soakPipelineReader{},
 			Mirror:          m,
-			GitPrimary:      true,
 			Logger:          logger,
 		}
 	}

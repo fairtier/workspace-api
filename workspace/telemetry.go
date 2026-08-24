@@ -106,8 +106,8 @@ var (
 		metric.WithDescription("Wall-clock duration of a reported transformation run."),
 		metric.WithUnit("s"))
 
-	// repoSyncDuration times a full converge. With git-primary on, this sits
-	// on the request path of every save, so its tail latency is the Console's.
+	// repoSyncDuration times a full converge. This sits on the request path
+	// of every save, so its tail latency is the Console's.
 	repoSyncDuration, _ = meter.Float64Histogram("workspace.repo.sync.duration",
 		metric.WithDescription("Duration of one converge of a workspace repo to the desired file set."),
 		metric.WithUnit("s"))

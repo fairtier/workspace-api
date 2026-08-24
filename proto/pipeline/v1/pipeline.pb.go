@@ -1698,28 +1698,28 @@ func (x *GetPipelineConfigsResponse) GetPipelines() []*PipelineConfigItem {
 	return nil
 }
 
-// PipelineConfigItem includes source_credentials (only sent to in-cluster workers).
+// PipelineConfigItem is what a worker still needs from the control plane once
+// the pipelines checkout is the schedule (pipelines-as-files Phase 2.5): the
+// manual trigger, the credentials that have no file to come from, and the
+// last-run watermark. Every definition field was removed with the legacy
+// poll-is-truth mode — the worker reads those from pipelines/<name>.yaml.
 type PipelineConfigItem struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name       string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	SourceType string                 `protobuf:"bytes,3,opt,name=source_type,json=sourceType,proto3" json:"source_type,omitempty"`
-	// JSON string: non-sensitive source configuration.
-	SourceConfig string `protobuf:"bytes,4,opt,name=source_config,json=sourceConfig,proto3" json:"source_config,omitempty"`
-	// JSON string: sensitive credentials (API keys, passwords).
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// JSON string: sensitive credentials (API keys, passwords). Still served
+	// because a synthesized file_upload pipeline's injected storage credentials
+	// are not a source_credentials row and are never rendered as a .age file;
+	// row-backed pipelines are stripped here (POLL_SOURCE_CREDENTIALS=off).
 	SourceCredentials string `protobuf:"bytes,5,opt,name=source_credentials,json=sourceCredentials,proto3" json:"source_credentials,omitempty"`
-	DatasetName       string `protobuf:"bytes,6,opt,name=dataset_name,json=datasetName,proto3" json:"dataset_name,omitempty"`
-	Schedule          string `protobuf:"bytes,7,opt,name=schedule,proto3" json:"schedule,omitempty"`
-	WriteDisposition  string `protobuf:"bytes,8,opt,name=write_disposition,json=writeDisposition,proto3" json:"write_disposition,omitempty"`
-	Enabled           bool   `protobuf:"varint,9,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	// True when a pending run exists (manual trigger).
 	TriggerNow bool `protobuf:"varint,10,opt,name=trigger_now,json=triggerNow,proto3" json:"trigger_now,omitempty"`
 	// UUID of the pending run to update (instead of creating a new one).
 	PendingRunId string `protobuf:"bytes,11,opt,name=pending_run_id,json=pendingRunId,proto3" json:"pending_run_id,omitempty"`
-	// RFC 3339 timestamp of last successful run, empty if never run.
-	LastRunAt string `protobuf:"bytes,12,opt,name=last_run_at,json=lastRunAt,proto3" json:"last_run_at,omitempty"`
-	// "upsert" or "" (empty = delete-insert default).
-	MergeStrategy string `protobuf:"bytes,13,opt,name=merge_strategy,json=mergeStrategy,proto3" json:"merge_strategy,omitempty"`
+	// RFC 3339 timestamp of last successful run, empty if never run. Kept, and
+	// deliberately: it seeds a worker whose local scheduler state has no entry
+	// for the pipeline. Without it, a rebuilt scheduler.json reads every
+	// pipeline as never-run and re-fires the whole set at once.
+	LastRunAt     string `protobuf:"bytes,12,opt,name=last_run_at,json=lastRunAt,proto3" json:"last_run_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1761,60 +1761,11 @@ func (x *PipelineConfigItem) GetId() string {
 	return ""
 }
 
-func (x *PipelineConfigItem) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *PipelineConfigItem) GetSourceType() string {
-	if x != nil {
-		return x.SourceType
-	}
-	return ""
-}
-
-func (x *PipelineConfigItem) GetSourceConfig() string {
-	if x != nil {
-		return x.SourceConfig
-	}
-	return ""
-}
-
 func (x *PipelineConfigItem) GetSourceCredentials() string {
 	if x != nil {
 		return x.SourceCredentials
 	}
 	return ""
-}
-
-func (x *PipelineConfigItem) GetDatasetName() string {
-	if x != nil {
-		return x.DatasetName
-	}
-	return ""
-}
-
-func (x *PipelineConfigItem) GetSchedule() string {
-	if x != nil {
-		return x.Schedule
-	}
-	return ""
-}
-
-func (x *PipelineConfigItem) GetWriteDisposition() string {
-	if x != nil {
-		return x.WriteDisposition
-	}
-	return ""
-}
-
-func (x *PipelineConfigItem) GetEnabled() bool {
-	if x != nil {
-		return x.Enabled
-	}
-	return false
 }
 
 func (x *PipelineConfigItem) GetTriggerNow() bool {
@@ -1834,13 +1785,6 @@ func (x *PipelineConfigItem) GetPendingRunId() string {
 func (x *PipelineConfigItem) GetLastRunAt() string {
 	if x != nil {
 		return x.LastRunAt
-	}
-	return ""
-}
-
-func (x *PipelineConfigItem) GetMergeStrategy() string {
-	if x != nil {
-		return x.MergeStrategy
 	}
 	return ""
 }
@@ -2104,24 +2048,16 @@ const file_pipeline_proto_rawDesc = "" +
 	"\x19GetPipelineConfigsRequest\x12#\n" +
 	"\rcustomer_slug\x18\x01 \x01(\tR\fcustomerSlug\"[\n" +
 	"\x1aGetPipelineConfigsResponse\x12=\n" +
-	"\tpipelines\x18\x01 \x03(\v2\x1f.pipeline.v1.PipelineConfigItemR\tpipelines\"\xc1\x03\n" +
+	"\tpipelines\x18\x01 \x03(\v2\x1f.pipeline.v1.PipelineConfigItemR\tpipelines\"\xd0\x02\n" +
 	"\x12PipelineConfigItem\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
-	"\vsource_type\x18\x03 \x01(\tR\n" +
-	"sourceType\x12#\n" +
-	"\rsource_config\x18\x04 \x01(\tR\fsourceConfig\x12-\n" +
-	"\x12source_credentials\x18\x05 \x01(\tR\x11sourceCredentials\x12!\n" +
-	"\fdataset_name\x18\x06 \x01(\tR\vdatasetName\x12\x1a\n" +
-	"\bschedule\x18\a \x01(\tR\bschedule\x12+\n" +
-	"\x11write_disposition\x18\b \x01(\tR\x10writeDisposition\x12\x18\n" +
-	"\aenabled\x18\t \x01(\bR\aenabled\x12\x1f\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12-\n" +
+	"\x12source_credentials\x18\x05 \x01(\tR\x11sourceCredentials\x12\x1f\n" +
 	"\vtrigger_now\x18\n" +
 	" \x01(\bR\n" +
 	"triggerNow\x12$\n" +
 	"\x0epending_run_id\x18\v \x01(\tR\fpendingRunId\x12\x1e\n" +
-	"\vlast_run_at\x18\f \x01(\tR\tlastRunAt\x12%\n" +
-	"\x0emerge_strategy\x18\r \x01(\tR\rmergeStrategy\"\xf2\x01\n" +
+	"\vlast_run_at\x18\f \x01(\tR\tlastRunAtJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"J\x04\b\r\x10\x0eR\x04nameR\vsource_typeR\rsource_configR\fdataset_nameR\bscheduleR\x11write_dispositionR\aenabledR\x0emerge_strategy\"\xf2\x01\n" +
 	"\x18ReportPipelineRunRequest\x12\x1f\n" +
 	"\vpipeline_id\x18\x01 \x01(\tR\n" +
 	"pipelineId\x12\x16\n" +

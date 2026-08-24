@@ -310,8 +310,7 @@ func TestTransformationService_GitPrimary(t *testing.T) {
 					return nil
 				},
 			},
-			Mirror:     &hardFailMirror{err: workspace.ErrBoxUnreachable},
-			GitPrimary: true,
+			Mirror: &hardFailMirror{err: workspace.ErrBoxUnreachable},
 		}
 		_, err := svc.CreateTransformation(context.Background(), "u1", &workspace.Transformation{Name: "T"})
 		if !errors.Is(err, workspace.ErrBoxUnreachable) {
@@ -336,8 +335,7 @@ func TestTransformationService_GitPrimary(t *testing.T) {
 					return nil
 				},
 			},
-			Mirror:     &hardFailMirror{err: workspace.ErrBoxUnreachable},
-			GitPrimary: true,
+			Mirror: &hardFailMirror{err: workspace.ErrBoxUnreachable},
 		}
 		_, err := svc.UpdateTransformation(context.Background(), "u1", &workspace.Transformation{ID: "t1", Name: "new"})
 		if !errors.Is(err, workspace.ErrBoxUnreachable) {
@@ -363,8 +361,7 @@ func TestTransformationService_GitPrimary(t *testing.T) {
 					return nil
 				},
 			},
-			Mirror:     &hardFailMirror{err: workspace.ErrBoxUnreachable},
-			GitPrimary: true,
+			Mirror: &hardFailMirror{err: workspace.ErrBoxUnreachable},
 		}
 		err := svc.DeleteTransformation(context.Background(), "u1", "t1")
 		if !errors.Is(err, workspace.ErrBoxUnreachable) {
@@ -382,8 +379,7 @@ func TestTransformationService_GitPrimary(t *testing.T) {
 			Transformations: &mockTransformationRepo{
 				createTransformationFn: func(context.Context, *workspace.Transformation) error { return nil },
 			},
-			Mirror:     mirror,
-			GitPrimary: true,
+			Mirror: mirror,
 		}
 		if _, err := svc.CreateTransformation(context.Background(), "u1", &workspace.Transformation{Name: "T"}); err != nil {
 			t.Fatalf("CreateTransformation: %v", err)

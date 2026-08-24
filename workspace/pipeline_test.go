@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/fairtier/workspace-api/core"
 	"github.com/fairtier/workspace-api/workspace"
@@ -691,90 +690,6 @@ func TestPipelineService_ReportPipelineRun(t *testing.T) {
 	})
 }
 
-// blockingMirror is a PipelineMirrorer whose SyncCustomer blocks until it is
-// released — it stands in for a box whose Gitea is unreachable and hangs the
-// dual-write. It signals when it starts and finishes so a test can prove the
-// save neither waits for nor is blocked by it.
-type blockingMirror struct {
-	started chan struct{}
-	release chan struct{}
-	done    chan struct{}
-}
-
-func (m *blockingMirror) SyncCustomer(context.Context, string, *workspace.CommitAuthor) error {
-	close(m.started)
-	<-m.release
-	close(m.done)
-	return nil
-}
-
-// TestPipelineService_UpdatePipeline_mirrorAsync is the regression guard for
-// Fix A: a Console save must return as soon as Postgres is written and must
-// never block on the best-effort box mirror — an unreachable box hung the
-// mirror long enough to trip Cloudflare's timeout and 504 the RPC.
-func TestPipelineService_UpdatePipeline_mirrorAsync(t *testing.T) {
-	mirror := &blockingMirror{
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-		done:    make(chan struct{}),
-	}
-	svc := &workspace.PipelineService{
-		Workspaces: &mockCustomerReader{
-			getByUserIDFn: func(context.Context, core.UserID) (*workspace.Workspace, error) {
-				return &workspace.Workspace{Slug: "acme"}, nil
-			},
-		},
-		Pipelines: &mockPipelineRepo{
-			getPipelineFn: func(_ context.Context, id workspace.PipelineID) (*workspace.Pipeline, error) {
-				return &workspace.Pipeline{ID: id, CustomerSlug: "acme"}, nil
-			},
-			updatePipelineFn: func(context.Context, *workspace.Pipeline) error { return nil },
-		},
-		Mirror: mirror,
-		Logger: slog.Default(),
-	}
-
-	// Let the blocked mirror goroutine finish only once the test is done, so
-	// it exits cleanly rather than leaking past the test run.
-	t.Cleanup(func() {
-		close(mirror.release)
-		select {
-		case <-mirror.done:
-		case <-time.After(2 * time.Second):
-			t.Error("mirror goroutine never finished after release")
-		}
-	})
-
-	returned := make(chan error, 1)
-	go func() {
-		_, err := svc.UpdatePipeline(context.Background(), "user-1",
-			&workspace.Pipeline{ID: "pipe-1", SourceType: "sql_database"})
-		returned <- err
-	}()
-
-	select {
-	case err := <-returned:
-		if err != nil {
-			t.Fatalf("UpdatePipeline() error = %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("UpdatePipeline blocked on the mirror instead of returning (Fix A regression)")
-	}
-
-	// The mirror was dispatched (async) but is still blocked — proving the RPC
-	// returned without waiting for the box round-trip.
-	select {
-	case <-mirror.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("mirror was never invoked")
-	}
-	select {
-	case <-mirror.done:
-		t.Fatal("mirror ran to completion synchronously; the save must not wait for it")
-	default:
-	}
-}
-
 // fakeVersioner serves canned version data (the mirror's role).
 type fakeVersioner struct {
 	restored *workspace.Pipeline
@@ -907,9 +822,8 @@ func TestPipelineService_GitPrimary(t *testing.T) {
 					return nil
 				},
 			},
-			Mirror:     mirror,
-			GitPrimary: true,
-			Logger:     slog.Default(),
+			Mirror: mirror,
+			Logger: slog.Default(),
 		}
 		_, err := svc.CreatePipeline(context.Background(), "u1", &workspace.Pipeline{
 			SourceType:   "rest_api",
@@ -940,9 +854,8 @@ func TestPipelineService_GitPrimary(t *testing.T) {
 					return nil
 				},
 			},
-			Mirror:     &hardFailMirror{err: workspace.ErrBoxUnreachable},
-			GitPrimary: true,
-			Logger:     slog.Default(),
+			Mirror: &hardFailMirror{err: workspace.ErrBoxUnreachable},
+			Logger: slog.Default(),
 		}
 		_, err := svc.UpdatePipeline(context.Background(), "u1", &workspace.Pipeline{
 			ID: "p1", Name: "new",
@@ -963,9 +876,8 @@ func TestPipelineService_GitPrimary(t *testing.T) {
 			Pipelines: &mockPipelineRepo{
 				createPipelineFn: func(context.Context, *workspace.Pipeline) error { return nil },
 			},
-			Mirror:     mirror,
-			GitPrimary: true,
-			Logger:     slog.Default(),
+			Mirror: mirror,
+			Logger: slog.Default(),
 		}
 		_, err := svc.CreatePipeline(context.Background(), "u1", &workspace.Pipeline{
 			SourceType:   "rest_api",

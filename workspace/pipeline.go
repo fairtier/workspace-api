@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -120,17 +119,18 @@ type PipelineService struct {
 	Notifications Notifier
 	// Alerts, when set, sends an email on a failed run. Optional (nil = disabled).
 	Alerts PipelineAlerter
-	// Mirror, when set, dual-writes definitions to the box's pipelines repo
-	// after each successful create/update/delete. Best-effort by default: a
-	// mirror failure never fails the save. With GitPrimary the mirror commit
-	// joins the request path instead (see below).
+	// Mirror, when set, writes definitions to the box's pipelines repo on the
+	// request path: create/update/delete converge the repo synchronously, and
+	// a failed commit hard-fails the save with the row compensated back. The
+	// repo is the source of truth; the row is a cache over it.
+	//
+	// The legacy async dual-write (row-is-truth, best-effort mirror behind a
+	// PIPELINES_GIT_PRIMARY lever) was retired with the pipelines-as-files
+	// Phase 2.5 cleanup — with it went the dispatcher whose retry was
+	// in-memory, and the "a restart drops pending mirror work" hole that a
+	// durable outbox was once meant to close. A save now either commits or
+	// fails in front of the user.
 	Mirror PipelineMirrorer
-	// GitPrimary flips the source of truth to the box's pipelines repo
-	// (control-plane/workspace-split Phase 2A, env PIPELINES_GIT_PRIMARY=on):
-	// create/update/delete converge the repo synchronously, and a failed
-	// commit hard-fails the save with the central row compensated back — the
-	// row is demoted to a cache over the repo. Off = legacy async dual-write.
-	GitPrimary bool
 	// Users resolves the acting user so mirrored commits carry them as git
 	// author. Optional: nil keeps the plain platform attribution.
 	Users UserReader
@@ -165,12 +165,6 @@ type PipelineService struct {
 	// rows and are never rendered as .age files).
 	StripPollCredentials bool
 	Logger               *slog.Logger
-
-	// mirrorDispatcher runs box-repo mirror syncs off the request path,
-	// serialized and coalesced per customer with bounded retry. Created lazily
-	// on first save so a zero-value PipelineService needs no constructor.
-	mirrorOnce       sync.Once
-	mirrorDispatcher *pipelineMirrorDispatcher
 }
 
 // CreatePipeline creates a new pipeline for the caller's ws.
@@ -203,15 +197,11 @@ func (s *PipelineService) CreatePipeline(ctx context.Context, callerID core.User
 		return nil, fmt.Errorf("create pipeline: %w", err)
 	}
 
-	if s.GitPrimary {
-		if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "create", p.ID, func(ctx context.Context) error {
-			return s.Pipelines.DeletePipeline(ctx, p.ID)
-		}); err != nil {
-			return nil, err
-		}
-		return p, nil
+	if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "create", p.ID, func(ctx context.Context) error {
+		return s.Pipelines.DeletePipeline(ctx, p.ID)
+	}); err != nil {
+		return nil, err
 	}
-	s.mirrorPipelines(ctx, callerID, ws.Slug)
 	return p, nil
 }
 
@@ -249,23 +239,6 @@ func (s *PipelineService) commitOrCompensate(ctx context.Context, callerID core.
 		s.Logger.ErrorContext(ctx, "git-first "+op+": failed to compensate cache row after mirror failure; converge will heal", "pipeline", id, "error", compErr)
 	}
 	return err
-}
-
-// mirrorPipelines hands the customer's definitions off to be dual-written to
-// the box repo (pipelines-as-files Phase 1), best-effort and OFF the request
-// path: a save must never block on — let alone 504 on — a live round-trip to
-// an unreachable box, so this returns immediately once Postgres (the source of
-// truth) is written. The dispatcher serializes and coalesces converges per
-// customer with bounded retry (see pipelineMirrorDispatcher); a failed sync is
-// retried, and overlapping saves can never leave the box on a stale snapshot.
-func (s *PipelineService) mirrorPipelines(ctx context.Context, callerID core.UserID, customerSlug string) {
-	if s.Mirror == nil {
-		return
-	}
-	s.mirrorOnce.Do(func() {
-		s.mirrorDispatcher = newPipelineMirrorDispatcher(s.Mirror, s.Users, s.Logger)
-	})
-	s.mirrorDispatcher.enqueue(ctx, callerID, customerSlug)
 }
 
 // swapGoogleSheetsGrant redeems a "Sign in with Google" grant referenced in a
@@ -415,8 +388,8 @@ func (s *PipelineService) UpdatePipeline(ctx context.Context, callerID core.User
 }
 
 // finishUpdate is the save tail after the cache row is written: reclaim an
-// externally-managed .age file when the stored credential changed, then mirror
-// (synchronously under GitPrimary, async-dispatched otherwise).
+// externally-managed .age file when the stored credential changed, then commit
+// the repo on the request path.
 //
 // A clear counts as a change: without reclaiming, the box-owned .age file
 // survives the converge (external files are kept, never written) and the
@@ -426,15 +399,11 @@ func (s *PipelineService) finishUpdate(ctx context.Context, callerID core.UserID
 	if credentialsTouched && existing.CredentialsExternal {
 		s.reclaimCredentials(ctx, p.ID)
 	}
-	if s.GitPrimary {
-		if err := s.commitOrCompensate(ctx, callerID, customerSlug, "update", p.ID, func(ctx context.Context) error {
-			return s.Pipelines.UpdatePipeline(ctx, existing)
-		}); err != nil {
-			return nil, err
-		}
-		return p, nil
+	if err := s.commitOrCompensate(ctx, callerID, customerSlug, "update", p.ID, func(ctx context.Context) error {
+		return s.Pipelines.UpdatePipeline(ctx, existing)
+	}); err != nil {
+		return nil, err
 	}
-	s.mirrorPipelines(ctx, callerID, customerSlug)
 	return p, nil
 }
 
@@ -498,17 +467,13 @@ func (s *PipelineService) DeletePipeline(ctx context.Context, callerID core.User
 		return fmt.Errorf("delete pipeline: %w", err)
 	}
 
-	if s.GitPrimary {
-		// Compensation re-inserts the definition under a new row id; the run
-		// history is already gone (FK cascade) — same loss as a successful
-		// delete, but the definition survives, matching the repo state the
-		// failed commit left behind.
-		return s.commitOrCompensate(ctx, callerID, ws.Slug, "delete", id, func(ctx context.Context) error {
-			return s.Pipelines.CreatePipeline(ctx, existing)
-		})
-	}
-	s.mirrorPipelines(ctx, callerID, ws.Slug)
-	return nil
+	// Compensation re-inserts the definition under a new row id; the run
+	// history is already gone (FK cascade) — same loss as a successful
+	// delete, but the definition survives, matching the repo state the
+	// failed commit left behind.
+	return s.commitOrCompensate(ctx, callerID, ws.Slug, "delete", id, func(ctx context.Context) error {
+		return s.Pipelines.CreatePipeline(ctx, existing)
+	})
 }
 
 // ListPipelineVersions returns the newest-first history of a pipeline's

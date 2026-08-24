@@ -346,15 +346,7 @@ func (s *PipelineServer) GetPipelineConfigs(ctx context.Context, req *connect.Re
 		}
 		out = append(out, &pipelinev1.PipelineConfigItem{
 			Id:                string(p.ID),
-			Name:              p.Name,
-			SourceType:        p.SourceType,
-			SourceConfig:      string(p.SourceConfig),
 			SourceCredentials: string(p.SourceCredentials),
-			DatasetName:       p.DatasetName,
-			Schedule:          p.Schedule,
-			WriteDisposition:  p.WriteDisposition,
-			MergeStrategy:     p.MergeStrategy,
-			Enabled:           p.Enabled,
 			TriggerNow:        p.TriggerNow,
 			PendingRunId:      p.PendingRunID,
 			LastRunAt:         lastRunAt,

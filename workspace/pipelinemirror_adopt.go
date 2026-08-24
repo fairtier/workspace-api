@@ -252,8 +252,8 @@ type WorkspaceLister interface {
 // AdoptSweeper periodically runs the adopt passes across all VM workspaces —
 // the pull half of git-as-source-of-truth, catching edits made directly in
 // a box's Gitea between Console saves. Each mirror is optional (nil = that
-// plane's git-primary flag is off), so pipelines and transformations can
-// roll out independently.
+// plane is not adopted), which is how a caller wires one plane without the
+// other; the box wires both.
 type AdoptSweeper struct {
 	Mirror          *PipelineMirror
 	Transformations *TransformationMirror

@@ -9,9 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
@@ -265,53 +263,6 @@ func TestPipelineMirror_Converge(t *testing.T) {
 			t.Fatalf("want recorded nil author, got %+v (ok=%v)", got, ok)
 		}
 	})
-}
-
-// failingMirror always errors — the save must succeed anyway. It runs on its
-// own goroutine now (best-effort, non-blocking), so it closes done once
-// invoked to let the test await it without racing the counter.
-type failingMirror struct {
-	calls atomic.Int32
-	done  chan struct{}
-}
-
-func (f *failingMirror) SyncCustomer(context.Context, string, *workspace.CommitAuthor) error {
-	f.calls.Add(1)
-	close(f.done)
-	return errors.New("box unreachable")
-}
-
-func TestPipelineService_MirrorFailureDoesNotFailSave(t *testing.T) {
-	mirror := &failingMirror{done: make(chan struct{})}
-	svc := &workspace.PipelineService{
-		Workspaces: &mockCustomerReader{
-			getByUserIDFn: func(context.Context, core.UserID) (*workspace.Workspace, error) {
-				return &workspace.Workspace{Slug: "acme"}, nil
-			},
-		},
-		Pipelines: &mockPipelineRepo{
-			createPipelineFn: func(context.Context, *workspace.Pipeline) error { return nil },
-		},
-		Mirror: mirror,
-	}
-
-	p := &workspace.Pipeline{
-		Name:              "test",
-		SourceType:        "sql_database",
-		SourceCredentials: json.RawMessage(`{"connection_string":"postgres://u:p@localhost/db"}`),
-	}
-	if _, err := svc.CreatePipeline(context.Background(), "user-1", p); err != nil {
-		t.Fatalf("save must succeed despite mirror failure, got %v", err)
-	}
-	// The mirror is best-effort and now runs asynchronously; await its dispatch.
-	select {
-	case <-mirror.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("mirror was never attempted")
-	}
-	if got := mirror.calls.Load(); got != 1 {
-		t.Fatalf("mirror should have been attempted once, got %d", got)
-	}
 }
 
 // --- age credential files (pipelines-as-files Phase 3) ---

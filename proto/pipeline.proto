@@ -65,8 +65,11 @@ service PipelineService {
 
   // --- Worker-facing (internal only) ---
 
-  // GetPipelineConfigs returns all enabled pipelines for a customer, including
-  // sensitive source credentials. Called by the dlt-worker poll loop.
+  // GetPipelineConfigs returns the worker's trigger feed for a customer:
+  // every enabled pipeline plus any disabled one with a pending (manually
+  // triggered) run, carrying triggers, file_upload storage credentials and
+  // the last-run watermark — not definitions. Called by the dlt-worker poll
+  // loop, which schedules from its pipelines checkout.
   rpc GetPipelineConfigs(GetPipelineConfigsRequest) returns (GetPipelineConfigsResponse) {}
 
   // ReportPipelineRun records the result of a pipeline execution from the
@@ -302,27 +305,33 @@ message GetPipelineConfigsResponse {
   repeated PipelineConfigItem pipelines = 1;
 }
 
-// PipelineConfigItem includes source_credentials (only sent to in-cluster workers).
+// PipelineConfigItem is what a worker still needs from the control plane once
+// the pipelines checkout is the schedule (pipelines-as-files Phase 2.5): the
+// manual trigger, the credentials that have no file to come from, and the
+// last-run watermark. Every definition field was removed with the legacy
+// poll-is-truth mode — the worker reads those from pipelines/<name>.yaml.
 message PipelineConfigItem {
   string id = 1;
-  string name = 2;
-  string source_type = 3;
-  // JSON string: non-sensitive source configuration.
-  string source_config = 4;
-  // JSON string: sensitive credentials (API keys, passwords).
+  // JSON string: sensitive credentials (API keys, passwords). Still served
+  // because a synthesized file_upload pipeline's injected storage credentials
+  // are not a source_credentials row and are never rendered as a .age file;
+  // row-backed pipelines are stripped here (POLL_SOURCE_CREDENTIALS=off).
   string source_credentials = 5;
-  string dataset_name = 6;
-  string schedule = 7;
-  string write_disposition = 8;
-  bool enabled = 9;
   // True when a pending run exists (manual trigger).
   bool trigger_now = 10;
   // UUID of the pending run to update (instead of creating a new one).
   string pending_run_id = 11;
-  // RFC 3339 timestamp of last successful run, empty if never run.
+  // RFC 3339 timestamp of last successful run, empty if never run. Kept, and
+  // deliberately: it seeds a worker whose local scheduler state has no entry
+  // for the pipeline. Without it, a rebuilt scheduler.json reads every
+  // pipeline as never-run and re-fires the whole set at once.
   string last_run_at = 12;
-  // "upsert" or "" (empty = delete-insert default).
-  string merge_strategy = 13;
+
+  // Retired with the legacy poll-is-truth mode. Never reuse these numbers:
+  // a pre-0.9.0 worker parses by field number and would read a new field as
+  // a definition.
+  reserved 2, 3, 4, 6, 7, 8, 9, 13;
+  reserved "name", "source_type", "source_config", "dataset_name", "schedule", "write_disposition", "enabled", "merge_strategy";
 }
 
 message ReportPipelineRunRequest {

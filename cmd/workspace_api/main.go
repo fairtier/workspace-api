@@ -5,7 +5,7 @@
 // table, auth from the box's own Casdoor JWKS, repo credentials from local
 // Secrets (workspace.StaticBoxCredentials) instead of the central deposit
 // tables, and the box Gitea repos are the definitions' source of truth
-// (git-primary defaults ON here). The control plane — billing, identity
+// (unconditionally, since the Phase 2.5 cleanup). The control plane — billing, identity
 // sync, provisioning — does not exist on this binary; when central
 // disappears, this keeps the workspace working.
 package main
@@ -173,12 +173,11 @@ func run() error {
 		Logger:       logger,
 	}
 
-	// The box repo IS the source of truth here, so both git-primary levers
-	// default ON (central defaults them off). "off"/"on" keep the central env
-	// names working. Read once: the same flag drives the save path (services)
-	// and the adopt sweep, so turning a plane off stops both halves together.
-	pipelinesGitPrimary := os.Getenv("PIPELINES_GIT_PRIMARY") != "off"
-	transformationsGitPrimary := os.Getenv("TRANSFORMATIONS_GIT_PRIMARY") != "off"
+	// The box repo IS the source of truth, unconditionally: the
+	// PIPELINES_GIT_PRIMARY / TRANSFORMATIONS_GIT_PRIMARY levers were retired
+	// with the pipelines-as-files Phase 2.5 cleanup, together with the legacy
+	// row-is-truth save path they selected. Both env vars are now ignored;
+	// the box charts no longer set them.
 
 	// Commit attribution: central reads its users table, the box reads the
 	// claims of the token the caller just presented — its database holds no
@@ -198,7 +197,6 @@ func run() error {
 		// The local dlt-worker decrypts credentials from the checkout, and
 		// saves commit synchronously.
 		StripPollCredentials: os.Getenv("POLL_SOURCE_CREDENTIALS") != "on",
-		GitPrimary:           pipelinesGitPrimary,
 		Connections:          repo,
 		// The box mints its own grants since the consent flow moved here
 		// (0.16.0), so a save carrying {"oauth":{"grant_id":…}} — the
@@ -238,7 +236,6 @@ func run() error {
 		Notifications:   notificationSvc,
 		Mirror:          transformationMirror,
 		Users:           commitUsers,
-		GitPrimary:      transformationsGitPrimary,
 		Logger:          logger,
 	}
 	transformationServer := &server.TransformationServer{Service: transformationSvc}
@@ -362,13 +359,11 @@ func run() error {
 	internalMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(serviceNames...)))
 
 	startBackgroundSweeps(ctx, logger, backgroundSweeps{
-		Slug:                      ws.Slug,
-		Repo:                      repo,
-		Resolver:                  resolver,
-		PipelineMirror:            pipelineMirror,
-		TransformationMirror:      transformationMirror,
-		PipelinesGitPrimary:       pipelinesGitPrimary,
-		TransformationsGitPrimary: transformationsGitPrimary,
+		Slug:                 ws.Slug,
+		Repo:                 repo,
+		Resolver:             resolver,
+		PipelineMirror:       pipelineMirror,
+		TransformationMirror: transformationMirror,
 	})
 	if googleOAuth != nil {
 		// This binary now mints grants, so it inherits the abandoned-grant
@@ -414,36 +409,29 @@ func wireRepoImport(pipelines *workspace.PipelineMirror, transformations *worksp
 
 // backgroundSweeps carries the wiring for the periodic sweeps.
 type backgroundSweeps struct {
-	Slug                      string
-	Repo                      *postgres.Repository
-	Resolver                  *workspace.StaticResolver
-	PipelineMirror            *workspace.PipelineMirror
-	TransformationMirror      *workspace.TransformationMirror
-	PipelinesGitPrimary       bool
-	TransformationsGitPrimary bool
+	Slug                 string
+	Repo                 *postgres.Repository
+	Resolver             *workspace.StaticResolver
+	PipelineMirror       *workspace.PipelineMirror
+	TransformationMirror *workspace.TransformationMirror
 }
 
 // startBackgroundSweeps launches the sweeps that run in the central
 // platform-worker today; this binary is single-replica on the box, so it
-// hosts them itself. Each adopt mirror is wired only while its git-primary
-// flag is on (nil = that plane's adoption off, per the AdoptSweeper contract),
-// so turning a flag off stops git→DB adoption together with git-first saves.
-// The stuck-run sweep is scoped to the box's own slug: every other box write
+// hosts them itself. The stuck-run sweep is scoped to the box's own slug: every other box write
 // path is slug-gated in depth, and this keeps a mispointed PG_DSN from
 // failing another tenant's in-flight runs.
 func startBackgroundSweeps(ctx context.Context, logger *slog.Logger, s backgroundSweeps) {
-	sweeper := &workspace.AdoptSweeper{Workspaces: s.Resolver, Logger: logger}
-	if s.PipelinesGitPrimary {
-		sweeper.Mirror = s.PipelineMirror
+	// Both planes are git-primary unconditionally since the Phase 2.5
+	// cleanup, so the adopt sweep — the read-only half that pulls
+	// out-of-band repo edits back into the cache — always runs.
+	sweeper := &workspace.AdoptSweeper{
+		Workspaces:      s.Resolver,
+		Mirror:          s.PipelineMirror,
+		Transformations: s.TransformationMirror,
+		Logger:          logger,
 	}
-	if s.TransformationsGitPrimary {
-		sweeper.Transformations = s.TransformationMirror
-	}
-	if sweeper.Mirror != nil || sweeper.Transformations != nil {
-		go sweeper.Run(ctx, loadDurationEnv("PIPELINE_ADOPT_SWEEP_INTERVAL", 10*time.Minute))
-	} else {
-		logger.Info("adopt sweep disabled: both git-primary flags are off")
-	}
+	go sweeper.Run(ctx, loadDurationEnv("PIPELINE_ADOPT_SWEEP_INTERVAL", 10*time.Minute))
 
 	stuckSweeper := &workspace.StuckRunSweeper{
 		Store:   s.Repo,

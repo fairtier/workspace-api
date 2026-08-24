@@ -766,32 +766,44 @@ func chooseStructuredCaller(getenv func(string) string, logger *slog.Logger) llm
 		logger.Info("AI drafting enabled", "provider", "anthropic")
 		return llm.NewAnthropicCaller(getenv("ANTHROPIC_API_KEY"), getenv("ANTHROPIC_MODEL"), logger)
 	case getenv("LLM_BASE_URL") != "":
-		if getenv("LLM_API_KEY") == "" || getenv("LLM_MODEL") == "" {
-			logger.Warn("AI drafting disabled: LLM_BASE_URL is set but LLM_API_KEY or LLM_MODEL is missing")
-			return nil
-		}
-		apiKey := getenv("LLM_API_KEY")
-		if apiKey == "none" {
-			apiKey = ""
-		}
-		logger.Info("AI drafting enabled", "provider", "openai_compat", "model", getenv("LLM_MODEL"))
-		return llm.NewOpenAICompatCaller(getenv("LLM_BASE_URL"), apiKey, getenv("LLM_MODEL"), logger)
+		return openAICompatCallerFromEnv(getenv, logger)
 	case getenv("FAIRTIER_ASSIST_URL") != "":
-		if getenv("FAIRTIER_ASSIST_TOKEN_URL") == "" ||
-			getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID") == "" ||
-			getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET") == "" {
-			logger.Warn("AI drafting disabled: FAIRTIER_ASSIST_URL is set but the token URL or OIDC client pair is missing")
-			return nil
-		}
-		logger.Info("AI drafting enabled", "provider", "fairtier_relay")
-		return llm.NewRemoteCaller(
-			getenv("FAIRTIER_ASSIST_URL"),
-			getenv("FAIRTIER_ASSIST_TOKEN_URL"),
-			getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID"),
-			getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET"),
-			logger)
+		return relayCallerFromEnv(getenv, logger)
 	}
 	return nil
+}
+
+// openAICompatCallerFromEnv builds the generic-endpoint rung; a half-set
+// LLM_* trio disables drafting rather than falling through to the relay.
+func openAICompatCallerFromEnv(getenv func(string) string, logger *slog.Logger) llm.StructuredCaller {
+	if getenv("LLM_API_KEY") == "" || getenv("LLM_MODEL") == "" {
+		logger.Warn("AI drafting disabled: LLM_BASE_URL is set but LLM_API_KEY or LLM_MODEL is missing")
+		return nil
+	}
+	apiKey := getenv("LLM_API_KEY")
+	if apiKey == "none" {
+		apiKey = ""
+	}
+	logger.Info("AI drafting enabled", "provider", "openai_compat", "model", getenv("LLM_MODEL"))
+	return llm.NewOpenAICompatCaller(getenv("LLM_BASE_URL"), apiKey, getenv("LLM_MODEL"), logger)
+}
+
+// relayCallerFromEnv builds the FairTier API relay rung; likewise, a partial
+// FAIRTIER_ASSIST_* set disables drafting.
+func relayCallerFromEnv(getenv func(string) string, logger *slog.Logger) llm.StructuredCaller {
+	if getenv("FAIRTIER_ASSIST_TOKEN_URL") == "" ||
+		getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID") == "" ||
+		getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET") == "" {
+		logger.Warn("AI drafting disabled: FAIRTIER_ASSIST_URL is set but the token URL or OIDC client pair is missing")
+		return nil
+	}
+	logger.Info("AI drafting enabled", "provider", "fairtier_relay")
+	return llm.NewRemoteCaller(
+		getenv("FAIRTIER_ASSIST_URL"),
+		getenv("FAIRTIER_ASSIST_TOKEN_URL"),
+		getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID"),
+		getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET"),
+		logger)
 }
 
 // buildFingerprinter mirrors the control-plane binary: keyed HMAC fingerprints

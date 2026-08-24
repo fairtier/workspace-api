@@ -144,6 +144,40 @@ func TestAssistService_DraftSql(t *testing.T) {
 		}
 	})
 
+	t.Run("cannot-answer: empty sql with notes passes through, skipping EXPLAIN", func(t *testing.T) {
+		drafter := &mockSqlDrafter{draft: &workspace.SqlDraft{SQL: "  ", Notes: "The warehouse has no CRM data; ingest it first."}}
+		schema := &mockSchemaSource{
+			tables:     []workspace.TableRef{orders},
+			explainErr: errors.New("EXPLAIN must not run on an empty draft"),
+		}
+		svc := sqlAssistService(drafter, schema)
+
+		draft, err := svc.DraftSql(context.Background(), "u1", "salesforce churn", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if draft.SQL != "" {
+			t.Errorf("want empty SQL, got %q", draft.SQL)
+		}
+		if !strings.Contains(draft.Notes, "no CRM data") {
+			t.Errorf("notes lost: %q", draft.Notes)
+		}
+		if strings.Contains(draft.Notes, "could not validate") {
+			t.Errorf("EXPLAIN annotation on an empty draft: %q", draft.Notes)
+		}
+	})
+
+	t.Run("empty sql with empty notes is still malformed", func(t *testing.T) {
+		drafter := &mockSqlDrafter{draft: &workspace.SqlDraft{SQL: "", Notes: "  "}}
+		svc := sqlAssistService(drafter, &mockSchemaSource{tables: []workspace.TableRef{orders}})
+
+		_, err := svc.DraftSql(context.Background(), "u1", "anything", "")
+		var invalid *workspace.ErrInvalidSourceConfig
+		if !errors.As(err, &invalid) || invalid.Field != "sql" {
+			t.Fatalf("want sql validation error, got %v", err)
+		}
+	})
+
 	t.Run("prompt-matching tables get described first when many", func(t *testing.T) {
 		var tables []workspace.TableRef
 		for i := range 30 {

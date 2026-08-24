@@ -55,15 +55,18 @@ type ErrorExplanation struct {
 
 // TransformationDrafter turns a natural-language prompt into a draft dbt
 // transformation via an LLM. Implementations live outside the domain (the llm
-// package) so the domain stays free of any LLM SDK dependency.
+// package) so the domain stays free of any LLM SDK dependency. schemaContext
+// is the warehouse schema listing (may be empty — the drafter then works
+// blind, as it always did before grounding).
 type TransformationDrafter interface {
-	DraftTransformation(ctx context.Context, prompt string) (*TransformationDraft, error)
+	DraftTransformation(ctx context.Context, prompt, schemaContext string) (*TransformationDraft, error)
 }
 
 // RillDrafter turns a natural-language prompt into draft Rill project files.
-// existingPaths lets the model reference real models/sources in the repo.
+// existingPaths lets the model reference real models/sources in the repo;
+// schemaContext is the warehouse schema listing (may be empty).
 type RillDrafter interface {
-	DraftRillDashboard(ctx context.Context, prompt string, existingPaths []string) (*RillDraft, error)
+	DraftRillDashboard(ctx context.Context, prompt string, existingPaths []string, schemaContext string) (*RillDraft, error)
 }
 
 // SqlDrafter turns a natural-language prompt (plus the editor's current SQL
@@ -169,7 +172,7 @@ func (s *AssistService) DraftTransformation(ctx context.Context, callerID core.U
 		return nil, err
 	}
 
-	draft, err := s.Transformations.DraftTransformation(ctx, prompt)
+	draft, err := s.Transformations.DraftTransformation(ctx, prompt, s.draftSchemaContext(ctx, callerID, prompt))
 	if err != nil {
 		return nil, fmt.Errorf("draft transformation: %w", err)
 	}
@@ -196,7 +199,7 @@ func (s *AssistService) DraftRillDashboard(ctx context.Context, callerID core.Us
 		return nil, err
 	}
 
-	draft, err := s.Rill.DraftRillDashboard(ctx, prompt, existingPaths)
+	draft, err := s.Rill.DraftRillDashboard(ctx, prompt, existingPaths, s.draftSchemaContext(ctx, callerID, prompt))
 	if err != nil {
 		return nil, fmt.Errorf("draft rill dashboard: %w", err)
 	}
@@ -220,6 +223,25 @@ func (s *AssistService) DraftRillDashboard(ctx context.Context, callerID core.Us
 		}
 	}
 	return draft, nil
+}
+
+// draftSchemaContext builds the warehouse schema block for the dbt/Rill
+// drafters, best-effort. Unlike DraftSql — whose whole point is the schema,
+// so a listing failure fails the draft — these surfaces drafted blind before
+// grounding, and a missing engine or a listing error degrades back to that
+// rather than refusing the draft.
+func (s *AssistService) draftSchemaContext(ctx context.Context, callerID core.UserID, prompt string) string {
+	if s.Schema == nil {
+		return ""
+	}
+	schemaContext, err := s.buildSchemaContext(ctx, callerID, prompt)
+	if err != nil {
+		if s.Logger != nil {
+			s.Logger.Warn("draft schema context unavailable; drafting without it", "error", err)
+		}
+		return ""
+	}
+	return schemaContext
 }
 
 // gate runs the shared pre-LLM checks: non-empty prompt, tenant scoping, rate

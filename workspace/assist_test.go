@@ -11,18 +11,22 @@ import (
 )
 
 type mockTransformationDrafter struct {
-	fn func(ctx context.Context, prompt string) (*workspace.TransformationDraft, error)
+	fn        func(ctx context.Context, prompt string) (*workspace.TransformationDraft, error)
+	gotSchema string // schemaContext captured from the last call
 }
 
-func (m *mockTransformationDrafter) DraftTransformation(ctx context.Context, prompt string) (*workspace.TransformationDraft, error) {
+func (m *mockTransformationDrafter) DraftTransformation(ctx context.Context, prompt, schemaContext string) (*workspace.TransformationDraft, error) {
+	m.gotSchema = schemaContext
 	return m.fn(ctx, prompt)
 }
 
 type mockRillDrafter struct {
-	fn func(ctx context.Context, prompt string, existingPaths []string) (*workspace.RillDraft, error)
+	fn        func(ctx context.Context, prompt string, existingPaths []string) (*workspace.RillDraft, error)
+	gotSchema string // schemaContext captured from the last call
 }
 
-func (m *mockRillDrafter) DraftRillDashboard(ctx context.Context, prompt string, existingPaths []string) (*workspace.RillDraft, error) {
+func (m *mockRillDrafter) DraftRillDashboard(ctx context.Context, prompt string, existingPaths []string, schemaContext string) (*workspace.RillDraft, error) {
+	m.gotSchema = schemaContext
 	return m.fn(ctx, prompt, existingPaths)
 }
 
@@ -73,6 +77,46 @@ func TestAssistService_DraftTransformation(t *testing.T) {
 		}
 		if len(draft.Files) != 2 {
 			t.Fatalf("want 2 files, got %d", len(draft.Files))
+		}
+	})
+
+	t.Run("schema context reaches the drafter", func(t *testing.T) {
+		drafter := &mockTransformationDrafter{fn: func(context.Context, string) (*workspace.TransformationDraft, error) {
+			return validTransformationDraft(), nil
+		}}
+		svc := &workspace.AssistService{
+			Workspaces:      acmeReader(),
+			Transformations: drafter,
+			Schema: &mockSchemaSource{
+				tables:  []workspace.TableRef{{Namespace: "stripe", Name: "charges"}},
+				columns: map[workspace.TableRef][]workspace.ColumnSchema{{Namespace: "stripe", Name: "charges"}: {{Name: "amount", Type: "BIGINT"}}},
+			},
+		}
+		if _, err := svc.DraftTransformation(context.Background(), "u1", "build a revenue mart"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(drafter.gotSchema, "stripe.charges") || !strings.Contains(drafter.gotSchema, "amount BIGINT") {
+			t.Fatalf("schema context not passed to drafter: %q", drafter.gotSchema)
+		}
+	})
+
+	t.Run("schema listing failure degrades to blind drafting", func(t *testing.T) {
+		drafter := &mockTransformationDrafter{
+			gotSchema: "sentinel", // must be overwritten with ""
+			fn: func(context.Context, string) (*workspace.TransformationDraft, error) {
+				return validTransformationDraft(), nil
+			},
+		}
+		svc := &workspace.AssistService{
+			Workspaces:      acmeReader(),
+			Transformations: drafter,
+			Schema:          &mockSchemaSource{tablesErr: errors.New("engine down")},
+		}
+		if _, err := svc.DraftTransformation(context.Background(), "u1", "build a mart"); err != nil {
+			t.Fatalf("listing failure must not fail the draft: %v", err)
+		}
+		if drafter.gotSchema != "" {
+			t.Fatalf("want empty schema context on listing failure, got %q", drafter.gotSchema)
 		}
 	})
 

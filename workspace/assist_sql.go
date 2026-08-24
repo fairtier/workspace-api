@@ -53,8 +53,17 @@ func (s *AssistService) DraftSql(ctx context.Context, callerID core.UserID, prom
 	if err != nil {
 		return nil, fmt.Errorf("draft sql: %w", err)
 	}
+	// The model's "cannot answer": empty SQL with explanatory notes means the
+	// warehouse holds nothing relevant to the request. Without this escape the
+	// required sql field would force a fabricated query against unrelated
+	// tables — plausible-looking, EXPLAIN-clean, and wrong. Empty SQL with
+	// empty notes is still a malformed draft.
 	if strings.TrimSpace(draft.SQL) == "" {
-		return nil, &ErrInvalidSourceConfig{Field: "sql", Msg: "draft produced no SQL"}
+		if strings.TrimSpace(draft.Notes) == "" {
+			return nil, &ErrInvalidSourceConfig{Field: "sql", Msg: "draft produced no SQL"}
+		}
+		draft.SQL = ""
+		return draft, nil
 	}
 
 	// Best-effort validation, never fatal: EXPLAIN plans without executing,

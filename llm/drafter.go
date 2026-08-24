@@ -216,6 +216,12 @@ Rules:
 - Output one or two .sql models under models/ (staging and/or marts) and one schema.yml alongside them.
 - Models select from ingested tables via {{ source('<dataset>', '<table>') }} and from each other via {{ ref('<model>') }}.
 - Use DuckDB SQL. Keep model and column names lowercase snake_case.
+- When a "Warehouse schema" listing is appended to the request, it is the complete set of ingested
+  tables: a listed namespace.table is referenced as {{ source('<namespace>', '<table>') }}, and you
+  must NOT reference tables absent from the listing. If the data the user describes is not in the
+  listing, build on the closest listed tables only when that genuinely serves the request, and say
+  clearly in notes what is missing.
+- Without a schema listing, source tables are unverified: flag every assumed table in notes.
 - NEVER invent or include credentials, repo URLs, or tokens of any kind. Leave repository choice to the platform.
 - schedule is a cron expression, or empty for manual runs. Prefer empty unless the user asks for a schedule.
 - If the description is ambiguous (unknown source tables, unclear grain), make a reasonable choice and say so in notes.`
@@ -233,10 +239,16 @@ type transformationDraftOutput struct {
 
 // DraftTransformation calls the model and returns a structured dbt draft. The
 // domain validates the drafted files (paths, extensions, sizes).
-func (d *Drafter) DraftTransformation(ctx context.Context, prompt string) (*workspace.TransformationDraft, error) {
+// schemaContext (the server-built warehouse listing) grounds the source()
+// references; empty means drafting blind, which the prompt tells the model.
+func (d *Drafter) DraftTransformation(ctx context.Context, prompt, schemaContext string) (*workspace.TransformationDraft, error) {
+	userPrompt := prompt
+	if schemaContext != "" {
+		userPrompt += "\n\n" + schemaContext
+	}
 	res, err := d.Caller.Complete(ctx, StructuredRequest{
 		System:    transformationDraftSystemPrompt,
-		Prompt:    prompt,
+		Prompt:    userPrompt,
 		Schema:    transformationDraftSchema,
 		MaxTokens: 4096,
 		Kind:      "transformation",
@@ -298,8 +310,13 @@ Rules:
 - NEVER invent or include credentials of any kind.
 - Never emit rill.yaml, duckdb.yaml or .env — those are platform-managed.
 - Keep file and field names lowercase snake_case.
-- If the user's description references tables you cannot see in the provided repo paths, make a
-  reasonable assumption and flag it in notes.`
+- When a "Warehouse schema" listing is appended to the request, it is the complete warehouse: a
+  listed namespace.table is referenced as lk.<namespace>.<table>, and you must NOT reference tables
+  absent from the listing (existing repo models remain fair game via their model names). If the data
+  the user describes is not in the listing, build on the closest listed tables only when that
+  genuinely serves the request, and say clearly in notes what is missing.
+- Without a schema listing, if the user's description references tables you cannot see in the
+  provided repo paths, make a reasonable assumption and flag it in notes.`
 
 // rillSkillsBudget caps how much vendored reference documentation rides in
 // the Rill system prompt. Whole documents are dropped, never truncated —
@@ -333,11 +350,16 @@ type rillDraftOutput struct {
 
 // DraftRillDashboard calls the model and returns drafted Rill files. The
 // domain validates paths and YAML syntax.
-func (d *Drafter) DraftRillDashboard(ctx context.Context, prompt string, existingPaths []string) (*workspace.RillDraft, error) {
+// schemaContext (the server-built warehouse listing) grounds the
+// lk.<namespace>.<table> references; empty means drafting blind.
+func (d *Drafter) DraftRillDashboard(ctx context.Context, prompt string, existingPaths []string, schemaContext string) (*workspace.RillDraft, error) {
 	userPrompt := prompt
 	if len(existingPaths) > 0 {
 		userPrompt += "\n\nExisting files in the Rill project (reference these models/sources instead of inventing new ones where possible):\n- " +
 			strings.Join(existingPaths, "\n- ")
+	}
+	if schemaContext != "" {
+		userPrompt += "\n\n" + schemaContext
 	}
 
 	res, err := d.Caller.Complete(ctx, StructuredRequest{
@@ -370,11 +392,11 @@ var sqlDraftSchema = map[string]any{
 	"properties": map[string]any{
 		"sql": map[string]any{
 			"type":        "string",
-			"description": "One DuckDB SELECT statement (a WITH...SELECT is fine) answering the request against the listed tables. No DDL/DML, no multiple statements.",
+			"description": "One DuckDB SELECT statement (a WITH...SELECT is fine) answering the request against the listed tables. No DDL/DML, no multiple statements. Empty string when the listed schema holds nothing relevant to the request — never fabricate a query against unrelated tables.",
 		},
 		"notes": map[string]any{
 			"type":        "string",
-			"description": "One or two sentences explaining the query and any assumptions (ambiguous column choice, date-range defaults, ...).",
+			"description": "One or two sentences explaining the query and any assumptions (ambiguous column choice, date-range defaults, ...). When sql is empty: what the warehouse lacks and what data would need to be ingested first.",
 		},
 	},
 }
@@ -393,7 +415,11 @@ Rules:
 - End a row-returning query with a LIMIT (200 unless the user asks otherwise); pure aggregates
   with a small result need none.
 - NEVER include credentials of any kind.
-- If the request is ambiguous, make a reasonable choice and explain it in notes.`
+- If the request is ambiguous, make a reasonable choice and explain it in notes.
+- If the schema listing holds NOTHING relevant to the request (the user asks about data that was
+  never ingested), return an empty sql and use notes to say what is missing and what would need to
+  be ingested first. A fabricated query against unrelated tables is worse than no query: ambiguous
+  means several listed tables could plausibly answer — pick one; irrelevant means none can — refuse.`
 
 type sqlDraftOutput struct {
 	SQL   string `json:"sql"`

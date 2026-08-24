@@ -81,7 +81,7 @@ var pipelineDraftSchema = map[string]any{
 			"description": "One or two sentences explaining the draft and any assumptions, plus which credentials the user still needs to provide.",
 		},
 		"unsupported_reason": map[string]any{
-			"type": "string",
+			"type":        "string",
 			"description": "Empty string when the request is feasible. When source_type is \"unsupported\": one or two sentences naming the missing capability and, when one exists, a genuinely equivalent alternative (e.g. exporting to CSV and using file_upload). Never suggest a supported source as if it could reach the unsupported system.",
 		},
 	},

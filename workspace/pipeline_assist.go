@@ -91,15 +91,8 @@ func (s *PipelineAssistService) DraftPipeline(ctx context.Context, callerID core
 		return nil, fmt.Errorf("draft pipeline: %w", err)
 	}
 
-	// The model's refusal path: the request needs a capability the platform
-	// does not have. Return only the reason — a partial draft alongside it
-	// would invite submitting the very thing we just said cannot run.
-	if draft.UnsupportedReason != "" || draft.SourceType == "unsupported" {
-		reason := draft.UnsupportedReason
-		if reason == "" {
-			reason = "This request needs a capability the platform does not support yet."
-		}
-		return &PipelineDraft{UnsupportedReason: reason, Notes: draft.Notes}, nil
+	if refusal := refusalDraft(draft); refusal != nil {
+		return refusal, nil
 	}
 
 	// The model must never produce credentials; defend against it regardless of
@@ -112,6 +105,21 @@ func (s *PipelineAssistService) DraftPipeline(ctx context.Context, callerID core
 	}
 
 	return draft, nil
+}
+
+// refusalDraft returns the refusal form of draft — the request needs a
+// capability the platform does not have — or nil for a feasible draft. Only
+// the reason and notes survive: a partial draft alongside them would invite
+// submitting the very thing we just said cannot run.
+func refusalDraft(draft *PipelineDraft) *PipelineDraft {
+	if draft.UnsupportedReason == "" && draft.SourceType != "unsupported" {
+		return nil
+	}
+	reason := draft.UnsupportedReason
+	if reason == "" {
+		reason = "This request needs a capability the platform does not support yet."
+	}
+	return &PipelineDraft{UnsupportedReason: reason, Notes: draft.Notes}
 }
 
 // MemoryRateLimiter is a simple per-key fixed-window rate limiter kept in

@@ -226,19 +226,25 @@ func validateSQLDatabaseCreds(raw json.RawMessage) error {
 func validateSQLDatabaseDialect(connectionString string) error {
 	scheme, _, ok := strings.Cut(connectionString, "://")
 	if !ok {
-		return &ErrInvalidSourceCredentials{Field: "connection_string",
-			Msg: "sql_database: connection_string must be a SQLAlchemy URL like postgresql://user:password@host:5432/dbname"}
+		return &ErrInvalidSourceCredentials{
+			Field: "connection_string",
+			Msg:   "sql_database: connection_string must be a SQLAlchemy URL like postgresql://user:password@host:5432/dbname",
+		}
 	}
 	dialect, driver, _ := strings.Cut(strings.ToLower(scheme), "+")
 	if dialect != "postgres" && dialect != "postgresql" {
-		return &ErrInvalidSourceCredentials{Field: "connection_string",
-			Msg: fmt.Sprintf("sql_database: only PostgreSQL is supported (the worker has no %q driver); the connection string must start with postgresql://", dialect)}
+		return &ErrInvalidSourceCredentials{
+			Field: "connection_string",
+			Msg:   fmt.Sprintf("sql_database: only PostgreSQL is supported (the worker has no %q driver); the connection string must start with postgresql://", dialect),
+		}
 	}
 	// The worker ships psycopg (v3) only; any other explicit driver
 	// (psycopg2, asyncpg, pg8000, ...) fails on the box with a missing module.
 	if driver != "" && driver != "psycopg" {
-		return &ErrInvalidSourceCredentials{Field: "connection_string",
-			Msg: fmt.Sprintf("sql_database: driver %q is not installed on the worker; use postgresql:// (or postgresql+psycopg://)", driver)}
+		return &ErrInvalidSourceCredentials{
+			Field: "connection_string",
+			Msg:   fmt.Sprintf("sql_database: driver %q is not installed on the worker; use postgresql:// (or postgresql+psycopg://)", driver),
+		}
 	}
 	return nil
 }

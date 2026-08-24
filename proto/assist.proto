@@ -95,11 +95,19 @@ message DraftSqlRequest {
 }
 
 message DraftSqlResponse {
-  // One DuckDB SELECT statement. Never executed server-side.
+  // One DuckDB SELECT statement. Never executed server-side. Empty when
+  // no_relevant_data is set.
   string sql = 1;
   // Explanation, assumptions, and (when EXPLAIN failed) the engine's own
-  // validation message.
+  // validation message. When no_relevant_data is set: what the warehouse
+  // lacks and what would need to be ingested first.
   string notes = 2;
+  // The model's explicit "cannot answer" code: the warehouse holds nothing
+  // about the request's subject. The Console renders notes as a standing
+  // warning and leaves the editor untouched. Additive — false (the proto3
+  // default) means a normal draft, so old clients fall back to their
+  // empty-sql handling.
+  bool no_relevant_data = 3;
 }
 
 message ExplainErrorRequest {

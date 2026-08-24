@@ -7,7 +7,7 @@ import (
 )
 
 func TestDrafter_DraftSql(t *testing.T) {
-	caller := &fakeCaller{raw: `{"sql":"SELECT day, sum(amount) FROM \"marts\".\"orders\" GROUP BY 1 LIMIT 200","notes":"Assumed amount is revenue."}`}
+	caller := &fakeCaller{raw: `{"status":"ok","sql":"SELECT day, sum(amount) FROM \"marts\".\"orders\" GROUP BY 1 LIMIT 200","notes":"Assumed amount is revenue."}`}
 	d := NewDrafter(caller, nil)
 
 	draft, err := d.DraftSql(context.Background(), "revenue by day", "SELECT 1", "Warehouse schema:\n- marts.orders (day DATE, amount DOUBLE)")
@@ -36,6 +36,33 @@ func TestDrafter_DraftSql_BadJSON(t *testing.T) {
 	if _, err := d.DraftSql(context.Background(), "x", "", ""); err == nil {
 		t.Fatal("want a parse error for schema drift")
 	}
+}
+
+func TestDrafter_DraftSql_StatusCodes(t *testing.T) {
+	t.Run("no_relevant_data maps to the explicit refusal", func(t *testing.T) {
+		d := NewDrafter(&fakeCaller{raw: `{"status":"no_relevant_data","sql":"","notes":"No CRM data ingested."}`}, nil)
+		draft, err := d.DraftSql(context.Background(), "salesforce churn", "", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !draft.NoRelevantData || draft.SQL != "" || draft.Notes == "" {
+			t.Fatalf("refusal not mapped: %+v", draft)
+		}
+	})
+
+	t.Run("unknown status is off-contract", func(t *testing.T) {
+		d := NewDrafter(&fakeCaller{raw: `{"status":"maybe","sql":"SELECT 1","notes":"x"}`}, nil)
+		if _, err := d.DraftSql(context.Background(), "x", "", ""); err == nil || !strings.Contains(err.Error(), `unknown status "maybe"`) {
+			t.Fatalf("want unknown-status error, got %v", err)
+		}
+	})
+
+	t.Run("ok with empty sql is off-contract", func(t *testing.T) {
+		d := NewDrafter(&fakeCaller{raw: `{"status":"ok","sql":"  ","notes":"x"}`}, nil)
+		if _, err := d.DraftSql(context.Background(), "x", "", ""); err == nil || !strings.Contains(err.Error(), "empty sql") {
+			t.Fatalf("want empty-sql error, got %v", err)
+		}
+	})
 }
 
 func TestDrafter_ExplainError(t *testing.T) {

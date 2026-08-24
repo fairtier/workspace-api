@@ -354,13 +354,21 @@ func (x *DraftSqlRequest) GetCurrentSql() string {
 
 type DraftSqlResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// One DuckDB SELECT statement. Never executed server-side.
+	// One DuckDB SELECT statement. Never executed server-side. Empty when
+	// no_relevant_data is set.
 	Sql string `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
 	// Explanation, assumptions, and (when EXPLAIN failed) the engine's own
-	// validation message.
-	Notes         string `protobuf:"bytes,2,opt,name=notes,proto3" json:"notes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// validation message. When no_relevant_data is set: what the warehouse
+	// lacks and what would need to be ingested first.
+	Notes string `protobuf:"bytes,2,opt,name=notes,proto3" json:"notes,omitempty"`
+	// The model's explicit "cannot answer" code: the warehouse holds nothing
+	// about the request's subject. The Console renders notes as a standing
+	// warning and leaves the editor untouched. Additive — false (the proto3
+	// default) means a normal draft, so old clients fall back to their
+	// empty-sql handling.
+	NoRelevantData bool `protobuf:"varint,3,opt,name=no_relevant_data,json=noRelevantData,proto3" json:"no_relevant_data,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DraftSqlResponse) Reset() {
@@ -405,6 +413,13 @@ func (x *DraftSqlResponse) GetNotes() string {
 		return x.Notes
 	}
 	return ""
+}
+
+func (x *DraftSqlResponse) GetNoRelevantData() bool {
+	if x != nil {
+		return x.NoRelevantData
+	}
+	return false
 }
 
 type ExplainErrorRequest struct {
@@ -760,10 +775,11 @@ const file_assist_proto_rawDesc = "" +
 	"\x0fDraftSqlRequest\x12\x16\n" +
 	"\x06prompt\x18\x01 \x01(\tR\x06prompt\x12\x1f\n" +
 	"\vcurrent_sql\x18\x02 \x01(\tR\n" +
-	"currentSql\":\n" +
+	"currentSql\"d\n" +
 	"\x10DraftSqlResponse\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12\x14\n" +
-	"\x05notes\x18\x02 \x01(\tR\x05notes\"\xe6\x01\n" +
+	"\x05notes\x18\x02 \x01(\tR\x05notes\x12(\n" +
+	"\x10no_relevant_data\x18\x03 \x01(\bR\x0enoRelevantData\"\xe6\x01\n" +
 	"\x13ExplainErrorRequest\x12A\n" +
 	"\fpipeline_run\x18\x01 \x01(\v2\x1c.assist.v1.PipelineRunTargetH\x00R\vpipelineRun\x12S\n" +
 	"\x12transformation_run\x18\x02 \x01(\v2\".assist.v1.TransformationRunTargetH\x00R\x11transformationRun\x12-\n" +

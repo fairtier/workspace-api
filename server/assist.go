@@ -81,8 +81,9 @@ func (s *AssistServer) DraftSql(ctx context.Context, req *connect.Request[assist
 	}
 
 	return connect.NewResponse(&assistv1.DraftSqlResponse{
-		Sql:   draft.SQL,
-		Notes: draft.Notes,
+		Sql:            draft.SQL,
+		Notes:          draft.Notes,
+		NoRelevantData: draft.NoRelevantData,
 	}), nil
 }
 

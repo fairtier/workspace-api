@@ -41,6 +41,11 @@ type RillDraft struct {
 type SqlDraft struct {
 	SQL   string
 	Notes string
+	// NoRelevantData is the model's explicit "cannot answer" code (the schema
+	// forces a status enum, so this is a deliberate refusal, never an
+	// accidentally empty field): the warehouse holds nothing about the
+	// request's subject. SQL is empty and Notes say what is missing.
+	NoRelevantData bool
 }
 
 // ErrorExplanation is the LLM-produced diagnosis of one failure. All fields

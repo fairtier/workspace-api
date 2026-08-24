@@ -388,15 +388,21 @@ func (d *Drafter) DraftRillDashboard(ctx context.Context, prompt string, existin
 var sqlDraftSchema = map[string]any{
 	"type":                 "object",
 	"additionalProperties": false,
-	"required":             []string{"sql", "notes"},
+	"required":             []string{"status", "sql", "notes"},
 	"properties": map[string]any{
+		"status": map[string]any{
+			"type": "string",
+			"enum": []string{"ok", "no_relevant_data"},
+			"description": "ok: sql contains a query answering the request from the listed tables. " +
+				"no_relevant_data: no listed table contains the thing the user asked about — sql is empty and notes explain what is missing.",
+		},
 		"sql": map[string]any{
 			"type":        "string",
-			"description": "One DuckDB SELECT statement (a WITH...SELECT is fine) answering the request against the listed tables. No DDL/DML, no multiple statements. Empty string when the listed schema holds nothing relevant to the request — never fabricate a query against unrelated tables.",
+			"description": "One DuckDB SELECT statement (a WITH...SELECT is fine) answering the request against the listed tables. No DDL/DML, no multiple statements. Empty string when status is no_relevant_data.",
 		},
 		"notes": map[string]any{
 			"type":        "string",
-			"description": "One or two sentences explaining the query and any assumptions (ambiguous column choice, date-range defaults, ...). When sql is empty: what the warehouse lacks and what data would need to be ingested first.",
+			"description": "One or two sentences explaining the query and any assumptions (ambiguous column choice, date-range defaults, ...). When status is no_relevant_data: what the warehouse lacks and what data would need to be ingested first.",
 		},
 	},
 }
@@ -417,18 +423,20 @@ Rules:
 - NEVER include credentials of any kind.
 - If the request is ambiguous, make a reasonable choice and explain it in notes.
 - If the schema listing holds NOTHING relevant to the request (the user asks about data that was
-  never ingested), return an empty sql ("") and use notes to say what is missing and what would
-  need to be ingested first. A fabricated query against unrelated tables is worse than no query.
+  never ingested), set status to "no_relevant_data" with an empty sql, and use notes to say what
+  is missing and what would need to be ingested first. A fabricated query against unrelated
+  tables is worse than no query.
 - Ambiguity is about WHICH listed table answers the user's actual subject; it never licenses
   changing the subject. If answering would mean reinterpreting the request as being about
   different data than the user named (e.g. "Salesforce churn" answered from taxi-trip tables),
-  that is not an assumption — the schema holds nothing relevant, and sql must be "". Apply this
-  test before writing any SQL: does some listed table actually contain the thing the user asked
-  about? If no listed table does, refuse with an empty sql.`
+  that is not an assumption — it is "no_relevant_data". Apply this test before writing any SQL:
+  does some listed table actually contain the thing the user asked about? If no listed table
+  does, refuse with status "no_relevant_data".`
 
 type sqlDraftOutput struct {
-	SQL   string `json:"sql"`
-	Notes string `json:"notes"`
+	Status string `json:"status"`
+	SQL    string `json:"sql"`
+	Notes  string `json:"notes"`
 }
 
 // DraftSql calls the model with the tenant's schema context and returns a
@@ -459,7 +467,21 @@ func (d *Drafter) DraftSql(ctx context.Context, prompt, currentSQL, schemaContex
 	if err := json.Unmarshal(res.JSON, &out); err != nil {
 		return nil, fmt.Errorf("parse model output: %w", err)
 	}
-	return &workspace.SqlDraft{SQL: out.SQL, Notes: out.Notes}, nil
+
+	// The status is an explicit machine-readable code, not a sentinel sniffed
+	// from empty fields; anything off-contract is treated like any other
+	// malformed model output (the caller surfaces it as a failed draft).
+	switch out.Status {
+	case "no_relevant_data":
+		return &workspace.SqlDraft{NoRelevantData: true, Notes: out.Notes}, nil
+	case "ok":
+		if strings.TrimSpace(out.SQL) == "" {
+			return nil, fmt.Errorf("parse model output: status %q with empty sql", out.Status)
+		}
+		return &workspace.SqlDraft{SQL: out.SQL, Notes: out.Notes}, nil
+	default:
+		return nil, fmt.Errorf("parse model output: unknown status %q", out.Status)
+	}
 }
 
 var explainErrorSchema = map[string]any{

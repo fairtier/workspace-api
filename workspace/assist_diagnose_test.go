@@ -144,11 +144,11 @@ func TestAssistService_DraftSql(t *testing.T) {
 		}
 	})
 
-	t.Run("cannot-answer: empty sql with notes passes through, skipping EXPLAIN", func(t *testing.T) {
-		drafter := &mockSqlDrafter{draft: &workspace.SqlDraft{SQL: "  ", Notes: "The warehouse has no CRM data; ingest it first."}}
+	t.Run("cannot-answer: explicit refusal passes through, skipping EXPLAIN", func(t *testing.T) {
+		drafter := &mockSqlDrafter{draft: &workspace.SqlDraft{NoRelevantData: true, Notes: "The warehouse has no CRM data; ingest it first."}}
 		schema := &mockSchemaSource{
 			tables:     []workspace.TableRef{orders},
-			explainErr: errors.New("EXPLAIN must not run on an empty draft"),
+			explainErr: errors.New("EXPLAIN must not run on a refusal"),
 		}
 		svc := sqlAssistService(drafter, schema)
 
@@ -156,19 +156,27 @@ func TestAssistService_DraftSql(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if draft.SQL != "" {
-			t.Errorf("want empty SQL, got %q", draft.SQL)
-		}
-		if !strings.Contains(draft.Notes, "no CRM data") {
-			t.Errorf("notes lost: %q", draft.Notes)
+		if !draft.NoRelevantData || draft.SQL != "" {
+			t.Errorf("refusal not passed through: %+v", draft)
 		}
 		if strings.Contains(draft.Notes, "could not validate") {
-			t.Errorf("EXPLAIN annotation on an empty draft: %q", draft.Notes)
+			t.Errorf("EXPLAIN annotation on a refusal: %q", draft.Notes)
 		}
 	})
 
-	t.Run("empty sql with empty notes is still malformed", func(t *testing.T) {
-		drafter := &mockSqlDrafter{draft: &workspace.SqlDraft{SQL: "", Notes: "  "}}
+	t.Run("refusal without a reason is malformed", func(t *testing.T) {
+		drafter := &mockSqlDrafter{draft: &workspace.SqlDraft{NoRelevantData: true, Notes: "  "}}
+		svc := sqlAssistService(drafter, &mockSchemaSource{tables: []workspace.TableRef{orders}})
+
+		_, err := svc.DraftSql(context.Background(), "u1", "anything", "")
+		var invalid *workspace.ErrInvalidSourceConfig
+		if !errors.As(err, &invalid) || invalid.Field != "notes" {
+			t.Fatalf("want notes validation error, got %v", err)
+		}
+	})
+
+	t.Run("empty sql without the refusal code is still malformed", func(t *testing.T) {
+		drafter := &mockSqlDrafter{draft: &workspace.SqlDraft{SQL: "", Notes: "chatty but no code"}}
 		svc := sqlAssistService(drafter, &mockSchemaSource{tables: []workspace.TableRef{orders}})
 
 		_, err := svc.DraftSql(context.Background(), "u1", "anything", "")

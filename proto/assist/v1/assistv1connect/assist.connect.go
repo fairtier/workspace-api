@@ -39,6 +39,11 @@ const (
 	// AssistServiceDraftRillDashboardProcedure is the fully-qualified name of the AssistService's
 	// DraftRillDashboard RPC.
 	AssistServiceDraftRillDashboardProcedure = "/assist.v1.AssistService/DraftRillDashboard"
+	// AssistServiceDraftSqlProcedure is the fully-qualified name of the AssistService's DraftSql RPC.
+	AssistServiceDraftSqlProcedure = "/assist.v1.AssistService/DraftSql"
+	// AssistServiceExplainErrorProcedure is the fully-qualified name of the AssistService's
+	// ExplainError RPC.
+	AssistServiceExplainErrorProcedure = "/assist.v1.AssistService/ExplainError"
 )
 
 // AssistServiceClient is a client for the assist.v1.AssistService service.
@@ -51,6 +56,21 @@ type AssistServiceClient interface {
 	// project files (metrics views, explore dashboards, optional models),
 	// opened as unsaved buffers in the Console's Rill editor.
 	DraftRillDashboard(context.Context, *connect.Request[v1.DraftRillDashboardRequest]) (*connect.Response[v1.DraftRillDashboardResponse], error)
+	// DraftSql turns a natural-language request into one read-only DuckDB
+	// query. The server assembles the schema context from the caller's own
+	// warehouse (all table names, column detail for the most relevant few) and
+	// validates the draft with EXPLAIN best-effort — a statement the engine
+	// rejects still comes back, with the engine's message in notes. The draft
+	// is inserted into the editor, NEVER executed automatically.
+	DraftSql(context.Context, *connect.Request[v1.DraftSqlRequest]) (*connect.Response[v1.DraftSqlResponse], error)
+	// ExplainError explains one failure in plain language. For pipeline and
+	// transformation runs the client sends only ids — the server assembles the
+	// trusted context from the caller's own rows (config without credentials,
+	// run status, the stored error text) so nothing client-supplied poses as
+	// trusted data. The SQL target is the exception: the editor's SQL and
+	// engine error are client-supplied because the server keeps no query
+	// history.
+	ExplainError(context.Context, *connect.Request[v1.ExplainErrorRequest]) (*connect.Response[v1.ExplainErrorResponse], error)
 }
 
 // NewAssistServiceClient constructs a client for the assist.v1.AssistService service. By default,
@@ -76,6 +96,18 @@ func NewAssistServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(assistServiceMethods.ByName("DraftRillDashboard")),
 			connect.WithClientOptions(opts...),
 		),
+		draftSql: connect.NewClient[v1.DraftSqlRequest, v1.DraftSqlResponse](
+			httpClient,
+			baseURL+AssistServiceDraftSqlProcedure,
+			connect.WithSchema(assistServiceMethods.ByName("DraftSql")),
+			connect.WithClientOptions(opts...),
+		),
+		explainError: connect.NewClient[v1.ExplainErrorRequest, v1.ExplainErrorResponse](
+			httpClient,
+			baseURL+AssistServiceExplainErrorProcedure,
+			connect.WithSchema(assistServiceMethods.ByName("ExplainError")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -83,6 +115,8 @@ func NewAssistServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 type assistServiceClient struct {
 	draftTransformation *connect.Client[v1.DraftTransformationRequest, v1.DraftTransformationResponse]
 	draftRillDashboard  *connect.Client[v1.DraftRillDashboardRequest, v1.DraftRillDashboardResponse]
+	draftSql            *connect.Client[v1.DraftSqlRequest, v1.DraftSqlResponse]
+	explainError        *connect.Client[v1.ExplainErrorRequest, v1.ExplainErrorResponse]
 }
 
 // DraftTransformation calls assist.v1.AssistService.DraftTransformation.
@@ -95,6 +129,16 @@ func (c *assistServiceClient) DraftRillDashboard(ctx context.Context, req *conne
 	return c.draftRillDashboard.CallUnary(ctx, req)
 }
 
+// DraftSql calls assist.v1.AssistService.DraftSql.
+func (c *assistServiceClient) DraftSql(ctx context.Context, req *connect.Request[v1.DraftSqlRequest]) (*connect.Response[v1.DraftSqlResponse], error) {
+	return c.draftSql.CallUnary(ctx, req)
+}
+
+// ExplainError calls assist.v1.AssistService.ExplainError.
+func (c *assistServiceClient) ExplainError(ctx context.Context, req *connect.Request[v1.ExplainErrorRequest]) (*connect.Response[v1.ExplainErrorResponse], error) {
+	return c.explainError.CallUnary(ctx, req)
+}
+
 // AssistServiceHandler is an implementation of the assist.v1.AssistService service.
 type AssistServiceHandler interface {
 	// DraftTransformation turns a natural-language prompt into a draft dbt
@@ -105,6 +149,21 @@ type AssistServiceHandler interface {
 	// project files (metrics views, explore dashboards, optional models),
 	// opened as unsaved buffers in the Console's Rill editor.
 	DraftRillDashboard(context.Context, *connect.Request[v1.DraftRillDashboardRequest]) (*connect.Response[v1.DraftRillDashboardResponse], error)
+	// DraftSql turns a natural-language request into one read-only DuckDB
+	// query. The server assembles the schema context from the caller's own
+	// warehouse (all table names, column detail for the most relevant few) and
+	// validates the draft with EXPLAIN best-effort — a statement the engine
+	// rejects still comes back, with the engine's message in notes. The draft
+	// is inserted into the editor, NEVER executed automatically.
+	DraftSql(context.Context, *connect.Request[v1.DraftSqlRequest]) (*connect.Response[v1.DraftSqlResponse], error)
+	// ExplainError explains one failure in plain language. For pipeline and
+	// transformation runs the client sends only ids — the server assembles the
+	// trusted context from the caller's own rows (config without credentials,
+	// run status, the stored error text) so nothing client-supplied poses as
+	// trusted data. The SQL target is the exception: the editor's SQL and
+	// engine error are client-supplied because the server keeps no query
+	// history.
+	ExplainError(context.Context, *connect.Request[v1.ExplainErrorRequest]) (*connect.Response[v1.ExplainErrorResponse], error)
 }
 
 // NewAssistServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -126,12 +185,28 @@ func NewAssistServiceHandler(svc AssistServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(assistServiceMethods.ByName("DraftRillDashboard")),
 		connect.WithHandlerOptions(opts...),
 	)
+	assistServiceDraftSqlHandler := connect.NewUnaryHandler(
+		AssistServiceDraftSqlProcedure,
+		svc.DraftSql,
+		connect.WithSchema(assistServiceMethods.ByName("DraftSql")),
+		connect.WithHandlerOptions(opts...),
+	)
+	assistServiceExplainErrorHandler := connect.NewUnaryHandler(
+		AssistServiceExplainErrorProcedure,
+		svc.ExplainError,
+		connect.WithSchema(assistServiceMethods.ByName("ExplainError")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/assist.v1.AssistService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AssistServiceDraftTransformationProcedure:
 			assistServiceDraftTransformationHandler.ServeHTTP(w, r)
 		case AssistServiceDraftRillDashboardProcedure:
 			assistServiceDraftRillDashboardHandler.ServeHTTP(w, r)
+		case AssistServiceDraftSqlProcedure:
+			assistServiceDraftSqlHandler.ServeHTTP(w, r)
+		case AssistServiceExplainErrorProcedure:
+			assistServiceExplainErrorHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -147,4 +222,12 @@ func (UnimplementedAssistServiceHandler) DraftTransformation(context.Context, *c
 
 func (UnimplementedAssistServiceHandler) DraftRillDashboard(context.Context, *connect.Request[v1.DraftRillDashboardRequest]) (*connect.Response[v1.DraftRillDashboardResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("assist.v1.AssistService.DraftRillDashboard is not implemented"))
+}
+
+func (UnimplementedAssistServiceHandler) DraftSql(context.Context, *connect.Request[v1.DraftSqlRequest]) (*connect.Response[v1.DraftSqlResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("assist.v1.AssistService.DraftSql is not implemented"))
+}
+
+func (UnimplementedAssistServiceHandler) ExplainError(context.Context, *connect.Request[v1.ExplainErrorRequest]) (*connect.Response[v1.ExplainErrorResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("assist.v1.AssistService.ExplainError is not implemented"))
 }

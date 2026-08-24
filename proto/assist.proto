@@ -27,6 +27,23 @@ service AssistService {
   // project files (metrics views, explore dashboards, optional models),
   // opened as unsaved buffers in the Console's Rill editor.
   rpc DraftRillDashboard(DraftRillDashboardRequest) returns (DraftRillDashboardResponse) {}
+
+  // DraftSql turns a natural-language request into one read-only DuckDB
+  // query. The server assembles the schema context from the caller's own
+  // warehouse (all table names, column detail for the most relevant few) and
+  // validates the draft with EXPLAIN best-effort — a statement the engine
+  // rejects still comes back, with the engine's message in notes. The draft
+  // is inserted into the editor, NEVER executed automatically.
+  rpc DraftSql(DraftSqlRequest) returns (DraftSqlResponse) {}
+
+  // ExplainError explains one failure in plain language. For pipeline and
+  // transformation runs the client sends only ids — the server assembles the
+  // trusted context from the caller's own rows (config without credentials,
+  // run status, the stored error text) so nothing client-supplied poses as
+  // trusted data. The SQL target is the exception: the editor's SQL and
+  // engine error are client-supplied because the server keeps no query
+  // history.
+  rpc ExplainError(ExplainErrorRequest) returns (ExplainErrorResponse) {}
 }
 
 // DraftFile is one generated file, path relative to the target repo root.
@@ -67,4 +84,58 @@ message DraftRillDashboardResponse {
   // models/<name>.sql), YAML-validated server-side.
   repeated DraftFile files = 1;
   string notes = 2;
+}
+
+message DraftSqlRequest {
+  // Natural-language request, e.g. "revenue by month for the last year".
+  string prompt = 1;
+  // The editor's current SQL, for requests that refer to it ("add a filter
+  // to this"). Optional.
+  string current_sql = 2;
+}
+
+message DraftSqlResponse {
+  // One DuckDB SELECT statement. Never executed server-side.
+  string sql = 1;
+  // Explanation, assumptions, and (when EXPLAIN failed) the engine's own
+  // validation message.
+  string notes = 2;
+}
+
+message ExplainErrorRequest {
+  oneof target {
+    PipelineRunTarget pipeline_run = 1;
+    TransformationRunTarget transformation_run = 2;
+    SqlErrorTarget sql = 3;
+  }
+}
+
+// PipelineRunTarget names one run of the caller's own pipeline; the run must
+// be among the pipeline's recent runs (NOT_FOUND otherwise).
+message PipelineRunTarget {
+  string pipeline_id = 1;
+  string run_id = 2;
+}
+
+message TransformationRunTarget {
+  string transformation_id = 1;
+  string run_id = 2;
+}
+
+// SqlErrorTarget carries a failed editor query verbatim.
+message SqlErrorTarget {
+  string sql = 1;
+  string error_message = 2;
+}
+
+message ExplainErrorResponse {
+  // Plain-language description of what failed.
+  string explanation = 1;
+  // The single most likely root cause.
+  string likely_cause = 2;
+  // What to do next, concretely.
+  string suggested_fix = 3;
+  // A corrected SQL/config fragment when the model is confident; often empty.
+  // Rendered read-only — applying it is always the user's explicit action.
+  string suggested_snippet = 4;
 }

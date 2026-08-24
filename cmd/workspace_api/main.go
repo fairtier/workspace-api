@@ -296,7 +296,16 @@ func run() error {
 	// answers 501, GetOAuthClient reports flow_available=false.
 	googleOAuth := buildGoogleOAuth(logger)
 
+	queryServer := &server.QueryServer{Workspaces: resolver, Executor: duckflight.NewClient()}
 	pipelineAssistServer, assistServer := buildAssistServers(resolver, logger)
+	// The SQL and error-diagnosis surfaces need more than a caller: the
+	// tenant's schema (through the same QueryServer the editor uses) and the
+	// run rows the Explain* targets resolve against. Wired here rather than
+	// in buildAssistServers because these dependencies exist regardless of
+	// which — if any — LLM backend is configured.
+	assistServer.Service.Schema = &server.QuerySchemaSource{Query: queryServer}
+	assistServer.Service.PipelineRuns = pipelineSvc
+	assistServer.Service.TransformationRuns = transformationSvc
 
 	mux := http.NewServeMux()
 	server.RegisterWorkspacePlane(mux, server.WorkspacePlaneServers{
@@ -311,7 +320,7 @@ func run() error {
 		BoxRepos:        &server.BoxRepoServer{Service: boxRepoSvc},
 		Demo:            demoServer,
 		Notifications:   &server.NotificationServer{Service: notificationSvc},
-		Query:           &server.QueryServer{Workspaces: resolver, Executor: duckflight.NewClient()},
+		Query:           queryServer,
 		// OAuth carries the deployment-wide half (redirect URL + state key);
 		// nil when the envs are unset, and GetOAuthClient then reports
 		// flow_available=false exactly as before.
@@ -737,6 +746,8 @@ func buildAssistServers(resolver workspace.Resolver, logger *slog.Logger) (*serv
 		pipelineAssist.Drafter = drafter
 		assistSvc.Transformations = drafter
 		assistSvc.Rill = drafter
+		assistSvc.Sql = drafter
+		assistSvc.Explainer = drafter
 	}
 	return &server.PipelineAssistServer{Service: pipelineAssist}, &server.AssistServer{Service: assistSvc}
 }

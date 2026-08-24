@@ -1,0 +1,7 @@
+FairTier workspace-api
+Copyright 2026 FairTier
+
+This product includes curated excerpts of "Rill agent skills"
+(https://github.com/rilldata/agent-skills), Copyright Rill Data, Inc.,
+licensed under the Apache License, Version 2.0. See llm/rillskills/ for the
+excerpts, their provenance, and a copy of their license.

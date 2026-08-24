@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/fairtier/workspace-api/llm/rillskills"
 	"github.com/fairtier/workspace-api/workspace"
 )
 
@@ -276,6 +277,28 @@ Rules:
 - If the user's description references tables you cannot see in the provided repo paths, make a
   reasonable assumption and flag it in notes.`
 
+// rillSkillsBudget caps how much vendored reference documentation rides in
+// the Rill system prompt. Whole documents are dropped, never truncated —
+// rillskills.Reference trims from the back of its priority order.
+const rillSkillsBudget = 24 * 1024
+
+// rillDraftSystem is the composed system prompt: FairTier's own rules first
+// (they must win any conflict with upstream docs — the reference block, for
+// example, documents external-connector table references FairTier does not
+// support), then the vendored Rill syntax reference.
+var rillDraftSystem = composeRillSystem()
+
+func composeRillSystem() string {
+	ref, _ := rillskills.Reference(rillSkillsBudget)
+	if ref == "" {
+		return rillDraftSystemPrompt
+	}
+	return rillDraftSystemPrompt +
+		"\n\n# Reference documentation (adapted from Rill's agent skills, Apache-2.0)\n" +
+		"The FairTier rules above take precedence over anything below.\n\n" +
+		ref
+}
+
 type rillDraftOutput struct {
 	Files []struct {
 		Path    string `json:"path"`
@@ -294,7 +317,7 @@ func (d *Drafter) DraftRillDashboard(ctx context.Context, prompt string, existin
 	}
 
 	res, err := d.Caller.Complete(ctx, StructuredRequest{
-		System:    rillDraftSystemPrompt,
+		System:    rillDraftSystem,
 		Prompt:    userPrompt,
 		Schema:    rillDraftSchema,
 		MaxTokens: 4096,
@@ -314,4 +337,144 @@ func (d *Drafter) DraftRillDashboard(ctx context.Context, prompt string, existin
 		draft.Files = append(draft.Files, workspace.DraftFile{Path: f.Path, Content: f.Content})
 	}
 	return draft, nil
+}
+
+var sqlDraftSchema = map[string]any{
+	"type":                 "object",
+	"additionalProperties": false,
+	"required":             []string{"sql", "notes"},
+	"properties": map[string]any{
+		"sql": map[string]any{
+			"type":        "string",
+			"description": "One DuckDB SELECT statement (a WITH...SELECT is fine) answering the request against the listed tables. No DDL/DML, no multiple statements.",
+		},
+		"notes": map[string]any{
+			"type":        "string",
+			"description": "One or two sentences explaining the query and any assumptions (ambiguous column choice, date-range defaults, ...).",
+		},
+	},
+}
+
+const sqlDraftSystemPrompt = `You are a SQL assistant for FairTier, a simple Iceberg data platform.
+Given a user's natural-language request and their warehouse schema, write one DuckDB SQL query.
+
+Rules:
+- Output exactly ONE read-only statement: a SELECT, optionally with WITH (CTEs). NEVER emit
+  INSERT/UPDATE/DELETE/MERGE, CREATE/DROP/ALTER, ATTACH/DETACH, COPY, PRAGMA, SET, or CALL,
+  and never more than one statement.
+- Reference tables exactly as they appear in the provided schema listing ("namespace"."table",
+  quoted when needed). Never invent tables or columns that are not listed; if the schema listing
+  omits a table's columns, prefer tables whose columns are listed, or say in notes what you assumed.
+- Use DuckDB's SQL dialect (FILTER clauses, date_trunc, list/struct functions are available).
+- End a row-returning query with a LIMIT (200 unless the user asks otherwise); pure aggregates
+  with a small result need none.
+- NEVER include credentials of any kind.
+- If the request is ambiguous, make a reasonable choice and explain it in notes.`
+
+type sqlDraftOutput struct {
+	SQL   string `json:"sql"`
+	Notes string `json:"notes"`
+}
+
+// DraftSql calls the model with the tenant's schema context and returns a
+// structured SQL draft. The domain layer validates the statement (and may
+// annotate notes with an EXPLAIN result); the query is never executed on the
+// user's behalf.
+func (d *Drafter) DraftSql(ctx context.Context, prompt, currentSQL, schemaContext string) (*workspace.SqlDraft, error) {
+	userPrompt := prompt
+	if strings.TrimSpace(currentSQL) != "" {
+		userPrompt += "\n\nThe user's current SQL in the editor (modify it if the request refers to it):\n" + currentSQL
+	}
+	if schemaContext != "" {
+		userPrompt += "\n\n" + schemaContext
+	}
+
+	res, err := d.Caller.Complete(ctx, StructuredRequest{
+		System:    sqlDraftSystemPrompt,
+		Prompt:    userPrompt,
+		Schema:    sqlDraftSchema,
+		MaxTokens: 2048,
+		Kind:      "sql",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var out sqlDraftOutput
+	if err := json.Unmarshal(res.JSON, &out); err != nil {
+		return nil, fmt.Errorf("parse model output: %w", err)
+	}
+	return &workspace.SqlDraft{SQL: out.SQL, Notes: out.Notes}, nil
+}
+
+var explainErrorSchema = map[string]any{
+	"type":                 "object",
+	"additionalProperties": false,
+	"required":             []string{"explanation", "likely_cause", "suggested_fix", "suggested_snippet"},
+	"properties": map[string]any{
+		"explanation": map[string]any{
+			"type":        "string",
+			"description": "Two or three plain-language sentences saying what failed, for a reader who is not a data engineer.",
+		},
+		"likely_cause": map[string]any{
+			"type":        "string",
+			"description": "The single most likely root cause, one sentence.",
+		},
+		"suggested_fix": map[string]any{
+			"type":        "string",
+			"description": "What the user should do next, concretely (which setting to change, what to check with their source provider, ...).",
+		},
+		"suggested_snippet": map[string]any{
+			"type":        "string",
+			"description": "A corrected SQL statement or config fragment, ONLY when the failure context contains enough to be confident; empty string otherwise. Never invent identifiers or credentials.",
+		},
+	},
+}
+
+const explainErrorSystemPrompt = `You are a support assistant for FairTier, a simple Iceberg data platform.
+You are given the failure context of one pipeline run, dbt transformation run, or SQL query, and you
+explain what went wrong to a user who is usually NOT a data engineer.
+
+Rules:
+- Ground every statement in the provided context; when the context is not enough to be sure, say what
+  is most likely and what to check, rather than guessing confidently.
+- suggested_snippet only when the context clearly determines the fix (e.g. a misspelled column in the
+  provided SQL); otherwise leave it an empty string. Never invent table or column names.
+- NEVER output credentials, tokens, passwords, or connection strings, even placeholders that look real.
+- Credential-shaped values in the context arrive already redacted; treat a redaction marker as "a
+  credential was here", not as the literal value.
+- Be brief. No headings, no bullet lists inside fields, no restating the raw error verbatim.`
+
+type explainErrorOutput struct {
+	Explanation      string `json:"explanation"`
+	LikelyCause      string `json:"likely_cause"`
+	SuggestedFix     string `json:"suggested_fix"`
+	SuggestedSnippet string `json:"suggested_snippet"`
+}
+
+// ExplainError calls the model with server-assembled failure context and
+// returns a structured explanation. kind labels the failing surface for
+// metering ("explain_error" covers all three targets today).
+func (d *Drafter) ExplainError(ctx context.Context, contextText string) (*workspace.ErrorExplanation, error) {
+	res, err := d.Caller.Complete(ctx, StructuredRequest{
+		System:    explainErrorSystemPrompt,
+		Prompt:    contextText,
+		Schema:    explainErrorSchema,
+		MaxTokens: 2048,
+		Kind:      "explain_error",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var out explainErrorOutput
+	if err := json.Unmarshal(res.JSON, &out); err != nil {
+		return nil, fmt.Errorf("parse model output: %w", err)
+	}
+	return &workspace.ErrorExplanation{
+		Explanation:      out.Explanation,
+		LikelyCause:      out.LikelyCause,
+		SuggestedFix:     out.SuggestedFix,
+		SuggestedSnippet: out.SuggestedSnippet,
+	}, nil
 }

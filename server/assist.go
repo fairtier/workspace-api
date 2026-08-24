@@ -66,6 +66,60 @@ func (s *AssistServer) DraftRillDashboard(ctx context.Context, req *connect.Requ
 	}), nil
 }
 
+// DraftSql turns a natural-language request into one read-only DuckDB query,
+// drafted against the caller's own schema and inserted into the editor —
+// never executed here.
+func (s *AssistServer) DraftSql(ctx context.Context, req *connect.Request[assistv1.DraftSqlRequest]) (*connect.Response[assistv1.DraftSqlResponse], error) {
+	callerID := core.UserIDFromContext(ctx)
+	if callerID == "" {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+	}
+
+	draft, err := s.Service.DraftSql(ctx, callerID, req.Msg.Prompt, req.Msg.CurrentSql)
+	if err != nil {
+		return nil, draftError(err)
+	}
+
+	return connect.NewResponse(&assistv1.DraftSqlResponse{
+		Sql:   draft.SQL,
+		Notes: draft.Notes,
+	}), nil
+}
+
+// ExplainError explains one failure. Run targets are resolved by id
+// server-side (trusted context); the SQL target is client-supplied.
+func (s *AssistServer) ExplainError(ctx context.Context, req *connect.Request[assistv1.ExplainErrorRequest]) (*connect.Response[assistv1.ExplainErrorResponse], error) {
+	callerID := core.UserIDFromContext(ctx)
+	if callerID == "" {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+	}
+
+	var ex *workspace.ErrorExplanation
+	var err error
+	switch target := req.Msg.Target.(type) {
+	case *assistv1.ExplainErrorRequest_PipelineRun:
+		ex, err = s.Service.ExplainPipelineRun(ctx, callerID,
+			workspace.PipelineID(target.PipelineRun.PipelineId), target.PipelineRun.RunId)
+	case *assistv1.ExplainErrorRequest_TransformationRun:
+		ex, err = s.Service.ExplainTransformationRun(ctx, callerID,
+			workspace.TransformationID(target.TransformationRun.TransformationId), target.TransformationRun.RunId)
+	case *assistv1.ExplainErrorRequest_Sql:
+		ex, err = s.Service.ExplainSqlError(ctx, callerID, target.Sql.Sql, target.Sql.ErrorMessage)
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("target is required"))
+	}
+	if err != nil {
+		return nil, draftError(err)
+	}
+
+	return connect.NewResponse(&assistv1.ExplainErrorResponse{
+		Explanation:      ex.Explanation,
+		LikelyCause:      ex.LikelyCause,
+		SuggestedFix:     ex.SuggestedFix,
+		SuggestedSnippet: ex.SuggestedSnippet,
+	}), nil
+}
+
 func draftFiles(files []workspace.DraftFile) []*assistv1.DraftFile {
 	out := make([]*assistv1.DraftFile, 0, len(files))
 	for _, f := range files {

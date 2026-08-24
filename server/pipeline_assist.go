@@ -49,6 +49,13 @@ func (s *PipelineAssistServer) DraftPipeline(ctx context.Context, req *connect.R
 // back to the shared domainError mapping (which carries ValidationErrors detail
 // for an invalid source_config).
 func draftError(err error) error {
+	// A Connect error passes through unchanged: the schema source (DraftSql's
+	// table listing) fails with already-mapped engine errors, and re-wrapping
+	// them would bury "the query engine is not enabled" under CodeInternal.
+	var cerr *connect.Error
+	if errors.As(err, &cerr) {
+		return cerr
+	}
 	switch {
 	case errors.Is(err, workspace.ErrDraftNotConfigured):
 		return connect.NewError(connect.CodeUnimplemented, err)

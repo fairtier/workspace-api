@@ -297,6 +297,446 @@ func (x *DraftRillDashboardResponse) GetNotes() string {
 	return ""
 }
 
+type DraftSqlRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Natural-language request, e.g. "revenue by month for the last year".
+	Prompt string `protobuf:"bytes,1,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	// The editor's current SQL, for requests that refer to it ("add a filter
+	// to this"). Optional.
+	CurrentSql    string `protobuf:"bytes,2,opt,name=current_sql,json=currentSql,proto3" json:"current_sql,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DraftSqlRequest) Reset() {
+	*x = DraftSqlRequest{}
+	mi := &file_assist_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DraftSqlRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DraftSqlRequest) ProtoMessage() {}
+
+func (x *DraftSqlRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_assist_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DraftSqlRequest.ProtoReflect.Descriptor instead.
+func (*DraftSqlRequest) Descriptor() ([]byte, []int) {
+	return file_assist_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *DraftSqlRequest) GetPrompt() string {
+	if x != nil {
+		return x.Prompt
+	}
+	return ""
+}
+
+func (x *DraftSqlRequest) GetCurrentSql() string {
+	if x != nil {
+		return x.CurrentSql
+	}
+	return ""
+}
+
+type DraftSqlResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One DuckDB SELECT statement. Never executed server-side.
+	Sql string `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
+	// Explanation, assumptions, and (when EXPLAIN failed) the engine's own
+	// validation message.
+	Notes         string `protobuf:"bytes,2,opt,name=notes,proto3" json:"notes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DraftSqlResponse) Reset() {
+	*x = DraftSqlResponse{}
+	mi := &file_assist_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DraftSqlResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DraftSqlResponse) ProtoMessage() {}
+
+func (x *DraftSqlResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_assist_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DraftSqlResponse.ProtoReflect.Descriptor instead.
+func (*DraftSqlResponse) Descriptor() ([]byte, []int) {
+	return file_assist_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DraftSqlResponse) GetSql() string {
+	if x != nil {
+		return x.Sql
+	}
+	return ""
+}
+
+func (x *DraftSqlResponse) GetNotes() string {
+	if x != nil {
+		return x.Notes
+	}
+	return ""
+}
+
+type ExplainErrorRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Target:
+	//
+	//	*ExplainErrorRequest_PipelineRun
+	//	*ExplainErrorRequest_TransformationRun
+	//	*ExplainErrorRequest_Sql
+	Target        isExplainErrorRequest_Target `protobuf_oneof:"target"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExplainErrorRequest) Reset() {
+	*x = ExplainErrorRequest{}
+	mi := &file_assist_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExplainErrorRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExplainErrorRequest) ProtoMessage() {}
+
+func (x *ExplainErrorRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_assist_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExplainErrorRequest.ProtoReflect.Descriptor instead.
+func (*ExplainErrorRequest) Descriptor() ([]byte, []int) {
+	return file_assist_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ExplainErrorRequest) GetTarget() isExplainErrorRequest_Target {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
+func (x *ExplainErrorRequest) GetPipelineRun() *PipelineRunTarget {
+	if x != nil {
+		if x, ok := x.Target.(*ExplainErrorRequest_PipelineRun); ok {
+			return x.PipelineRun
+		}
+	}
+	return nil
+}
+
+func (x *ExplainErrorRequest) GetTransformationRun() *TransformationRunTarget {
+	if x != nil {
+		if x, ok := x.Target.(*ExplainErrorRequest_TransformationRun); ok {
+			return x.TransformationRun
+		}
+	}
+	return nil
+}
+
+func (x *ExplainErrorRequest) GetSql() *SqlErrorTarget {
+	if x != nil {
+		if x, ok := x.Target.(*ExplainErrorRequest_Sql); ok {
+			return x.Sql
+		}
+	}
+	return nil
+}
+
+type isExplainErrorRequest_Target interface {
+	isExplainErrorRequest_Target()
+}
+
+type ExplainErrorRequest_PipelineRun struct {
+	PipelineRun *PipelineRunTarget `protobuf:"bytes,1,opt,name=pipeline_run,json=pipelineRun,proto3,oneof"`
+}
+
+type ExplainErrorRequest_TransformationRun struct {
+	TransformationRun *TransformationRunTarget `protobuf:"bytes,2,opt,name=transformation_run,json=transformationRun,proto3,oneof"`
+}
+
+type ExplainErrorRequest_Sql struct {
+	Sql *SqlErrorTarget `protobuf:"bytes,3,opt,name=sql,proto3,oneof"`
+}
+
+func (*ExplainErrorRequest_PipelineRun) isExplainErrorRequest_Target() {}
+
+func (*ExplainErrorRequest_TransformationRun) isExplainErrorRequest_Target() {}
+
+func (*ExplainErrorRequest_Sql) isExplainErrorRequest_Target() {}
+
+// PipelineRunTarget names one run of the caller's own pipeline; the run must
+// be among the pipeline's recent runs (NOT_FOUND otherwise).
+type PipelineRunTarget struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PipelineId    string                 `protobuf:"bytes,1,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
+	RunId         string                 `protobuf:"bytes,2,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PipelineRunTarget) Reset() {
+	*x = PipelineRunTarget{}
+	mi := &file_assist_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PipelineRunTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PipelineRunTarget) ProtoMessage() {}
+
+func (x *PipelineRunTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_assist_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PipelineRunTarget.ProtoReflect.Descriptor instead.
+func (*PipelineRunTarget) Descriptor() ([]byte, []int) {
+	return file_assist_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PipelineRunTarget) GetPipelineId() string {
+	if x != nil {
+		return x.PipelineId
+	}
+	return ""
+}
+
+func (x *PipelineRunTarget) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+type TransformationRunTarget struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	TransformationId string                 `protobuf:"bytes,1,opt,name=transformation_id,json=transformationId,proto3" json:"transformation_id,omitempty"`
+	RunId            string                 `protobuf:"bytes,2,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *TransformationRunTarget) Reset() {
+	*x = TransformationRunTarget{}
+	mi := &file_assist_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransformationRunTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransformationRunTarget) ProtoMessage() {}
+
+func (x *TransformationRunTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_assist_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransformationRunTarget.ProtoReflect.Descriptor instead.
+func (*TransformationRunTarget) Descriptor() ([]byte, []int) {
+	return file_assist_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *TransformationRunTarget) GetTransformationId() string {
+	if x != nil {
+		return x.TransformationId
+	}
+	return ""
+}
+
+func (x *TransformationRunTarget) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+// SqlErrorTarget carries a failed editor query verbatim.
+type SqlErrorTarget struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sql           string                 `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SqlErrorTarget) Reset() {
+	*x = SqlErrorTarget{}
+	mi := &file_assist_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SqlErrorTarget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SqlErrorTarget) ProtoMessage() {}
+
+func (x *SqlErrorTarget) ProtoReflect() protoreflect.Message {
+	mi := &file_assist_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SqlErrorTarget.ProtoReflect.Descriptor instead.
+func (*SqlErrorTarget) Descriptor() ([]byte, []int) {
+	return file_assist_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SqlErrorTarget) GetSql() string {
+	if x != nil {
+		return x.Sql
+	}
+	return ""
+}
+
+func (x *SqlErrorTarget) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+type ExplainErrorResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Plain-language description of what failed.
+	Explanation string `protobuf:"bytes,1,opt,name=explanation,proto3" json:"explanation,omitempty"`
+	// The single most likely root cause.
+	LikelyCause string `protobuf:"bytes,2,opt,name=likely_cause,json=likelyCause,proto3" json:"likely_cause,omitempty"`
+	// What to do next, concretely.
+	SuggestedFix string `protobuf:"bytes,3,opt,name=suggested_fix,json=suggestedFix,proto3" json:"suggested_fix,omitempty"`
+	// A corrected SQL/config fragment when the model is confident; often empty.
+	// Rendered read-only — applying it is always the user's explicit action.
+	SuggestedSnippet string `protobuf:"bytes,4,opt,name=suggested_snippet,json=suggestedSnippet,proto3" json:"suggested_snippet,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ExplainErrorResponse) Reset() {
+	*x = ExplainErrorResponse{}
+	mi := &file_assist_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExplainErrorResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExplainErrorResponse) ProtoMessage() {}
+
+func (x *ExplainErrorResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_assist_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExplainErrorResponse.ProtoReflect.Descriptor instead.
+func (*ExplainErrorResponse) Descriptor() ([]byte, []int) {
+	return file_assist_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ExplainErrorResponse) GetExplanation() string {
+	if x != nil {
+		return x.Explanation
+	}
+	return ""
+}
+
+func (x *ExplainErrorResponse) GetLikelyCause() string {
+	if x != nil {
+		return x.LikelyCause
+	}
+	return ""
+}
+
+func (x *ExplainErrorResponse) GetSuggestedFix() string {
+	if x != nil {
+		return x.SuggestedFix
+	}
+	return ""
+}
+
+func (x *ExplainErrorResponse) GetSuggestedSnippet() string {
+	if x != nil {
+		return x.SuggestedSnippet
+	}
+	return ""
+}
+
 var File_assist_proto protoreflect.FileDescriptor
 
 const file_assist_proto_rawDesc = "" +
@@ -316,10 +756,39 @@ const file_assist_proto_rawDesc = "" +
 	"\x0eexisting_paths\x18\x02 \x03(\tR\rexistingPaths\"^\n" +
 	"\x1aDraftRillDashboardResponse\x12*\n" +
 	"\x05files\x18\x01 \x03(\v2\x14.assist.v1.DraftFileR\x05files\x12\x14\n" +
-	"\x05notes\x18\x02 \x01(\tR\x05notes2\xdc\x01\n" +
+	"\x05notes\x18\x02 \x01(\tR\x05notes\"J\n" +
+	"\x0fDraftSqlRequest\x12\x16\n" +
+	"\x06prompt\x18\x01 \x01(\tR\x06prompt\x12\x1f\n" +
+	"\vcurrent_sql\x18\x02 \x01(\tR\n" +
+	"currentSql\":\n" +
+	"\x10DraftSqlResponse\x12\x10\n" +
+	"\x03sql\x18\x01 \x01(\tR\x03sql\x12\x14\n" +
+	"\x05notes\x18\x02 \x01(\tR\x05notes\"\xe6\x01\n" +
+	"\x13ExplainErrorRequest\x12A\n" +
+	"\fpipeline_run\x18\x01 \x01(\v2\x1c.assist.v1.PipelineRunTargetH\x00R\vpipelineRun\x12S\n" +
+	"\x12transformation_run\x18\x02 \x01(\v2\".assist.v1.TransformationRunTargetH\x00R\x11transformationRun\x12-\n" +
+	"\x03sql\x18\x03 \x01(\v2\x19.assist.v1.SqlErrorTargetH\x00R\x03sqlB\b\n" +
+	"\x06target\"K\n" +
+	"\x11PipelineRunTarget\x12\x1f\n" +
+	"\vpipeline_id\x18\x01 \x01(\tR\n" +
+	"pipelineId\x12\x15\n" +
+	"\x06run_id\x18\x02 \x01(\tR\x05runId\"]\n" +
+	"\x17TransformationRunTarget\x12+\n" +
+	"\x11transformation_id\x18\x01 \x01(\tR\x10transformationId\x12\x15\n" +
+	"\x06run_id\x18\x02 \x01(\tR\x05runId\"G\n" +
+	"\x0eSqlErrorTarget\x12\x10\n" +
+	"\x03sql\x18\x01 \x01(\tR\x03sql\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\xad\x01\n" +
+	"\x14ExplainErrorResponse\x12 \n" +
+	"\vexplanation\x18\x01 \x01(\tR\vexplanation\x12!\n" +
+	"\flikely_cause\x18\x02 \x01(\tR\vlikelyCause\x12#\n" +
+	"\rsuggested_fix\x18\x03 \x01(\tR\fsuggestedFix\x12+\n" +
+	"\x11suggested_snippet\x18\x04 \x01(\tR\x10suggestedSnippet2\xf6\x02\n" +
 	"\rAssistService\x12f\n" +
 	"\x13DraftTransformation\x12%.assist.v1.DraftTransformationRequest\x1a&.assist.v1.DraftTransformationResponse\"\x00\x12c\n" +
-	"\x12DraftRillDashboard\x12$.assist.v1.DraftRillDashboardRequest\x1a%.assist.v1.DraftRillDashboardResponse\"\x00B<Z:github.com/fairtier/workspace-api/proto/assist/v1;assistv1b\x06proto3"
+	"\x12DraftRillDashboard\x12$.assist.v1.DraftRillDashboardRequest\x1a%.assist.v1.DraftRillDashboardResponse\"\x00\x12E\n" +
+	"\bDraftSql\x12\x1a.assist.v1.DraftSqlRequest\x1a\x1b.assist.v1.DraftSqlResponse\"\x00\x12Q\n" +
+	"\fExplainError\x12\x1e.assist.v1.ExplainErrorRequest\x1a\x1f.assist.v1.ExplainErrorResponse\"\x00B<Z:github.com/fairtier/workspace-api/proto/assist/v1;assistv1b\x06proto3"
 
 var (
 	file_assist_proto_rawDescOnce sync.Once
@@ -333,28 +802,42 @@ func file_assist_proto_rawDescGZIP() []byte {
 	return file_assist_proto_rawDescData
 }
 
-var file_assist_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_assist_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_assist_proto_goTypes = []any{
 	(*DraftFile)(nil),                      // 0: assist.v1.DraftFile
 	(*DraftTransformationRequest)(nil),     // 1: assist.v1.DraftTransformationRequest
 	(*DraftTransformationResponse)(nil),    // 2: assist.v1.DraftTransformationResponse
 	(*DraftRillDashboardRequest)(nil),      // 3: assist.v1.DraftRillDashboardRequest
 	(*DraftRillDashboardResponse)(nil),     // 4: assist.v1.DraftRillDashboardResponse
-	(*v1.CreateTransformationRequest)(nil), // 5: transformation.v1.CreateTransformationRequest
+	(*DraftSqlRequest)(nil),                // 5: assist.v1.DraftSqlRequest
+	(*DraftSqlResponse)(nil),               // 6: assist.v1.DraftSqlResponse
+	(*ExplainErrorRequest)(nil),            // 7: assist.v1.ExplainErrorRequest
+	(*PipelineRunTarget)(nil),              // 8: assist.v1.PipelineRunTarget
+	(*TransformationRunTarget)(nil),        // 9: assist.v1.TransformationRunTarget
+	(*SqlErrorTarget)(nil),                 // 10: assist.v1.SqlErrorTarget
+	(*ExplainErrorResponse)(nil),           // 11: assist.v1.ExplainErrorResponse
+	(*v1.CreateTransformationRequest)(nil), // 12: transformation.v1.CreateTransformationRequest
 }
 var file_assist_proto_depIdxs = []int32{
-	5, // 0: assist.v1.DraftTransformationResponse.draft:type_name -> transformation.v1.CreateTransformationRequest
-	0, // 1: assist.v1.DraftTransformationResponse.files:type_name -> assist.v1.DraftFile
-	0, // 2: assist.v1.DraftRillDashboardResponse.files:type_name -> assist.v1.DraftFile
-	1, // 3: assist.v1.AssistService.DraftTransformation:input_type -> assist.v1.DraftTransformationRequest
-	3, // 4: assist.v1.AssistService.DraftRillDashboard:input_type -> assist.v1.DraftRillDashboardRequest
-	2, // 5: assist.v1.AssistService.DraftTransformation:output_type -> assist.v1.DraftTransformationResponse
-	4, // 6: assist.v1.AssistService.DraftRillDashboard:output_type -> assist.v1.DraftRillDashboardResponse
-	5, // [5:7] is the sub-list for method output_type
-	3, // [3:5] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	12, // 0: assist.v1.DraftTransformationResponse.draft:type_name -> transformation.v1.CreateTransformationRequest
+	0,  // 1: assist.v1.DraftTransformationResponse.files:type_name -> assist.v1.DraftFile
+	0,  // 2: assist.v1.DraftRillDashboardResponse.files:type_name -> assist.v1.DraftFile
+	8,  // 3: assist.v1.ExplainErrorRequest.pipeline_run:type_name -> assist.v1.PipelineRunTarget
+	9,  // 4: assist.v1.ExplainErrorRequest.transformation_run:type_name -> assist.v1.TransformationRunTarget
+	10, // 5: assist.v1.ExplainErrorRequest.sql:type_name -> assist.v1.SqlErrorTarget
+	1,  // 6: assist.v1.AssistService.DraftTransformation:input_type -> assist.v1.DraftTransformationRequest
+	3,  // 7: assist.v1.AssistService.DraftRillDashboard:input_type -> assist.v1.DraftRillDashboardRequest
+	5,  // 8: assist.v1.AssistService.DraftSql:input_type -> assist.v1.DraftSqlRequest
+	7,  // 9: assist.v1.AssistService.ExplainError:input_type -> assist.v1.ExplainErrorRequest
+	2,  // 10: assist.v1.AssistService.DraftTransformation:output_type -> assist.v1.DraftTransformationResponse
+	4,  // 11: assist.v1.AssistService.DraftRillDashboard:output_type -> assist.v1.DraftRillDashboardResponse
+	6,  // 12: assist.v1.AssistService.DraftSql:output_type -> assist.v1.DraftSqlResponse
+	11, // 13: assist.v1.AssistService.ExplainError:output_type -> assist.v1.ExplainErrorResponse
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_assist_proto_init() }
@@ -362,13 +845,18 @@ func file_assist_proto_init() {
 	if File_assist_proto != nil {
 		return
 	}
+	file_assist_proto_msgTypes[7].OneofWrappers = []any{
+		(*ExplainErrorRequest_PipelineRun)(nil),
+		(*ExplainErrorRequest_TransformationRun)(nil),
+		(*ExplainErrorRequest_Sql)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_assist_proto_rawDesc), len(file_assist_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

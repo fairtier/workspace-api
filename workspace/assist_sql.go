@@ -53,20 +53,11 @@ func (s *AssistService) DraftSql(ctx context.Context, callerID core.UserID, prom
 	if err != nil {
 		return nil, fmt.Errorf("draft sql: %w", err)
 	}
-	// The model's explicit "cannot answer" code: the warehouse holds nothing
-	// relevant to the request. Without this escape the required sql field
-	// would force a fabricated query against unrelated tables —
-	// plausible-looking, EXPLAIN-clean, and wrong. A refusal without an
-	// explanation is off-contract, like any other malformed draft.
-	if draft.NoRelevantData {
-		if strings.TrimSpace(draft.Notes) == "" {
-			return nil, &ErrInvalidSourceConfig{Field: "notes", Msg: "draft refused without a reason"}
-		}
-		draft.SQL = ""
-		return draft, nil
+	if err := validateSqlDraft(draft); err != nil {
+		return nil, err
 	}
-	if strings.TrimSpace(draft.SQL) == "" {
-		return nil, &ErrInvalidSourceConfig{Field: "sql", Msg: "draft produced no SQL"}
+	if draft.NoRelevantData {
+		return draft, nil // nothing to EXPLAIN — the notes carry the reason
 	}
 
 	// Best-effort validation, never fatal: EXPLAIN plans without executing,
@@ -77,6 +68,26 @@ func (s *AssistService) DraftSql(ctx context.Context, callerID core.UserID, prom
 			"\n\nThe engine could not validate this draft: " + verr.Error())
 	}
 	return draft, nil
+}
+
+// validateSqlDraft enforces the draft contract. NoRelevantData is the model's
+// explicit "cannot answer" code — the warehouse holds nothing relevant to the
+// request's subject; without it the required sql field would force a
+// fabricated query against unrelated tables (plausible-looking, EXPLAIN-clean,
+// and wrong). A refusal must carry a reason and no SQL; a normal draft must
+// carry SQL.
+func validateSqlDraft(draft *SqlDraft) error {
+	if draft.NoRelevantData {
+		if strings.TrimSpace(draft.Notes) == "" {
+			return &ErrInvalidSourceConfig{Field: "notes", Msg: "draft refused without a reason"}
+		}
+		draft.SQL = ""
+		return nil
+	}
+	if strings.TrimSpace(draft.SQL) == "" {
+		return &ErrInvalidSourceConfig{Field: "sql", Msg: "draft produced no SQL"}
+	}
+	return nil
 }
 
 // buildSchemaContext renders the prompt's schema block: every table name

@@ -47,7 +47,7 @@ func NewAnthropicCaller(apiKey, model string, logger *slog.Logger) *AnthropicCal
 }
 
 // Complete runs one schema-constrained request/response call (no agent loop).
-func (c *AnthropicCaller) Complete(ctx context.Context, req StructuredRequest) (json.RawMessage, error) {
+func (c *AnthropicCaller) Complete(ctx context.Context, req StructuredRequest) (Result, error) {
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens <= 0 {
 		maxTokens = 2048
@@ -56,7 +56,7 @@ func (c *AnthropicCaller) Complete(ctx context.Context, req StructuredRequest) (
 	// refusal and an empty response are both billed, and a token counter that
 	// only counted successes would under-report exactly when spend is being
 	// investigated.
-	var out json.RawMessage
+	var res Result
 	err := call(ctx, "anthropic", string(c.model), int(maxTokens), func(ctx context.Context) (usage, error) {
 		resp, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
 			Model:     c.model,
@@ -79,6 +79,7 @@ func (c *AnthropicCaller) Complete(ctx context.Context, req StructuredRequest) (
 			outputTokens: resp.Usage.OutputTokens,
 			finishReason: string(resp.StopReason),
 		}
+		res.Usage = Usage{InputTokens: u.inputTokens, OutputTokens: u.outputTokens}
 
 		if resp.StopReason == anthropic.StopReasonRefusal {
 			return u, fmt.Errorf("model declined the request (%s)", resp.StopDetails.Category)
@@ -87,10 +88,10 @@ func (c *AnthropicCaller) Complete(ctx context.Context, req StructuredRequest) (
 		if raw == "" {
 			return u, fmt.Errorf("empty model response")
 		}
-		out = json.RawMessage(raw)
+		res.JSON = json.RawMessage(raw)
 		return u, nil
 	})
-	return out, err
+	return res, err
 }
 
 // firstText returns the text of the first text block in the response.

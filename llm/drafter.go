@@ -109,18 +109,19 @@ type pipelineDraftOutput struct {
 // DraftPipeline calls the model and returns a structured draft. The returned
 // SourceConfig is the raw JSON the model produced; the domain validates it.
 func (d *Drafter) DraftPipeline(ctx context.Context, prompt string) (*workspace.PipelineDraft, error) {
-	raw, err := d.Caller.Complete(ctx, StructuredRequest{
+	res, err := d.Caller.Complete(ctx, StructuredRequest{
 		System:    pipelineDraftSystemPrompt,
 		Prompt:    prompt,
 		Schema:    pipelineDraftSchema,
 		MaxTokens: 2048,
+		Kind:      "pipeline",
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	var out pipelineDraftOutput
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := json.Unmarshal(res.JSON, &out); err != nil {
 		return nil, fmt.Errorf("parse model output: %w", err)
 	}
 
@@ -208,18 +209,19 @@ type transformationDraftOutput struct {
 // DraftTransformation calls the model and returns a structured dbt draft. The
 // domain validates the drafted files (paths, extensions, sizes).
 func (d *Drafter) DraftTransformation(ctx context.Context, prompt string) (*workspace.TransformationDraft, error) {
-	raw, err := d.Caller.Complete(ctx, StructuredRequest{
+	res, err := d.Caller.Complete(ctx, StructuredRequest{
 		System:    transformationDraftSystemPrompt,
 		Prompt:    prompt,
 		Schema:    transformationDraftSchema,
 		MaxTokens: 4096,
+		Kind:      "transformation",
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	var out transformationDraftOutput
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := json.Unmarshal(res.JSON, &out); err != nil {
 		return nil, fmt.Errorf("parse model output: %w", err)
 	}
 
@@ -291,18 +293,19 @@ func (d *Drafter) DraftRillDashboard(ctx context.Context, prompt string, existin
 			strings.Join(existingPaths, "\n- ")
 	}
 
-	raw, err := d.Caller.Complete(ctx, StructuredRequest{
+	res, err := d.Caller.Complete(ctx, StructuredRequest{
 		System:    rillDraftSystemPrompt,
 		Prompt:    userPrompt,
 		Schema:    rillDraftSchema,
 		MaxTokens: 4096,
+		Kind:      "rill_dashboard",
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	var out rillDraftOutput
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := json.Unmarshal(res.JSON, &out); err != nil {
 		return nil, fmt.Errorf("parse model output: %w", err)
 	}
 

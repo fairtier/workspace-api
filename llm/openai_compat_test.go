@@ -17,7 +17,7 @@ func TestDeepSeekCaller_Complete(t *testing.T) {
 	}
 
 	t.Run("happy path sends json_object mode with schema in system message", func(t *testing.T) {
-		var got deepseekRequest
+		var got chatRequest
 		var gotAuth string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotAuth = r.Header.Get("Authorization")
@@ -35,15 +35,15 @@ func TestDeepSeekCaller_Complete(t *testing.T) {
 		c.BaseURL = srv.URL
 		c.HTTPClient = srv.Client()
 
-		raw, err := c.Complete(context.Background(), req)
+		res, err := c.Complete(context.Background(), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		var out struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(raw, &out); err != nil || out.Name != "drafted" {
-			t.Fatalf("unexpected output %s (err %v)", raw, err)
+		if err := json.Unmarshal(res.JSON, &out); err != nil || out.Name != "drafted" {
+			t.Fatalf("unexpected output %s (err %v)", res.JSON, err)
 		}
 
 		if gotAuth != "Bearer sk-test" {
@@ -102,7 +102,7 @@ func TestDeepSeekCaller_Complete(t *testing.T) {
 	})
 
 	t.Run("max tokens defaulted and capped", func(t *testing.T) {
-		var got deepseekRequest
+		var got chatRequest
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewDecoder(r.Body).Decode(&got)
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{}"}}]}`))
@@ -137,12 +137,12 @@ func TestDeepSeekCaller_Complete(t *testing.T) {
 // The token counters are the only place LLM spend shows up, so the usage block
 // has to survive decoding — including on the failure path, where the input
 // tokens were still billed for a response we then reject.
-func TestDecodeDeepSeekResponseUsage(t *testing.T) {
+func TestDecodeChatResponseUsage(t *testing.T) {
 	t.Run("successful completion", func(t *testing.T) {
 		body := `{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}],` +
 			`"usage":{"prompt_tokens":1200,"completion_tokens":340}}`
 
-		_, u, err := decodeDeepSeekResponse(strings.NewReader(body))
+		_, u, err := decodeChatResponse(strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -157,7 +157,7 @@ func TestDecodeDeepSeekResponseUsage(t *testing.T) {
 	t.Run("empty completion still reports what it cost", func(t *testing.T) {
 		body := `{"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":0}}`
 
-		_, u, err := decodeDeepSeekResponse(strings.NewReader(body))
+		_, u, err := decodeChatResponse(strings.NewReader(body))
 		if err == nil {
 			t.Fatal("want an error for an empty model response")
 		}
@@ -169,7 +169,7 @@ func TestDecodeDeepSeekResponseUsage(t *testing.T) {
 	t.Run("missing usage block reports nothing rather than zero", func(t *testing.T) {
 		body := `{"choices":[{"message":{"content":"{}"}}]}`
 
-		_, u, err := decodeDeepSeekResponse(strings.NewReader(body))
+		_, u, err := decodeChatResponse(strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

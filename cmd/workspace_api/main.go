@@ -716,19 +716,10 @@ func workspaceServiceNamesWithoutBoxCredential() []string {
 	return names
 }
 
-// buildAssistServers wires the AI-drafting servers (DEEPSEEK_API_KEY
-// preferred, ANTHROPIC_API_KEY fallback — a self-hoster's own key). Nil
-// caller keeps the draft RPCs on UNIMPLEMENTED.
+// buildAssistServers wires the AI-drafting servers. Nil caller (no provider
+// configured) keeps the draft RPCs on UNIMPLEMENTED.
 func buildAssistServers(resolver workspace.Resolver, logger *slog.Logger) (*server.PipelineAssistServer, *server.AssistServer) {
-	var structuredCaller llm.StructuredCaller
-	switch {
-	case os.Getenv("DEEPSEEK_API_KEY") != "":
-		logger.Info("AI drafting enabled", "provider", "deepseek")
-		structuredCaller = llm.NewDeepSeekCaller(os.Getenv("DEEPSEEK_API_KEY"), os.Getenv("DEEPSEEK_MODEL"), logger)
-	case os.Getenv("ANTHROPIC_API_KEY") != "":
-		logger.Info("AI drafting enabled", "provider", "anthropic")
-		structuredCaller = llm.NewAnthropicCaller(os.Getenv("ANTHROPIC_API_KEY"), os.Getenv("ANTHROPIC_MODEL"), logger)
-	}
+	structuredCaller := chooseStructuredCaller(os.Getenv, logger)
 
 	draftLimiter := workspace.NewMemoryRateLimiter(10, time.Minute)
 	pipelineAssist := &workspace.PipelineAssistService{
@@ -748,6 +739,59 @@ func buildAssistServers(resolver workspace.Resolver, logger *slog.Logger) (*serv
 		assistSvc.Rill = drafter
 	}
 	return &server.PipelineAssistServer{Service: pipelineAssist}, &server.AssistServer{Service: assistSvc}
+}
+
+// chooseStructuredCaller picks the LLM backend for AI drafting; first match
+// wins, nil means unconfigured (the draft RPCs answer UNIMPLEMENTED):
+//
+//  1. DEEPSEEK_API_KEY (+DEEPSEEK_MODEL) — a self-hoster's own DeepSeek key.
+//  2. ANTHROPIC_API_KEY (+ANTHROPIC_MODEL) — a self-hoster's own Anthropic key.
+//  3. LLM_BASE_URL + LLM_API_KEY + LLM_MODEL — any OpenAI-compatible endpoint
+//     (OpenAI, Groq, a local Ollama/vLLM; LLM_API_KEY may be "none" for
+//     endpoints without auth, but must be set so a half-configured pair is
+//     visible rather than silently unauthenticated).
+//  4. FAIRTIER_ASSIST_URL + FAIRTIER_ASSIST_TOKEN_URL +
+//     FAIRTIER_ASSIST_OIDC_CLIENT_ID/_SECRET — the FairTier API assist relay.
+//     Set by the hosted box chart, never by hand, which is what makes any
+//     explicit self-hoster key above win automatically.
+//
+// Explicit keys sit above the relay on purpose: an operator who configures
+// their own provider has opted out of relayed drafting entirely.
+func chooseStructuredCaller(getenv func(string) string, logger *slog.Logger) llm.StructuredCaller {
+	switch {
+	case getenv("DEEPSEEK_API_KEY") != "":
+		logger.Info("AI drafting enabled", "provider", "deepseek")
+		return llm.NewDeepSeekCaller(getenv("DEEPSEEK_API_KEY"), getenv("DEEPSEEK_MODEL"), logger)
+	case getenv("ANTHROPIC_API_KEY") != "":
+		logger.Info("AI drafting enabled", "provider", "anthropic")
+		return llm.NewAnthropicCaller(getenv("ANTHROPIC_API_KEY"), getenv("ANTHROPIC_MODEL"), logger)
+	case getenv("LLM_BASE_URL") != "":
+		if getenv("LLM_API_KEY") == "" || getenv("LLM_MODEL") == "" {
+			logger.Warn("AI drafting disabled: LLM_BASE_URL is set but LLM_API_KEY or LLM_MODEL is missing")
+			return nil
+		}
+		apiKey := getenv("LLM_API_KEY")
+		if apiKey == "none" {
+			apiKey = ""
+		}
+		logger.Info("AI drafting enabled", "provider", "openai_compat", "model", getenv("LLM_MODEL"))
+		return llm.NewOpenAICompatCaller(getenv("LLM_BASE_URL"), apiKey, getenv("LLM_MODEL"), logger)
+	case getenv("FAIRTIER_ASSIST_URL") != "":
+		if getenv("FAIRTIER_ASSIST_TOKEN_URL") == "" ||
+			getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID") == "" ||
+			getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET") == "" {
+			logger.Warn("AI drafting disabled: FAIRTIER_ASSIST_URL is set but the token URL or OIDC client pair is missing")
+			return nil
+		}
+		logger.Info("AI drafting enabled", "provider", "fairtier_relay")
+		return llm.NewRemoteCaller(
+			getenv("FAIRTIER_ASSIST_URL"),
+			getenv("FAIRTIER_ASSIST_TOKEN_URL"),
+			getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID"),
+			getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET"),
+			logger)
+	}
+	return nil
 }
 
 // buildFingerprinter mirrors the control-plane binary: keyed HMAC fingerprints

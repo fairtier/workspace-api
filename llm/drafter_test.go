@@ -15,12 +15,12 @@ type fakeCaller struct {
 	err error
 }
 
-func (f *fakeCaller) Complete(_ context.Context, req StructuredRequest) (json.RawMessage, error) {
+func (f *fakeCaller) Complete(_ context.Context, req StructuredRequest) (Result, error) {
 	f.got = req
 	if f.err != nil {
-		return nil, f.err
+		return Result{}, f.err
 	}
-	return json.RawMessage(f.raw), nil
+	return Result{JSON: json.RawMessage(f.raw)}, nil
 }
 
 func TestDrafter_DraftPipeline(t *testing.T) {

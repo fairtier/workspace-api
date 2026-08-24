@@ -213,6 +213,33 @@ func validateSQLDatabaseCreds(raw json.RawMessage) error {
 	if creds.ConnectionString == "" {
 		return &ErrInvalidSourceCredentials{Field: "connection_string", Msg: "sql_database: connection_string is required"}
 	}
+	return validateSQLDatabaseDialect(creds.ConnectionString)
+}
+
+// validateSQLDatabaseDialect rejects connection strings for database engines
+// the dlt-worker cannot reach, at save time instead of as a runtime crash on
+// the box. The allowlist mirrors the drivers installed in the dlt-worker
+// image (its pyproject.toml: psycopg only, i.e. PostgreSQL) — the same
+// cross-repo parity contract as the source-credentials shapes: adding a
+// driver to the worker means extending this list in the same change, and
+// teaching the pipeline-draft system prompt (llm/drafter.go) the new engine.
+func validateSQLDatabaseDialect(connectionString string) error {
+	scheme, _, ok := strings.Cut(connectionString, "://")
+	if !ok {
+		return &ErrInvalidSourceCredentials{Field: "connection_string",
+			Msg: "sql_database: connection_string must be a SQLAlchemy URL like postgresql://user:password@host:5432/dbname"}
+	}
+	dialect, driver, _ := strings.Cut(strings.ToLower(scheme), "+")
+	if dialect != "postgres" && dialect != "postgresql" {
+		return &ErrInvalidSourceCredentials{Field: "connection_string",
+			Msg: fmt.Sprintf("sql_database: only PostgreSQL is supported (the worker has no %q driver); the connection string must start with postgresql://", dialect)}
+	}
+	// The worker ships psycopg (v3) only; any other explicit driver
+	// (psycopg2, asyncpg, pg8000, ...) fails on the box with a missing module.
+	if driver != "" && driver != "psycopg" {
+		return &ErrInvalidSourceCredentials{Field: "connection_string",
+			Msg: fmt.Sprintf("sql_database: driver %q is not installed on the worker; use postgresql:// (or postgresql+psycopg://)", driver)}
+	}
 	return nil
 }
 

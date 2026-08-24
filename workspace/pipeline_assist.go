@@ -26,6 +26,13 @@ type PipelineDraft struct {
 	// Notes is a short human-readable explanation of the draft / assumptions,
 	// surfaced to the user above the pre-filled form.
 	Notes string
+	// UnsupportedReason is non-empty when the request asks for a capability
+	// the platform does not have (an unreachable database engine, a missing
+	// connector, ...). The other fields are then zero — there is no draft to
+	// pre-fill, and the Console renders the reason instead. This is the
+	// model's refusal path: without it the closed source_type schema would
+	// force every infeasible request into the nearest supported source.
+	UnsupportedReason string
 }
 
 // PipelineDrafter turns a natural-language prompt into a draft pipeline
@@ -82,6 +89,17 @@ func (s *PipelineAssistService) DraftPipeline(ctx context.Context, callerID core
 	draft, err := s.Drafter.DraftPipeline(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("draft pipeline: %w", err)
+	}
+
+	// The model's refusal path: the request needs a capability the platform
+	// does not have. Return only the reason — a partial draft alongside it
+	// would invite submitting the very thing we just said cannot run.
+	if draft.UnsupportedReason != "" || draft.SourceType == "unsupported" {
+		reason := draft.UnsupportedReason
+		if reason == "" {
+			reason = "This request needs a capability the platform does not support yet."
+		}
+		return &PipelineDraft{UnsupportedReason: reason, Notes: draft.Notes}, nil
 	}
 
 	// The model must never produce credentials; defend against it regardless of

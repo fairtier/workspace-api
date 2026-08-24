@@ -35,8 +35,15 @@ message DraftPipelineRequest {
 message DraftPipelineResponse {
   // The drafted pipeline request, pre-filled and validated. Its
   // source_credentials field is always empty — the model never drafts secrets.
+  // Unset when unsupported_reason is non-empty.
   pipeline.v1.CreatePipelineRequest draft = 1;
   // Short human-readable explanation of the draft and any assumptions made,
   // surfaced to the user above the pre-filled form.
   string notes = 2;
+  // Non-empty when the request asks for something the platform cannot ingest
+  // (e.g. a database engine no installed worker driver reaches): what is
+  // missing and what the user could do instead. The Console renders this
+  // instead of pre-filling the wizard. Empty string (the proto3 default, so
+  // old drafts stay feasible) means the draft is usable.
+  string unsupported_reason = 3;
 }

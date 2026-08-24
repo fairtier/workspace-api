@@ -30,6 +30,15 @@ func (s *PipelineAssistServer) DraftPipeline(ctx context.Context, req *connect.R
 		return nil, draftError(err)
 	}
 
+	// The refusal path: the request needs a capability the platform does not
+	// have. No draft to pre-fill — the Console renders the reason instead.
+	if draft.UnsupportedReason != "" {
+		return connect.NewResponse(&pipelineassistv1.DraftPipelineResponse{
+			Notes:             draft.Notes,
+			UnsupportedReason: draft.UnsupportedReason,
+		}), nil
+	}
+
 	return connect.NewResponse(&pipelineassistv1.DraftPipelineResponse{
 		Draft: &pipelinev1.CreatePipelineRequest{
 			Name:              draft.Name,

@@ -90,6 +90,50 @@ func TestPipelineAssistService_DraftPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("unsupported request returns reason and skips validation", func(t *testing.T) {
+		svc := &workspace.PipelineAssistService{
+			Workspaces: acmeReader(),
+			Drafter: &mockDrafter{fn: func(context.Context, string) (*workspace.PipelineDraft, error) {
+				// A refusal draft carries no config at all — validation of the
+				// (absent) source_config must not reject it.
+				return &workspace.PipelineDraft{
+					SourceType:        "unsupported",
+					UnsupportedReason: "Oracle databases are not supported; only PostgreSQL is reachable.",
+					Notes:             "Consider exporting to CSV and using file upload.",
+				}, nil
+			}},
+		}
+		draft, err := svc.DraftPipeline(context.Background(), "u1", "extract from our Oracle DB")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if draft.UnsupportedReason == "" {
+			t.Fatal("want UnsupportedReason set")
+		}
+		if draft.SourceType != "" || draft.WriteDisposition != "" {
+			t.Fatalf("refusal draft must carry no pre-fill, got source_type=%q write_disposition=%q", draft.SourceType, draft.WriteDisposition)
+		}
+		if draft.Notes == "" {
+			t.Fatal("want notes preserved on refusal")
+		}
+	})
+
+	t.Run("unsupported source_type without reason gets a generic one", func(t *testing.T) {
+		svc := &workspace.PipelineAssistService{
+			Workspaces: acmeReader(),
+			Drafter: &mockDrafter{fn: func(context.Context, string) (*workspace.PipelineDraft, error) {
+				return &workspace.PipelineDraft{SourceType: "unsupported"}, nil
+			}},
+		}
+		draft, err := svc.DraftPipeline(context.Background(), "u1", "do the impossible")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if draft.UnsupportedReason == "" {
+			t.Fatal("want a generic UnsupportedReason when the model omitted one")
+		}
+	})
+
 	t.Run("rate limited", func(t *testing.T) {
 		svc := &workspace.PipelineAssistService{
 			Workspaces: acmeReader(),

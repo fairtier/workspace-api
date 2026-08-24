@@ -37,6 +37,7 @@ var pipelineDraftSchema = map[string]any{
 	"required": []string{
 		"name", "source_type", "dataset_name", "schedule",
 		"write_disposition", "merge_strategy", "source_config", "notes",
+		"unsupported_reason",
 	},
 	"properties": map[string]any{
 		"name": map[string]any{
@@ -45,8 +46,8 @@ var pipelineDraftSchema = map[string]any{
 		},
 		"source_type": map[string]any{
 			"type": "string",
-			"enum": []string{"rest_api", "sql_database", "filesystem", "google_sheets", "file_upload"},
-			"description": "The dlt source type best matching the user's description. " +
+			"enum": []string{"rest_api", "sql_database", "filesystem", "google_sheets", "file_upload", "unsupported"},
+			"description": "The dlt source type best matching the user's description, or \"unsupported\" when the request needs a capability the platform does not have. " +
 				"Use file_upload when the user has a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) to drop in — not filesystem, which is for an existing S3/GCS bucket the user already owns.",
 		},
 		"dataset_name": map[string]any{
@@ -59,8 +60,8 @@ var pipelineDraftSchema = map[string]any{
 		},
 		"write_disposition": map[string]any{
 			"type":        "string",
-			"enum":        []string{"append", "replace", "merge"},
-			"description": "How loaded data is written. Default to append unless the user implies upserts (merge) or full refresh (replace).",
+			"enum":        []string{"append", "replace", "merge", ""},
+			"description": "How loaded data is written. Default to append unless the user implies upserts (merge) or full refresh (replace). Empty string only when source_type is \"unsupported\".",
 		},
 		"merge_strategy": map[string]any{
 			"type":        "string",
@@ -79,32 +80,54 @@ var pipelineDraftSchema = map[string]any{
 			"type":        "string",
 			"description": "One or two sentences explaining the draft and any assumptions, plus which credentials the user still needs to provide.",
 		},
+		"unsupported_reason": map[string]any{
+			"type": "string",
+			"description": "Empty string when the request is feasible. When source_type is \"unsupported\": one or two sentences naming the missing capability and, when one exists, a genuinely equivalent alternative (e.g. exporting to CSV and using file_upload). Never suggest a supported source as if it could reach the unsupported system.",
+		},
 	},
 }
 
 const pipelineDraftSystemPrompt = `You are a data-engineering assistant for FairTier, a simple Iceberg data platform.
 Given a user's natural-language description, draft a single dlt (data load tool) pipeline configuration.
 
+The platform's COMPLETE ingestion capabilities — there are no others:
+- rest_api: any HTTP API returning JSON (including SaaS products reachable over their REST API).
+- sql_database: PostgreSQL ONLY. No other database engine is reachable — not MySQL, MariaDB,
+  Oracle, SQL Server, MongoDB, SQLite, Snowflake, BigQuery, or anything else.
+- filesystem: files in an S3-compatible object-storage bucket the user already owns.
+- google_sheets: a Google Sheets spreadsheet.
+- file_upload: a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) the user drops in.
+
 Rules:
-- Choose exactly one source_type: rest_api, sql_database, filesystem, google_sheets, or file_upload.
+- Choose exactly one source_type from the list above, or "unsupported".
+- Feasibility vs ambiguity are different things. An AMBIGUOUS request (unclear table names,
+  vague schedule) gets a reasonable choice explained in notes. An INFEASIBLE request — one
+  needing a capability outside the list above (an unsupported database engine, CDC/streaming,
+  a SaaS system with no REST API, ...) — gets source_type "unsupported" and an
+  unsupported_reason naming exactly what is missing. NEVER map an unsupported system onto
+  the nearest supported source_type: a draft that cannot run is worse than a clear no.
+- With source_type "unsupported", set unsupported_reason and notes, and leave every other
+  string field an empty string ("" — including source_config and write_disposition).
 - Prefer file_upload when the user has a local file (CSV/TSV/Parquet/JSONL) or a spreadsheet export to drop in; it needs no source_config or credentials (the files are uploaded in the next step). Use filesystem only for a bucket the user already owns.
 - Fill source_config with the NON-SENSITIVE configuration only.
 - NEVER invent or include credentials of any kind (API keys, tokens, passwords, connection strings, access keys). The user supplies those separately.
 - Prefer sensible defaults: write_disposition "append" unless the user implies upserts or a full refresh.
 - Keep dataset_name lowercase snake_case.
-- If the description is ambiguous, make a reasonable choice and explain it in notes.`
+- If the description is ambiguous, make a reasonable choice and explain it in notes.
+- Otherwise leave unsupported_reason an empty string.`
 
 // pipelineDraftOutput mirrors pipelineDraftSchema for unmarshalling the
 // model's JSON response.
 type pipelineDraftOutput struct {
-	Name             string `json:"name"`
-	SourceType       string `json:"source_type"`
-	DatasetName      string `json:"dataset_name"`
-	Schedule         string `json:"schedule"`
-	WriteDisposition string `json:"write_disposition"`
-	MergeStrategy    string `json:"merge_strategy"`
-	SourceConfig     string `json:"source_config"`
-	Notes            string `json:"notes"`
+	Name              string `json:"name"`
+	SourceType        string `json:"source_type"`
+	DatasetName       string `json:"dataset_name"`
+	Schedule          string `json:"schedule"`
+	WriteDisposition  string `json:"write_disposition"`
+	MergeStrategy     string `json:"merge_strategy"`
+	SourceConfig      string `json:"source_config"`
+	Notes             string `json:"notes"`
+	UnsupportedReason string `json:"unsupported_reason"`
 }
 
 // DraftPipeline calls the model and returns a structured draft. The returned
@@ -132,14 +155,15 @@ func (d *Drafter) DraftPipeline(ctx context.Context, prompt string) (*workspace.
 	}
 
 	return &workspace.PipelineDraft{
-		Name:             out.Name,
-		SourceType:       out.SourceType,
-		DatasetName:      out.DatasetName,
-		Schedule:         out.Schedule,
-		WriteDisposition: out.WriteDisposition,
-		MergeStrategy:    out.MergeStrategy,
-		SourceConfig:     json.RawMessage(cfg),
-		Notes:            out.Notes,
+		Name:              out.Name,
+		SourceType:        out.SourceType,
+		DatasetName:       out.DatasetName,
+		Schedule:          out.Schedule,
+		WriteDisposition:  out.WriteDisposition,
+		MergeStrategy:     out.MergeStrategy,
+		SourceConfig:      json.RawMessage(cfg),
+		Notes:             out.Notes,
+		UnsupportedReason: out.UnsupportedReason,
 	}, nil
 }
 

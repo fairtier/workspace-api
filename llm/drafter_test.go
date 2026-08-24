@@ -47,6 +47,57 @@ func TestDrafter_DraftPipeline(t *testing.T) {
 	}
 }
 
+func TestDrafter_DraftPipelineUnsupported(t *testing.T) {
+	caller := &fakeCaller{raw: `{
+		"name": "", "source_type": "unsupported", "dataset_name": "",
+		"schedule": "", "write_disposition": "", "merge_strategy": "",
+		"source_config": "",
+		"notes": "Oracle is not reachable from this platform.",
+		"unsupported_reason": "sql_database supports PostgreSQL only; there is no Oracle driver."
+	}`}
+	d := NewDrafter(caller, nil)
+
+	draft, err := d.DraftPipeline(context.Background(), "extract from our Oracle DB")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if draft.SourceType != "unsupported" || draft.UnsupportedReason == "" {
+		t.Fatalf("refusal not mapped: %+v", draft)
+	}
+
+	// The schema must actually offer the refusal path: "unsupported" in the
+	// source_type enum and a required unsupported_reason — otherwise a closed
+	// forced-choice schema shoehorns infeasible requests into the nearest
+	// supported source.
+	props := caller.got.Schema["properties"].(map[string]any)
+	enum := props["source_type"].(map[string]any)["enum"].([]string)
+	found := false
+	for _, v := range enum {
+		if v == "unsupported" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("source_type enum lacks the refusal value: %v", enum)
+	}
+	if _, ok := props["unsupported_reason"]; !ok {
+		t.Fatal("schema lacks unsupported_reason")
+	}
+	required := caller.got.Schema["required"].([]string)
+	reqFound := false
+	for _, v := range required {
+		if v == "unsupported_reason" {
+			reqFound = true
+		}
+	}
+	if !reqFound {
+		t.Fatalf("unsupported_reason not required: %v", required)
+	}
+	if !strings.Contains(caller.got.System, "PostgreSQL ONLY") {
+		t.Fatal("system prompt lost the capability envelope")
+	}
+}
+
 func TestDrafter_DraftTransformation(t *testing.T) {
 	caller := &fakeCaller{raw: `{
 		"name": "Revenue mart", "schedule": "", "dbt_selector": "tag:daily",

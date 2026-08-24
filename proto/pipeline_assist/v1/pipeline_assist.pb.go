@@ -72,12 +72,19 @@ type DraftPipelineResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The drafted pipeline request, pre-filled and validated. Its
 	// source_credentials field is always empty — the model never drafts secrets.
+	// Unset when unsupported_reason is non-empty.
 	Draft *v1.CreatePipelineRequest `protobuf:"bytes,1,opt,name=draft,proto3" json:"draft,omitempty"`
 	// Short human-readable explanation of the draft and any assumptions made,
 	// surfaced to the user above the pre-filled form.
-	Notes         string `protobuf:"bytes,2,opt,name=notes,proto3" json:"notes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Notes string `protobuf:"bytes,2,opt,name=notes,proto3" json:"notes,omitempty"`
+	// Non-empty when the request asks for something the platform cannot ingest
+	// (e.g. a database engine no installed worker driver reaches): what is
+	// missing and what the user could do instead. The Console renders this
+	// instead of pre-filling the wizard. Empty string (the proto3 default, so
+	// old drafts stay feasible) means the draft is usable.
+	UnsupportedReason string `protobuf:"bytes,3,opt,name=unsupported_reason,json=unsupportedReason,proto3" json:"unsupported_reason,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DraftPipelineResponse) Reset() {
@@ -124,16 +131,24 @@ func (x *DraftPipelineResponse) GetNotes() string {
 	return ""
 }
 
+func (x *DraftPipelineResponse) GetUnsupportedReason() string {
+	if x != nil {
+		return x.UnsupportedReason
+	}
+	return ""
+}
+
 var File_pipeline_assist_proto protoreflect.FileDescriptor
 
 const file_pipeline_assist_proto_rawDesc = "" +
 	"\n" +
 	"\x15pipeline_assist.proto\x12\x12pipeline_assist.v1\x1a\x0epipeline.proto\".\n" +
 	"\x14DraftPipelineRequest\x12\x16\n" +
-	"\x06prompt\x18\x01 \x01(\tR\x06prompt\"g\n" +
+	"\x06prompt\x18\x01 \x01(\tR\x06prompt\"\x96\x01\n" +
 	"\x15DraftPipelineResponse\x128\n" +
 	"\x05draft\x18\x01 \x01(\v2\".pipeline.v1.CreatePipelineRequestR\x05draft\x12\x14\n" +
-	"\x05notes\x18\x02 \x01(\tR\x05notes2\x7f\n" +
+	"\x05notes\x18\x02 \x01(\tR\x05notes\x12-\n" +
+	"\x12unsupported_reason\x18\x03 \x01(\tR\x11unsupportedReason2\x7f\n" +
 	"\x15PipelineAssistService\x12f\n" +
 	"\rDraftPipeline\x12(.pipeline_assist.v1.DraftPipelineRequest\x1a).pipeline_assist.v1.DraftPipelineResponse\"\x00BMZKgithub.com/fairtier/workspace-api/proto/pipeline_assist/v1;pipelineassistv1b\x06proto3"
 

@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -39,6 +40,8 @@ func ValidateSourceConfig(sourceType string, raw json.RawMessage) error {
 		return validateGoogleSheetsConfig(raw)
 	case SourceTypeFileUpload:
 		return validateFileUploadConfig(raw)
+	case SourceTypeDuckDB:
+		return validateDuckDBConfig(raw)
 	default:
 		return &ErrInvalidSourceConfig{Field: "source_type", Msg: fmt.Sprintf("unknown source type: %q", sourceType)}
 	}
@@ -63,6 +66,8 @@ func ValidateSourceCredentials(sourceType string, config, raw json.RawMessage) e
 		return validateGoogleSheetsCreds(raw)
 	case SourceTypeFileUpload:
 		return validateFileUploadCreds(raw)
+	case SourceTypeDuckDB:
+		return validateDuckDBCreds(config, raw)
 	default:
 		return &ErrInvalidSourceCredentials{Field: "source_type", Msg: fmt.Sprintf("unknown source type: %q", sourceType)}
 	}
@@ -233,9 +238,13 @@ func validateSQLDatabaseDialect(connectionString string) error {
 	}
 	dialect, driver, _ := strings.Cut(strings.ToLower(scheme), "+")
 	if dialect != "postgres" && dialect != "postgresql" {
+		msg := fmt.Sprintf("sql_database: only PostgreSQL is supported (the worker has no %q driver); the connection string must start with postgresql://", dialect)
+		if dialect == "mysql" {
+			msg += `; for MySQL use the "duckdb" source type instead`
+		}
 		return &ErrInvalidSourceCredentials{
 			Field: "connection_string",
-			Msg:   fmt.Sprintf("sql_database: only PostgreSQL is supported (the worker has no %q driver); the connection string must start with postgresql://", dialect),
+			Msg:   msg,
 		}
 	}
 	// The worker ships psycopg (v3) only; any other explicit driver
@@ -617,4 +626,135 @@ func validateFileUploadCreds(raw json.RawMessage) error {
 		return nil
 	}
 	return &ErrInvalidSourceCredentials{Field: "source_credentials", Msg: "file_upload: credentials are managed by the platform; leave empty"}
+}
+
+// --- duckdb ---
+
+// SourceTypeDuckDB is the DuckDB-extension source: the dlt-worker opens a
+// bounded in-memory DuckDB, LOADs one extension, optionally ATTACHes the
+// external system read-only as "src", and streams each configured table's
+// query into the normal load path — so any system a DuckDB extension can
+// read becomes an EL source without a driver of its own. The extension is
+// the extractor only; landing in Iceberg stays dlt's job.
+const SourceTypeDuckDB = "duckdb"
+
+// duckdbExtensionAllowlist mirrors SUPPORTED_DUCKDB_EXTENSIONS in the
+// dlt-worker (duckdb_source.py) — the set its image bakes at build time.
+// The same cross-repo parity contract as validateSQLDatabaseDialect: adding
+// an extension to the worker's baked set means extending this list and the
+// pipeline-draft capability prompt (llm/drafter.go) in the same change.
+var duckdbExtensionAllowlist = map[string]bool{
+	"mysql": true,
+}
+
+// duckdbIdentRe matches the names the worker interpolates into SQL (the
+// extension in LOAD/ATTACH, a table's cursor column in a WHERE clause) —
+// bare identifiers only, everything else is refused at save time.
+var duckdbIdentRe = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// duckdbPlaceholderRe matches the {placeholder}s in an attach template that
+// attach_params must fill at run time.
+var duckdbPlaceholderRe = regexp.MustCompile(`\{([A-Za-z0-9_]+)\}`)
+
+type duckdbConfig struct {
+	Extension string        `json:"extension"`
+	Attach    string        `json:"attach"`
+	Tables    []duckdbTable `json:"tables"`
+}
+
+type duckdbTable struct {
+	Name         string          `json:"name"`
+	Query        string          `json:"query"`
+	CursorColumn string          `json:"cursor_column"`
+	InitialValue json.RawMessage `json:"initial_value"`
+	PrimaryKey   string          `json:"primary_key"`
+}
+
+func validateDuckDBConfig(raw json.RawMessage) error {
+	if isEmptyJSON(raw) {
+		return &ErrInvalidSourceConfig{Field: "source_config", Msg: "duckdb: sourceConfig is required"}
+	}
+	var cfg duckdbConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return &ErrInvalidSourceConfig{Field: "source_config", Msg: fmt.Sprintf("duckdb: invalid sourceConfig JSON: %v", err)}
+	}
+	if cfg.Extension == "" {
+		return &ErrInvalidSourceConfig{Field: "extension", Msg: "duckdb: extension is required"}
+	}
+	if !duckdbIdentRe.MatchString(cfg.Extension) {
+		return &ErrInvalidSourceConfig{Field: "extension", Msg: fmt.Sprintf("duckdb: invalid extension name %q", cfg.Extension)}
+	}
+	if !duckdbExtensionAllowlist[cfg.Extension] {
+		return &ErrInvalidSourceConfig{Field: "extension", Msg: fmt.Sprintf("duckdb: extension %q is not supported; supported: %s", cfg.Extension, strings.Join(duckdbSupportedExtensions(), ", "))}
+	}
+	if len(cfg.Tables) == 0 {
+		return &ErrInvalidSourceConfig{Field: "tables", Msg: "duckdb: tables must have at least one entry"}
+	}
+	return validateDuckDBTables(cfg.Attach, cfg.Tables)
+}
+
+func validateDuckDBTables(attach string, tables []duckdbTable) error {
+	for i, tbl := range tables {
+		if tbl.Name == "" {
+			return &ErrInvalidSourceConfig{Field: fmt.Sprintf("tables[%d].name", i), Msg: fmt.Sprintf("duckdb: tables[%d].name is required", i)}
+		}
+		if attach == "" && tbl.Query == "" {
+			return &ErrInvalidSourceConfig{Field: fmt.Sprintf("tables[%d].query", i), Msg: fmt.Sprintf("duckdb: tables[%d].query is required when no attach template is set", i)}
+		}
+		if tbl.CursorColumn != "" && !duckdbIdentRe.MatchString(strings.ToLower(tbl.CursorColumn)) {
+			return &ErrInvalidSourceConfig{Field: fmt.Sprintf("tables[%d].cursor_column", i), Msg: fmt.Sprintf("duckdb: tables[%d].cursor_column %q is not a plain column name", i, tbl.CursorColumn)}
+		}
+	}
+	return nil
+}
+
+func duckdbSupportedExtensions() []string {
+	names := make([]string, 0, len(duckdbExtensionAllowlist))
+	for name := range duckdbExtensionAllowlist {
+		names = append(names, name)
+	}
+	return names
+}
+
+// duckdbCreds fills what the config deliberately leaves out: attach_params
+// substitute the attach template's {placeholder}s on the worker, and secret
+// renders as a DuckDB CREATE SECRET for extensions that authenticate that
+// way instead of through an ATTACH string. Both are maps of plain strings —
+// they travel whole into the pipeline's .age file, never into the config.
+type duckdbCreds struct {
+	AttachParams map[string]string `json:"attach_params"`
+	Secret       map[string]string `json:"secret"`
+}
+
+func validateDuckDBCreds(config, raw json.RawMessage) error {
+	var cfg duckdbConfig
+	if !isEmptyJSON(config) {
+		if err := json.Unmarshal(config, &cfg); err != nil {
+			return &ErrInvalidSourceCredentials{Field: "source_config", Msg: fmt.Sprintf("duckdb: invalid sourceConfig JSON: %v", err)}
+		}
+	}
+
+	var creds duckdbCreds
+	if !isEmptyJSON(raw) {
+		if err := json.Unmarshal(raw, &creds); err != nil {
+			return &ErrInvalidSourceCredentials{Field: "source_credentials", Msg: fmt.Sprintf("duckdb: invalid sourceCredentials JSON: %v", err)}
+		}
+	}
+
+	// Every placeholder in the attach template must be fillable, or the
+	// first run fails on the box instead of the save failing here. A
+	// credential-less source (a public MySQL endpoint) is a template with
+	// no placeholders and no credentials — valid.
+	var missing []string
+	seen := map[string]bool{}
+	for _, m := range duckdbPlaceholderRe.FindAllStringSubmatch(cfg.Attach, -1) {
+		if _, ok := creds.AttachParams[m[1]]; !ok && !seen[m[1]] {
+			seen[m[1]] = true
+			missing = append(missing, m[1])
+		}
+	}
+	if len(missing) > 0 {
+		return &ErrInvalidSourceCredentials{Field: "attach_params", Msg: fmt.Sprintf("duckdb: attach_params missing %s required by the attach template", strings.Join(missing, ", "))}
+	}
+	return nil
 }

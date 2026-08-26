@@ -46,9 +46,10 @@ var pipelineDraftSchema = map[string]any{
 		},
 		"source_type": map[string]any{
 			"type": "string",
-			"enum": []string{"rest_api", "sql_database", "filesystem", "google_sheets", "file_upload", "unsupported"},
+			"enum": []string{"rest_api", "sql_database", "filesystem", "google_sheets", "file_upload", "duckdb", "unsupported"},
 			"description": "The dlt source type best matching the user's description, or \"unsupported\" when the request needs a capability the platform does not have. " +
-				"Use file_upload when the user has a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) to drop in — not filesystem, which is for an existing S3/GCS bucket the user already owns.",
+				"Use file_upload when the user has a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) to drop in — not filesystem, which is for an existing S3/GCS bucket the user already owns. " +
+				"Use duckdb for a database engine reachable through a supported DuckDB extension (currently MySQL); sql_database stays the PostgreSQL path.",
 		},
 		"dataset_name": map[string]any{
 			"type":        "string",
@@ -74,7 +75,8 @@ var pipelineDraftSchema = map[string]any{
 				"sql_database may set tables or tables_config. " +
 				"filesystem requires bucket_url and may set file_glob. " +
 				"google_sheets requires spreadsheet_url_or_id and may set range_names (sheet tabs, A1 ranges, or named ranges; omit to load every tab). " +
-				"NEVER include credentials, API keys, passwords, connection strings, or access keys here.",
+				"duckdb requires extension (currently only \"mysql\"), tables (an array of {name, query?, cursor_column?, primary_key?}; query defaults to reading the source table of the same name), and usually attach — an ATTACH template where every secret part is a {placeholder} the user fills in the credentials step, e.g. \"host={host} user={user} password={password} database=shop\". " +
+				"NEVER include credentials, API keys, passwords, connection strings, or access keys here — in a duckdb attach template that is what the {placeholder}s are for.",
 		},
 		"notes": map[string]any{
 			"type":        "string",
@@ -92,8 +94,9 @@ Given a user's natural-language description, draft a single dlt (data load tool)
 
 The platform's COMPLETE ingestion capabilities — there are no others:
 - rest_api: any HTTP API returning JSON (including SaaS products reachable over their REST API).
-- sql_database: PostgreSQL ONLY. No other database engine is reachable — not MySQL, MariaDB,
-  Oracle, SQL Server, MongoDB, SQLite, Snowflake, BigQuery, or anything else.
+- sql_database: PostgreSQL ONLY (this path has no other database driver).
+- duckdb: MySQL, read through a DuckDB extension. No other engine yet — not MariaDB, Oracle,
+  SQL Server, MongoDB, SQLite, Snowflake, BigQuery, or anything else.
 - filesystem: files in an S3-compatible object-storage bucket the user already owns.
 - google_sheets: a Google Sheets spreadsheet.
 - file_upload: a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) the user drops in.

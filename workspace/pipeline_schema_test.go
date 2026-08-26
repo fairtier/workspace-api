@@ -180,6 +180,82 @@ func TestValidateSourceConfig(t *testing.T) {
 			errSubstr:  "sourceConfig is required",
 		},
 
+		// --- duckdb ---
+		{
+			name:       "duckdb valid with attach",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"mysql","attach":"host={host} user={user} password={password} database=shop","tables":[{"name":"orders"}]}`),
+		},
+		{
+			name:       "duckdb valid query-only with incremental",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"mysql","tables":[{"name":"orders","query":"SELECT * FROM src.orders","cursor_column":"updated_at","primary_key":"id"}]}`),
+		},
+		{
+			name:       "duckdb config empty",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "sourceConfig is required",
+		},
+		{
+			name:       "duckdb missing extension",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"tables":[{"name":"t","query":"SELECT 1"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "extension is required",
+		},
+		{
+			name:       "duckdb extension not allowlisted",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"postgres","tables":[{"name":"t","query":"SELECT 1"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "is not supported",
+		},
+		{
+			name:       "duckdb extension not an identifier",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"mysql; DROP","tables":[{"name":"t","query":"SELECT 1"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "invalid extension name",
+		},
+		{
+			name:       "duckdb empty tables",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"mysql","tables":[]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "at least one entry",
+		},
+		{
+			name:       "duckdb table missing name",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"mysql","tables":[{"query":"SELECT 1"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "tables[0].name is required",
+		},
+		{
+			name:       "duckdb table needs query without attach",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"mysql","tables":[{"name":"orders"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "query is required when no attach",
+		},
+		{
+			name:       "duckdb cursor_column not a column name",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"mysql","attach":"database=shop","tables":[{"name":"t","cursor_column":"id; DROP"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "not a plain column name",
+		},
+
 		// --- unknown source type ---
 		{
 			name:       "unknown source type",
@@ -264,6 +340,43 @@ func TestValidateSourceCredentials(t *testing.T) {
 			wantErr:      true,
 			wantCredsErr: true,
 			errSubstr:    "only PostgreSQL is supported",
+		},
+		{
+			name:         "sql_database creds mysql rejection points at duckdb",
+			sourceType:   "sql_database",
+			raw:          json.RawMessage(`{"connection_string":"mysql://user:pass@host/db"}`),
+			wantErr:      true,
+			wantCredsErr: true,
+			errSubstr:    `use the "duckdb" source type`,
+		},
+
+		// --- duckdb ---
+		{
+			name:       "duckdb creds fill every placeholder",
+			sourceType: "duckdb",
+			config:     json.RawMessage(`{"extension":"mysql","attach":"host={host} user={user} password={password} database=shop","tables":[{"name":"orders"}]}`),
+			raw:        json.RawMessage(`{"attach_params":{"host":"db.example.com","user":"u","password":"s"}}`),
+		},
+		{
+			name:       "duckdb creds empty ok without placeholders",
+			sourceType: "duckdb",
+			config:     json.RawMessage(`{"extension":"mysql","attach":"host=public.example.com user=ro database=demo","tables":[{"name":"orders"}]}`),
+			raw:        nil,
+		},
+		{
+			name:         "duckdb creds missing placeholder named",
+			sourceType:   "duckdb",
+			config:       json.RawMessage(`{"extension":"mysql","attach":"host={host} password={password} database=shop","tables":[{"name":"orders"}]}`),
+			raw:          json.RawMessage(`{"attach_params":{"host":"h"}}`),
+			wantErr:      true,
+			wantCredsErr: true,
+			errSubstr:    "attach_params missing password",
+		},
+		{
+			name:       "duckdb creds secret only",
+			sourceType: "duckdb",
+			config:     json.RawMessage(`{"extension":"mysql","tables":[{"name":"t","query":"SELECT 1"}]}`),
+			raw:        json.RawMessage(`{"secret":{"token":"abc"}}`),
 		},
 		{
 			name:         "sql_database creds oracle rejected",

@@ -49,7 +49,7 @@ type Connection struct {
 
 // googleConnectionCredentials is the credentials JSON for a "google"
 // connection. Mirrors the stored shape of a per-pipeline OAuth credential
-// (googleSheetsOAuth) minus the pipeline-specific wrapper.
+// (googleOAuthCredential) minus the pipeline-specific wrapper.
 type googleConnectionCredentials struct {
 	RefreshToken string `json:"refresh_token"`
 	Email        string `json:"email,omitempty"`
@@ -311,14 +311,19 @@ func (c *Connection) googleCredentials() (*googleConnectionCredentials, error) {
 
 // credentialReferencesConnection reports whether a stored pipeline credential
 // JSON references the given connection id. Type-agnostic on purpose: it
-// checks the oauth.connection_id shape wherever it appears.
+// checks the oauth.connection_id shape wherever it appears, which is what
+// keeps the delete guard correct for every Google-backed source type — the
+// google_sheets envelope and the duckdb/gdrive one both name the member
+// "oauth", so neither needs its own branch here.
 func credentialReferencesConnection(raw json.RawMessage, connectionID string) bool {
 	if isEmptyJSON(raw) {
 		return false
 	}
-	var creds googleSheetsCreds
-	if err := json.Unmarshal(raw, &creds); err != nil || creds.OAuth == nil {
+	var env struct {
+		OAuth *googleOAuthCredential `json:"oauth"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.OAuth == nil {
 		return false
 	}
-	return creds.OAuth.ConnectionID == connectionID
+	return env.OAuth.ConnectionID == connectionID
 }

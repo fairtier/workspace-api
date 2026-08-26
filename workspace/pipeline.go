@@ -189,7 +189,7 @@ func (s *PipelineService) CreatePipeline(ctx context.Context, callerID core.User
 	if err := ValidateSourceCredentials(p.SourceType, p.SourceConfig, p.SourceCredentials); err != nil {
 		return nil, err
 	}
-	if err := s.swapGoogleSheetsGrant(ctx, ws.Slug, p); err != nil {
+	if err := s.swapGoogleOAuthGrant(ctx, ws.Slug, p); err != nil {
 		return nil, err
 	}
 
@@ -241,43 +241,46 @@ func (s *PipelineService) commitOrCompensate(ctx context.Context, callerID core.
 	return err
 }
 
-// swapGoogleSheetsGrant redeems a "Sign in with Google" grant referenced in a
-// google_sheets pipeline's credentials, replacing {"oauth":{"grant_id":…}} with
+// swapGoogleOAuthGrant redeems a "Sign in with Google" grant referenced in a
+// Google-backed pipeline's credentials, replacing {"oauth":{"grant_id":…}} with
 // the stored {"oauth":{"refresh_token":…,"email":…}}. No-op for service-account
 // or already-stored credentials. The grant is consumed (one-time use) and its
 // tenant is checked against customerSlug.
-func (s *PipelineService) swapGoogleSheetsGrant(ctx context.Context, customerSlug string, p *Pipeline) error {
+//
+// Serves google_sheets and duckdb/gdrive alike: both carry the credential
+// under the same "oauth" member, so one Google sign-in feeds either.
+func (s *PipelineService) swapGoogleOAuthGrant(ctx context.Context, customerSlug string, p *Pipeline) error {
 	// A connection reference is stored as-is (resolved at serve/render time so
 	// it follows the connection's lifecycle), but it must exist and belong to
 	// this tenant — otherwise the save would only defer the failure to a run.
-	if connID, ok := googleSheetsConnectionID(p.SourceType, p.SourceCredentials); ok {
+	if connID, ok := googleConnectionRef(p.SourceType, p.SourceCredentials); ok {
 		if s.Connections == nil {
-			return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: connections are not enabled on this server"}
+			return &ErrInvalidSourceCredentials{Field: "oauth", Msg: p.SourceType + ": connections are not enabled on this server"}
 		}
 		if _, err := s.Connections.GetConnection(ctx, customerSlug, connID); err != nil {
 			if errors.Is(err, ErrConnectionNotFound) {
-				return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: the referenced Google connection does not exist; reconnect in Integrations"}
+				return &ErrInvalidSourceCredentials{Field: "oauth", Msg: p.SourceType + ": the referenced Google connection does not exist; reconnect in Integrations"}
 			}
 			return fmt.Errorf("resolve connection: %w", err)
 		}
 		return nil
 	}
 
-	grantID, ok := googleSheetsGrantID(p.SourceType, p.SourceCredentials)
+	grantID, ok := googleGrantID(p.SourceType, p.SourceCredentials)
 	if !ok {
 		return nil
 	}
 	if s.GoogleOAuth == nil {
-		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: Sign in with Google is not enabled on this server"}
+		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: p.SourceType + ": Sign in with Google is not enabled on this server"}
 	}
 	grant, err := s.GoogleOAuth.ConsumeGoogleOAuthGrant(ctx, grantID, customerSlug)
 	if err != nil {
 		if errors.Is(err, ErrOAuthGrantNotFound) {
-			return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: the Google sign-in expired or was already used; please reconnect"}
+			return &ErrInvalidSourceCredentials{Field: "oauth", Msg: p.SourceType + ": the Google sign-in expired or was already used; please reconnect"}
 		}
 		return fmt.Errorf("consume oauth grant: %w", err)
 	}
-	stored, err := googleSheetsStoredOAuthCreds(grant.RefreshToken, grant.Email, grant.ClientID)
+	stored, err := storedGoogleOAuthCreds(p.SourceType, p.SourceCredentials, grant.RefreshToken, grant.Email, grant.ClientID)
 	if err != nil {
 		return fmt.Errorf("build oauth credentials: %w", err)
 	}
@@ -445,7 +448,7 @@ func (s *PipelineService) resolveUpdateCredentials(ctx context.Context, customer
 	if err := ValidateSourceCredentials(p.SourceType, p.SourceConfig, p.SourceCredentials); err != nil {
 		return err
 	}
-	return s.swapGoogleSheetsGrant(ctx, customerSlug, p)
+	return s.swapGoogleOAuthGrant(ctx, customerSlug, p)
 }
 
 // DeletePipeline deletes a pipeline, verifying ownership.
@@ -611,12 +614,13 @@ func (s *PipelineService) GetEnabledPipelines(ctx context.Context, customerSlug 
 }
 
 // oauthClientResolver looks a customer's own Google OAuth app up at most once
-// per batch and injects it into each OAuth google_sheets credential — first
-// resolving a workspace Connection reference (oauth.connection_id) into the
-// connection's refresh token, so the served credential shape is identical
-// whether the pipeline embeds its token or references a connection. The
-// lookup is lazy because most batches contain no Sheets pipeline at all, and
-// cached because both callers iterate every pipeline of one customer.
+// per batch and injects it into each Google-backed credential (google_sheets,
+// and duckdb with the gdrive extension) — first resolving a workspace
+// Connection reference (oauth.connection_id) into the connection's refresh
+// token, so the served credential shape is identical whether the pipeline
+// embeds its token or references a connection. The lookup is lazy because most
+// batches contain no Google pipeline at all, and cached because both callers
+// iterate every pipeline of one customer.
 //
 // Shared by the worker poll (GetEnabledPipelines) and the .age render
 // (PipelineMirror): the two must agree byte-for-byte, since the render
@@ -643,8 +647,13 @@ func newOAuthClientResolver(clients OAuthClientStore, connections ConnectionStor
 // the connection cannot be resolved. The connection_id is deliberately absent
 // from the output: the worker-facing shape must be byte-identical to an
 // embedded credential's.
+//
+// Only the oauth member is replaced. Sibling fields are preserved, because a
+// duckdb credential carries attach_params and its own secret keys alongside
+// it — rebuilding the envelope from the connection alone would serve a Drive
+// pipeline with the rest of its credentials silently stripped.
 func (r *oauthClientResolver) resolveConnectionCredential(ctx context.Context, sourceType string, raw json.RawMessage) (json.RawMessage, bool) {
-	connID, ok := googleSheetsConnectionID(sourceType, raw)
+	connID, ok := googleConnectionRef(sourceType, raw)
 	if !ok || r.connections == nil {
 		return nil, false
 	}
@@ -662,7 +671,7 @@ func (r *oauthClientResolver) resolveConnectionCredential(ctx context.Context, s
 	if gc == nil {
 		return nil, false
 	}
-	resolved, err := googleSheetsStoredOAuthCreds(gc.RefreshToken, gc.Email, gc.ClientID)
+	resolved, err := storedGoogleOAuthCreds(sourceType, raw, gc.RefreshToken, gc.Email, gc.ClientID)
 	if err != nil {
 		return nil, false
 	}
@@ -698,7 +707,7 @@ func (r *oauthClientResolver) load(ctx context.Context) {
 // raw connection_id would fail on a missing refresh_token, one step further
 // from the cause.
 func (r *oauthClientResolver) inject(ctx context.Context, p *Pipeline) (json.RawMessage, bool) {
-	if p.SourceType != "google_sheets" {
+	if !isGoogleOAuthSourceType(p.SourceType) {
 		return nil, false
 	}
 	raw := p.SourceCredentials
@@ -710,15 +719,15 @@ func (r *oauthClientResolver) inject(ctx context.Context, p *Pipeline) (json.Raw
 	r.load(ctx)
 	if r.clientID == "" || r.clientSecret == "" {
 		if resolvedFromConnection {
-			return raw, true
+			return serveGoogleOAuthCredential(p.SourceType, raw), true
 		}
 		return nil, false
 	}
-	if injected, ok := injectGoogleSheetsOAuthClient(p.SourceType, raw, r.clientID, r.clientSecret); ok {
+	if injected, ok := injectGoogleOAuthClient(p.SourceType, raw, r.clientID, r.clientSecret); ok {
 		return injected, true
 	}
 	if resolvedFromConnection {
-		return raw, true
+		return serveGoogleOAuthCredential(p.SourceType, raw), true
 	}
 	return nil, false
 }
@@ -734,7 +743,7 @@ func (r *oauthClientResolver) staleClientID(ctx context.Context, p *Pipeline) bo
 	if resolved, ok := r.resolveConnectionCredential(ctx, p.SourceType, raw); ok {
 		raw = resolved
 	}
-	storedID, isOAuth := googleSheetsOAuthClientID(p.SourceType, raw)
+	storedID, isOAuth := googleOAuthClientID(p.SourceType, raw)
 	if !isOAuth {
 		return false
 	}

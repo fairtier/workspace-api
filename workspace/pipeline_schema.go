@@ -421,11 +421,15 @@ func validateFileUploadConfig(raw json.RawMessage) error {
 //   - oauth: a delegated-user grant from the "Sign in with Google" flow. The
 //     easy path for ordinary users — no JSON, no manual sharing.
 type googleSheetsCreds struct {
-	ServiceAccountKey json.RawMessage    `json:"service_account_key,omitempty"`
-	OAuth             *googleSheetsOAuth `json:"oauth,omitempty"`
+	ServiceAccountKey json.RawMessage        `json:"service_account_key,omitempty"`
+	OAuth             *googleOAuthCredential `json:"oauth,omitempty"`
 }
 
-// googleSheetsOAuth is the delegated-user OAuth credential for Google Sheets.
+// googleOAuthCredential is the delegated-user Google OAuth credential shared by
+// every Google-backed source type: google_sheets, and duckdb with the gdrive
+// extension. Only the envelope differs — google_sheets carries it as the
+// "oauth" member of googleSheetsCreds, duckdb as the "oauth" member of
+// duckdbCreds — which is what lets one set of helpers serve both.
 // It takes several shapes across its lifecycle:
 //
 //   - Console input (create/update): either GrantID — a reference to a
@@ -442,14 +446,17 @@ type googleSheetsCreds struct {
 //     ConnectionID rows, the refresh token resolved from the Connection first —
 //     by GetEnabledPipelines and by the mirror's .age render. The served shape
 //     is identical for both storage forms, so the worker never learns which
-//     one a pipeline uses.
+//     one a pipeline uses. For duckdb/gdrive the served form is not this
+//     struct at all: the extension authenticates through a DuckDB secret, so
+//     injectGoogleOAuthClient flattens it into duckdbCreds.Secret and drops
+//     the oauth member entirely.
 //
 // ClientID is stored but ClientSecret never is. Storing the id is what lets a
 // stale connection be reported rather than merely failing: a refresh token is
 // only refreshable by the client it was issued to, so once the customer swaps
 // their Google app every earlier token is dead, and comparing the stored id
 // against the current one is the only way to know that before the run.
-type googleSheetsOAuth struct {
+type googleOAuthCredential struct {
 	GrantID      string `json:"grant_id,omitempty"`
 	ConnectionID string `json:"connection_id,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
@@ -477,7 +484,7 @@ func validateGoogleSheetsCreds(raw json.RawMessage) error {
 	case hasSA && hasOAuth:
 		return &ErrInvalidSourceCredentials{Field: "source_credentials", Msg: "google_sheets: provide either service_account_key or oauth, not both"}
 	case hasOAuth:
-		return validateGoogleSheetsOAuth(creds.OAuth)
+		return validateGoogleOAuth("google_sheets", creds.OAuth)
 	case hasSA:
 		return validateGoogleSheetsServiceAccount(creds.ServiceAccountKey)
 	default:
@@ -485,12 +492,12 @@ func validateGoogleSheetsCreds(raw json.RawMessage) error {
 	}
 }
 
-// validateGoogleSheetsOAuth accepts any shape the Console/store can present:
+// validateGoogleOAuth accepts any shape the Console/store can present:
 // a grant_id (one-shot Sign in with Google), a connection_id (workspace-level
 // Google connection), or a refresh_token (already-stored form).
-func validateGoogleSheetsOAuth(o *googleSheetsOAuth) error {
+func validateGoogleOAuth(sourceType string, o *googleOAuthCredential) error {
 	if o.GrantID == "" && o.ConnectionID == "" && o.RefreshToken == "" {
-		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: "google_sheets: oauth requires grant_id (from Sign in with Google), connection_id, or refresh_token"}
+		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: sourceType + ": oauth requires grant_id (from Sign in with Google), connection_id, or refresh_token"}
 	}
 	return nil
 }
@@ -515,39 +522,86 @@ func validateGoogleSheetsServiceAccount(serviceAccountKey json.RawMessage) error
 	return nil
 }
 
-// googleSheetsGrantID returns the OAuth grant_id carried by a google_sheets
-// pipeline's credentials, or ("", false) when the pipeline is not google_sheets
-// or carries no oauth.grant_id (service-account or already-swapped creds).
-func googleSheetsGrantID(sourceType string, raw json.RawMessage) (string, bool) {
-	if sourceType != "google_sheets" || isEmptyJSON(raw) {
-		return "", false
+// isGoogleOAuthSourceType reports whether a source type's credentials can
+// carry a Google delegated-user OAuth credential. THE registration point for
+// a Google-backed source: everything else in this file dispatches through it.
+//
+// duckdb qualifies only through the gdrive extension, but the extension name
+// lives in source_config, which the serve and render paths do not carry. They
+// do not need it: validateDuckDBCreds refuses an oauth block on any other
+// extension at save time, so a stored duckdb credential with one is already
+// known to be gdrive.
+func isGoogleOAuthSourceType(sourceType string) bool {
+	switch sourceType {
+	case "google_sheets", "duckdb":
+		return true
 	}
-	var creds googleSheetsCreds
-	if err := json.Unmarshal(raw, &creds); err != nil || creds.OAuth == nil {
-		return "", false
-	}
-	if creds.OAuth.GrantID == "" {
-		return "", false
-	}
-	return creds.OAuth.GrantID, true
+	return false
 }
 
-// googleSheetsConnectionID returns the workspace Connection referenced by a
-// google_sheets pipeline's credentials, or ("", false) when the pipeline is
-// not google_sheets, carries no oauth.connection_id, or already embeds a
-// refresh token (embedded wins: it is the resolved form).
-func googleSheetsConnectionID(sourceType string, raw json.RawMessage) (string, bool) {
-	if sourceType != "google_sheets" || isEmptyJSON(raw) {
+// parseGoogleOAuth reads the Google OAuth credential out of whichever envelope
+// sourceType uses, or returns (nil, false) when the type is not Google-backed
+// or the credential carries no oauth member (a service-account google_sheets
+// credential, or a duckdb one authenticating some other way).
+func parseGoogleOAuth(sourceType string, raw json.RawMessage) (*googleOAuthCredential, bool) {
+	if !isGoogleOAuthSourceType(sourceType) || isEmptyJSON(raw) {
+		return nil, false
+	}
+	// Both envelopes name the member "oauth" and give it the same shape, so
+	// one anonymous struct reads either without knowing which it has.
+	var env struct {
+		OAuth *googleOAuthCredential `json:"oauth"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.OAuth == nil {
+		return nil, false
+	}
+	return env.OAuth, true
+}
+
+// storeGoogleOAuth writes o back into raw's envelope, preserving every sibling
+// field. It merges rather than rebuilds because a duckdb credential carries
+// attach_params and its own secret keys beside the oauth member, and a
+// google_sheets one can carry a service-account key: rebuilding from scratch
+// would serve the pipeline with the rest of its credentials silently stripped.
+func storeGoogleOAuth(sourceType string, raw json.RawMessage, o *googleOAuthCredential) (json.RawMessage, error) {
+	if !isGoogleOAuthSourceType(sourceType) {
+		return nil, fmt.Errorf("source type %q carries no google oauth credential", sourceType)
+	}
+	env := map[string]json.RawMessage{}
+	if !isEmptyJSON(raw) {
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return nil, fmt.Errorf("parse credentials: %w", err)
+		}
+	}
+	encoded, err := json.Marshal(o)
+	if err != nil {
+		return nil, err
+	}
+	env["oauth"] = encoded
+	return json.Marshal(env)
+}
+
+// googleGrantID returns the OAuth grant_id carried by a Google-backed
+// pipeline's credentials, or ("", false) when the pipeline carries no
+// oauth.grant_id (service-account or already-swapped creds).
+func googleGrantID(sourceType string, raw json.RawMessage) (string, bool) {
+	o, ok := parseGoogleOAuth(sourceType, raw)
+	if !ok || o.GrantID == "" {
 		return "", false
 	}
-	var creds googleSheetsCreds
-	if err := json.Unmarshal(raw, &creds); err != nil || creds.OAuth == nil {
+	return o.GrantID, true
+}
+
+// googleConnectionRef returns the workspace Connection referenced by a
+// Google-backed pipeline's credentials, or ("", false) when it carries no
+// oauth.connection_id or already embeds a refresh token (embedded wins: it is
+// the resolved form).
+func googleConnectionRef(sourceType string, raw json.RawMessage) (string, bool) {
+	o, ok := parseGoogleOAuth(sourceType, raw)
+	if !ok || o.ConnectionID == "" || o.RefreshToken != "" {
 		return "", false
 	}
-	if creds.OAuth.ConnectionID == "" || creds.OAuth.RefreshToken != "" {
-		return "", false
-	}
-	return creds.OAuth.ConnectionID, true
+	return o.ConnectionID, true
 }
 
 // ConnectionID returns the workspace Connection this pipeline's stored
@@ -556,7 +610,7 @@ func googleSheetsConnectionID(sourceType string, raw json.RawMessage) (string, b
 // themselves it is safe to hand back to the editor — and necessary there: an
 // editor that cannot show which account is attached cannot offer to detach it.
 func (p *Pipeline) ConnectionID() string {
-	id, _ := googleSheetsConnectionID(p.SourceType, p.SourceCredentials)
+	id, _ := googleConnectionRef(p.SourceType, p.SourceCredentials)
 	return id
 }
 
@@ -566,57 +620,81 @@ func (p *Pipeline) HasCredentials() bool {
 	return !isEmptyJSON(p.SourceCredentials)
 }
 
-// googleSheetsStoredOAuthCreds builds the persisted credential JSON for an
-// OAuth grant: the refresh token, the granting email (for display), and the
-// customer OAuth client that minted it.
-func googleSheetsStoredOAuthCreds(refreshToken, email, clientID string) (json.RawMessage, error) {
-	return json.Marshal(googleSheetsCreds{OAuth: &googleSheetsOAuth{
+// storedGoogleOAuthCreds builds the persisted credential JSON for an OAuth
+// grant: the refresh token, the granting email (for display), and the customer
+// OAuth client that minted it — merged into whatever envelope the pipeline
+// already carries.
+func storedGoogleOAuthCreds(sourceType string, raw json.RawMessage, refreshToken, email, clientID string) (json.RawMessage, error) {
+	return storeGoogleOAuth(sourceType, raw, &googleOAuthCredential{
 		RefreshToken: refreshToken,
 		Email:        email,
 		ClientID:     clientID,
-	}})
+	})
 }
 
-// googleSheetsOAuthClientID returns the OAuth client id a stored google_sheets
-// credential was minted with, and whether the credential is an OAuth one at all.
+// googleOAuthClientID returns the OAuth client id a stored Google credential
+// was minted with, and whether the credential is an OAuth one at all.
 // An OAuth credential with no recorded id is reported as ("", true): that is a
 // legacy row from when one shared app served every customer, and it is exactly
 // as stale as one naming a different app.
-func googleSheetsOAuthClientID(sourceType string, raw json.RawMessage) (string, bool) {
-	if sourceType != "google_sheets" || isEmptyJSON(raw) {
+func googleOAuthClientID(sourceType string, raw json.RawMessage) (string, bool) {
+	o, ok := parseGoogleOAuth(sourceType, raw)
+	if !ok || o.RefreshToken == "" {
 		return "", false
 	}
-	var creds googleSheetsCreds
-	if err := json.Unmarshal(raw, &creds); err != nil || creds.OAuth == nil || creds.OAuth.RefreshToken == "" {
-		return "", false
-	}
-	return creds.OAuth.ClientID, true
+	return o.ClientID, true
 }
 
-// injectGoogleSheetsOAuthClient adds the customer's OAuth client_id/client_secret
-// to a stored google_sheets OAuth credential so the worker can refresh access
-// tokens. It returns (raw, false) unchanged when the pipeline is not an OAuth
-// google_sheets credential, or when the stored credential was minted by a
-// different client than the one passed — refreshing that token would fail at
-// Google, and shipping a credential that pairs one app's secret with another
-// app's refresh token only turns a clear "reconnect" into an opaque run failure.
-func injectGoogleSheetsOAuthClient(sourceType string, raw json.RawMessage, clientID, clientSecret string) (json.RawMessage, bool) {
-	if sourceType != "google_sheets" || isEmptyJSON(raw) {
+// serveGoogleOAuthCredential renders a credential for the worker on the paths
+// where the customer's client pair could not be added. For google_sheets the
+// stored shape already is the served shape, so it passes through untouched.
+// A duckdb credential must still be flattened into the secret the gdrive
+// extension reads: handing the worker an oauth member it knows nothing about
+// would fail the run as "no credentials at all" rather than as the Google
+// auth failure it actually is.
+func serveGoogleOAuthCredential(sourceType string, raw json.RawMessage) json.RawMessage {
+	if sourceType != "duckdb" {
+		return raw
+	}
+	o, ok := parseGoogleOAuth(sourceType, raw)
+	if !ok {
+		return raw
+	}
+	rendered, err := renderDuckDBGoogleSecret(raw, o)
+	if err != nil {
+		return raw
+	}
+	return rendered
+}
+
+// injectGoogleOAuthClient renders a stored Google OAuth credential into the
+// shape its worker actually consumes, adding the customer's
+// client_id/client_secret so access tokens can be refreshed.
+//
+// It returns (raw, false) unchanged when the pipeline carries no OAuth
+// credential, or when the stored credential was minted by a different client
+// than the one passed — refreshing that token would fail at Google, and
+// shipping a credential that pairs one app's secret with another app's refresh
+// token only turns a clear "reconnect" into an opaque run failure.
+func injectGoogleOAuthClient(sourceType string, raw json.RawMessage, clientID, clientSecret string) (json.RawMessage, bool) {
+	o, ok := parseGoogleOAuth(sourceType, raw)
+	if !ok || o.RefreshToken == "" || o.ClientID != clientID {
 		return raw, false
 	}
-	var creds googleSheetsCreds
-	if err := json.Unmarshal(raw, &creds); err != nil || creds.OAuth == nil || creds.OAuth.RefreshToken == "" {
-		return raw, false
+	o.ClientSecret = clientSecret
+	var (
+		rendered json.RawMessage
+		err      error
+	)
+	if sourceType == "duckdb" {
+		rendered, err = renderDuckDBGoogleSecret(raw, o)
+	} else {
+		rendered, err = storeGoogleOAuth(sourceType, raw, o)
 	}
-	if creds.OAuth.ClientID != clientID {
-		return raw, false
-	}
-	creds.OAuth.ClientSecret = clientSecret
-	injected, err := json.Marshal(creds)
 	if err != nil {
 		return raw, false
 	}
-	return injected, true
+	return rendered, true
 }
 
 // validateFileUploadCreds rejects any credentials: the platform injects the
@@ -735,8 +813,56 @@ func duckdbSupportedExtensions() []string {
 // way instead of through an ATTACH string. Both are maps of plain strings —
 // they travel whole into the pipeline's .age file, never into the config.
 type duckdbCreds struct {
-	AttachParams map[string]string `json:"attach_params"`
-	Secret       map[string]string `json:"secret"`
+	AttachParams map[string]string `json:"attach_params,omitempty"`
+	Secret       map[string]string `json:"secret,omitempty"`
+	// OAuth is the gdrive extension's credential, in the same shape and under
+	// the same member name google_sheets uses — so one workspace Connection
+	// serves both, and the customer connects Google once rather than pasting
+	// a refresh token into a JSON editor. It never reaches the worker: the
+	// serve and render paths flatten it into Secret (see
+	// renderDuckDBGoogleSecret), because the extension authenticates through
+	// a DuckDB secret, not through a member the worker would have to know.
+	OAuth *googleOAuthCredential `json:"oauth,omitempty"`
+}
+
+// duckdbGDriveExtension is the one extension in the allowlist that
+// authenticates with a Google delegated-user credential.
+const duckdbGDriveExtension = "gdrive"
+
+// duckdbGDriveSecretKeys are the DuckDB secret keys the gdrive extension reads.
+// Cross-repo contract with the worker's duckdb_source.py; changing a name here
+// silently breaks every Drive pipeline.
+const (
+	duckdbGDriveProviderKey     = "PROVIDER"
+	duckdbGDriveProviderConfig  = "config"
+	duckdbGDriveRefreshTokenKey = "REFRESH_TOKEN"
+	duckdbGDriveClientIDKey     = "CLIENT_ID"
+	duckdbGDriveClientSecretKey = "CLIENT_SECRET"
+)
+
+// renderDuckDBGoogleSecret flattens a resolved Google OAuth credential into the
+// DuckDB secret the gdrive extension reads, dropping the oauth member so the
+// worker sees exactly the hand-written shape it already supports. Sibling
+// fields survive: a Drive pipeline may carry its own extra secret keys, and
+// wiping them here would be a silent credential loss.
+func renderDuckDBGoogleSecret(raw json.RawMessage, o *googleOAuthCredential) (json.RawMessage, error) {
+	var creds duckdbCreds
+	if !isEmptyJSON(raw) {
+		if err := json.Unmarshal(raw, &creds); err != nil {
+			return nil, fmt.Errorf("parse duckdb credentials: %w", err)
+		}
+	}
+	creds.OAuth = nil
+	if creds.Secret == nil {
+		creds.Secret = map[string]string{}
+	}
+	if creds.Secret[duckdbGDriveProviderKey] == "" {
+		creds.Secret[duckdbGDriveProviderKey] = duckdbGDriveProviderConfig
+	}
+	creds.Secret[duckdbGDriveRefreshTokenKey] = o.RefreshToken
+	creds.Secret[duckdbGDriveClientIDKey] = o.ClientID
+	creds.Secret[duckdbGDriveClientSecretKey] = o.ClientSecret
+	return json.Marshal(creds)
 }
 
 func validateDuckDBCreds(config, raw json.RawMessage) error {
@@ -754,14 +880,21 @@ func validateDuckDBCreds(config, raw json.RawMessage) error {
 		}
 	}
 
-	// Every placeholder in the attach template must be fillable, or the
-	// first run fails on the box instead of the save failing here. A
-	// credential-less source (a public MySQL endpoint) is a template with
-	// no placeholders and no credentials — valid.
+	if err := validateDuckDBAttachParams(cfg.Attach, creds.AttachParams); err != nil {
+		return err
+	}
+	return validateDuckDBOAuth(cfg.Extension, creds.OAuth)
+}
+
+// validateDuckDBAttachParams checks that every placeholder in the attach
+// template is fillable, or the first run fails on the box instead of the save
+// failing here. A credential-less source (a public MySQL endpoint) is a
+// template with no placeholders and no credentials — valid.
+func validateDuckDBAttachParams(attach string, params map[string]string) error {
 	var missing []string
 	seen := map[string]bool{}
-	for _, m := range duckdbPlaceholderRe.FindAllStringSubmatch(cfg.Attach, -1) {
-		if _, ok := creds.AttachParams[m[1]]; !ok && !seen[m[1]] {
+	for _, m := range duckdbPlaceholderRe.FindAllStringSubmatch(attach, -1) {
+		if _, ok := params[m[1]]; !ok && !seen[m[1]] {
 			seen[m[1]] = true
 			missing = append(missing, m[1])
 		}
@@ -770,4 +903,18 @@ func validateDuckDBCreds(config, raw json.RawMessage) error {
 		return &ErrInvalidSourceCredentials{Field: "attach_params", Msg: fmt.Sprintf("duckdb: attach_params missing %s required by the attach template", strings.Join(missing, ", "))}
 	}
 	return nil
+}
+
+// validateDuckDBOAuth refuses a Google OAuth credential on any extension but
+// gdrive. That refusal is load-bearing: it is what lets the serve and render
+// paths read "a duckdb credential with an oauth member" as "gdrive" without
+// carrying source_config around to check.
+func validateDuckDBOAuth(extension string, o *googleOAuthCredential) error {
+	if o == nil {
+		return nil
+	}
+	if extension != duckdbGDriveExtension {
+		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: fmt.Sprintf("duckdb: oauth credentials are only used by the %q extension, not %q; use secret instead", duckdbGDriveExtension, extension)}
+	}
+	return validateGoogleOAuth("duckdb", o)
 }

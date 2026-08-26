@@ -288,3 +288,103 @@ func TestGetEnabledPipelines_NoCustomerOAuthClient(t *testing.T) {
 		t.Fatalf("credential changed with no client configured: %s", got[0].SourceCredentials)
 	}
 }
+
+// TestCreatePipeline_SwapsGrantForDuckDBGDrive: the same one-shot Google
+// sign-in that feeds a google_sheets pipeline feeds a Drive one, because both
+// carry the credential under the same "oauth" member. Without this the user
+// would have to paste a refresh token into the duckdb JSON editor by hand.
+func TestCreatePipeline_SwapsGrantForDuckDBGDrive(t *testing.T) {
+	var stored *workspace.Pipeline
+
+	svc := &workspace.PipelineService{
+		Workspaces: acmeCustomers(),
+		Pipelines: &mockPipelineRepo{
+			createPipelineFn: func(_ context.Context, p *workspace.Pipeline) error {
+				stored = p
+				return nil
+			},
+		},
+		GoogleOAuth: &mockGrantStore{
+			consumeFn: func(_ context.Context, grantID, customerSlug string) (*workspace.GoogleOAuthGrant, error) {
+				return &workspace.GoogleOAuthGrant{
+					GrantID:      grantID,
+					CustomerSlug: customerSlug,
+					RefreshToken: "1//refresh",
+					Email:        "user@gmail.com",
+					ClientID:     "acme-cid",
+					ExpiresAt:    time.Now().Add(time.Minute),
+				}, nil
+			},
+		},
+		Logger: slog.Default(),
+	}
+
+	p := &workspace.Pipeline{
+		Name:              "drive invoices",
+		SourceType:        "duckdb",
+		SourceConfig:      json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+		SourceCredentials: json.RawMessage(`{"oauth":{"grant_id":"g-1"}}`),
+		DatasetName:       "ds",
+	}
+	if _, err := svc.CreatePipeline(context.Background(), "user-1", p); err != nil {
+		t.Fatalf("CreatePipeline() error = %v", err)
+	}
+	got := string(stored.SourceCredentials)
+	if !strings.Contains(got, `"refresh_token":"1//refresh"`) || !strings.Contains(got, `"client_id":"acme-cid"`) {
+		t.Fatalf("stored creds missing refresh token / minting client: %s", got)
+	}
+	if strings.Contains(got, "grant_id") {
+		t.Fatalf("stored creds still carry grant_id: %s", got)
+	}
+	// Still the storage shape, not the worker shape: flattening into the
+	// DuckDB secret happens at serve/render, so the token is never written to
+	// the column in the form the worker consumes.
+	if strings.Contains(got, "REFRESH_TOKEN") {
+		t.Fatalf("credential flattened at save time, not at serve time: %s", got)
+	}
+}
+
+// TestGetEnabledPipelines_ServesGDriveSecret is the end of the Drive path: the
+// worker must receive the DuckDB secret the gdrive extension reads, with the
+// customer's own client pair filled in and no oauth member left behind.
+func TestGetEnabledPipelines_ServesGDriveSecret(t *testing.T) {
+	svc := &workspace.PipelineService{
+		Workspaces: acmeCustomers(),
+		Pipelines: &mockPipelineRepo{
+			getEnabledPipelinesFn: func(context.Context, string) ([]workspace.Pipeline, error) {
+				return []workspace.Pipeline{{
+					ID:                "p1",
+					Name:              "drive invoices",
+					SourceType:        "duckdb",
+					CustomerSlug:      "acme",
+					SourceConfig:      json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT 1"}]}`),
+					SourceCredentials: json.RawMessage(`{"oauth":{"refresh_token":"1//refresh","email":"user@gmail.com","client_id":"acme-cid"}}`),
+				}}, nil
+			},
+		},
+		OAuthClients: acmeOAuthClient("acme-cid", "acme-secret"),
+		Logger:       slog.Default(),
+	}
+
+	out, err := svc.GetEnabledPipelines(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("GetEnabledPipelines() error = %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d pipelines, want 1", len(out))
+	}
+	got := string(out[0].SourceCredentials)
+	for _, want := range []string{
+		`"PROVIDER":"config"`,
+		`"REFRESH_TOKEN":"1//refresh"`,
+		`"CLIENT_ID":"acme-cid"`,
+		`"CLIENT_SECRET":"acme-secret"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("served credential missing %s: %s", want, got)
+		}
+	}
+	if strings.Contains(got, `"oauth"`) {
+		t.Errorf("the oauth member must not reach the worker: %s", got)
+	}
+}

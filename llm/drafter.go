@@ -49,7 +49,7 @@ var pipelineDraftSchema = map[string]any{
 			"enum": []string{"rest_api", "sql_database", "filesystem", "google_sheets", "file_upload", "duckdb", "unsupported"},
 			"description": "The dlt source type best matching the user's description, or \"unsupported\" when the request needs a capability the platform does not have. " +
 				"Use file_upload when the user has a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) to drop in — not filesystem, which is for an existing S3/GCS bucket the user already owns. " +
-				"Use duckdb for anything a supported DuckDB extension can read: the MySQL, SQL Server, and Firebird database engines, PDF documents, and HTML/XML pages; sql_database stays the PostgreSQL path.",
+				"Use duckdb for anything a supported DuckDB extension can read: the MySQL, SQL Server, and Firebird database engines, PDF documents, HTML/XML pages, and files kept in Google Drive — the gdrive extension exposes Drive as gdrive:// paths the other readers accept, so a PDF in the user's Drive is duckdb. A Google Sheet the user points at directly stays google_sheets; sql_database stays the PostgreSQL path.",
 		},
 		"dataset_name": map[string]any{
 			"type":        "string",
@@ -75,7 +75,7 @@ var pipelineDraftSchema = map[string]any{
 				"sql_database may set tables or tables_config. " +
 				"filesystem requires bucket_url and may set file_glob. " +
 				"google_sheets requires spreadsheet_url_or_id and may set range_names (sheet tabs, A1 ranges, or named ranges; omit to load every tab). " +
-				"duckdb requires extension (one of mysql, mssql, pdf, webbed, gdrive, httpfs), tables (an array of {name, query?, cursor_column?, primary_key?}; query defaults to reading the source table of the same name). Database extensions (mysql, mssql) also need attach — an ATTACH template where every secret part is a {placeholder} the user fills in the credentials step, e.g. \"host={host} user={user} password={password} database=shop\". Reader extensions (pdf, webbed, httpfs) take no attach; give each table an explicit query over the reader function, e.g. \"SELECT page, text FROM read_pdf('https://example.com/report.pdf')\" or \"SELECT * FROM read_html('https://example.com/prices')\". The gdrive extension registers a gdrive:// filesystem for the same readers — files in Google Drive by path, e.g. \"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')\" or a native Google Sheet via \"SELECT * FROM read_csv('gdrive://Finance/Budget')\"; its credentials go in secret as {\"PROVIDER\": \"config\", \"REFRESH_TOKEN\": …, \"CLIENT_ID\": …, \"CLIENT_SECRET\": …} (the customer's own Google OAuth client, as in google_sheets). " +
+				"duckdb requires extension (one of mysql, mssql, pdf, webbed, gdrive, httpfs), tables (an array of {name, query?, cursor_column?, primary_key?}; query defaults to reading the source table of the same name). Database extensions (mysql, mssql) also need attach — an ATTACH template where every secret part is a {placeholder} the user fills in the credentials step, e.g. \"host={host} user={user} password={password} database=shop\". Reader extensions (pdf, webbed, httpfs) take no attach; give each table an explicit query over the reader function, e.g. \"SELECT page, text FROM read_pdf('https://example.com/report.pdf')\" or \"SELECT * FROM read_html('https://example.com/prices')\". The gdrive extension registers a gdrive:// filesystem for the same readers — files in Google Drive by path, e.g. \"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')\" or a native Google Sheet via \"SELECT * FROM read_csv('gdrive://Finance/Budget')\"; its credentials come from connecting Google under Integrations — the pipeline then references that connection and the server fills the token in — so notes should tell the user to connect Google rather than to paste anything. " +
 				"NEVER include credentials, API keys, passwords, connection strings, or access keys here — in a duckdb attach template that is what the {placeholder}s are for.",
 		},
 		"notes": map[string]any{
@@ -97,9 +97,11 @@ The platform's COMPLETE ingestion capabilities — there are no others:
 - sql_database: PostgreSQL ONLY (this path has no other database driver).
 - duckdb: read through a DuckDB extension — the MySQL, SQL Server (mssql), and Firebird
   database engines; PDF documents (pdf: read_pdf, read_pdf_tables); HTML/XML web pages
-  (webbed: read_html, read_xml, html_extract_tables); and remote csv/parquet/json files by
-  URL (httpfs). No other database engine yet — not MariaDB, Oracle, MongoDB, SQLite,
-  Snowflake, BigQuery, or anything else.
+  (webbed: read_html, read_xml, html_extract_tables); remote csv/parquet/json files by
+  URL (httpfs); and files kept in Google Drive (gdrive: a gdrive:// filesystem the readers
+  above accept, so Drive documents are read in place — e.g.
+  read_pdf('gdrive://Reports/monthly.pdf')). No other database engine yet — not MariaDB,
+  Oracle, MongoDB, SQLite, Snowflake, BigQuery, or anything else.
 - filesystem: files in an S3-compatible object-storage bucket the user already owns.
 - google_sheets: a Google Sheets spreadsheet.
 - file_upload: a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) the user drops in.
@@ -115,6 +117,10 @@ Rules:
 - With source_type "unsupported", set unsupported_reason and notes, and leave every other
   string field an empty string ("" — including source_config and write_disposition).
 - Prefer file_upload when the user has a local file (CSV/TSV/Parquet/JSONL) or a spreadsheet export to drop in; it needs no source_config or credentials (the files are uploaded in the next step). Use filesystem only for a bucket the user already owns.
+- Documents are duckdb, not file_upload: file_upload takes tabular files only, so PDFs and
+  web pages go to duckdb with the pdf or webbed extension. When those documents live in the
+  user's Google Drive, use duckdb with extension "gdrive" and read them at their gdrive://
+  path — a Google Sheet the user names directly is still google_sheets.
 - Fill source_config with the NON-SENSITIVE configuration only.
 - NEVER invent or include credentials of any kind (API keys, tokens, passwords, connection strings, access keys). The user supplies those separately.
 - Prefer sensible defaults: write_disposition "append" unless the user implies upserts or a full refresh.

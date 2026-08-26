@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/fairtier/workspace-api/workspace"
 )
 
 // fakeCaller returns canned JSON and records the request; guards the
@@ -153,5 +155,52 @@ func TestDrafter_BadJSON(t *testing.T) {
 	d := NewDrafter(&fakeCaller{raw: `not json`}, nil)
 	if _, err := d.DraftTransformation(context.Background(), "p", ""); err == nil || !strings.Contains(err.Error(), "parse model output") {
 		t.Fatalf("want parse error, got %v", err)
+	}
+}
+
+// TestDrafter_DraftPipelineGDrivePDF pins the cross-layer agreement for the
+// Drive-PDF path: what the drafter is told to emit for a gdrive source must be
+// what ValidateSourceConfig accepts. The prompt naming the capability and the
+// validator's allowlist live in different packages and have drifted before.
+func TestDrafter_DraftPipelineGDrivePDF(t *testing.T) {
+	caller := &fakeCaller{raw: `{
+		"name": "Drive invoices", "source_type": "duckdb", "dataset_name": "invoices",
+		"schedule": "0 6 * * *", "write_disposition": "append", "merge_strategy": "",
+		"source_config": "{\"extension\":\"gdrive\",\"tables\":[{\"name\":\"invoices\",\"query\":\"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')\"}]}",
+		"notes": "Connect Google to supply the refresh token."
+	}`}
+	d := NewDrafter(caller, nil)
+
+	draft, err := d.DraftPipeline(context.Background(), "load the monthly invoice PDFs from my Google Drive Reports folder")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if draft.SourceType != "duckdb" {
+		t.Fatalf("source type = %q, want duckdb", draft.SourceType)
+	}
+	if err := workspace.ValidateSourceConfig(draft.SourceType, draft.SourceConfig); err != nil {
+		t.Fatalf("drafted gdrive config rejected by the validator: %v", err)
+	}
+}
+
+// TestPipelineDraftPromptAdvertisesGDrive guards the gap that made the Drive
+// path unreachable: the schema's source_config description named gdrive, but
+// the capability list the model reads to CHOOSE a source type did not, so a
+// Drive request could be routed to unsupported or file_upload instead.
+func TestPipelineDraftPromptAdvertisesGDrive(t *testing.T) {
+	sourceType, ok := pipelineDraftSchema["properties"].(map[string]any)["source_type"].(map[string]any)
+	if !ok {
+		t.Fatal("source_type property missing from pipelineDraftSchema")
+	}
+	for _, tc := range []struct{ name, text string }{
+		{"system prompt capability list", pipelineDraftSystemPrompt},
+		{"source_type description", sourceType["description"].(string)},
+	} {
+		if !strings.Contains(tc.text, "gdrive") {
+			t.Errorf("%s does not mention the gdrive extension", tc.name)
+		}
+		if !strings.Contains(tc.text, "Google Drive") {
+			t.Errorf("%s does not mention Google Drive", tc.name)
+		}
 	}
 }

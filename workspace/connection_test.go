@@ -223,7 +223,7 @@ func TestDeleteConnectionRefusesWhileReferenced(t *testing.T) {
 	conn := googleConn("c1", "acme", "rt-1", "alice@corp.com", "client-1")
 	_ = store.CreateConnection(context.Background(), conn)
 
-	referencing, _ := json.Marshal(googleSheetsCreds{OAuth: &googleSheetsOAuth{ConnectionID: "c1"}})
+	referencing, _ := json.Marshal(googleSheetsCreds{OAuth: &googleOAuthCredential{ConnectionID: "c1"}})
 	svc := &ConnectionService{
 		Connections:         store,
 		PipelineCredentials: fakeCredentialReader{"p1": referencing},
@@ -246,34 +246,113 @@ func TestDeleteConnectionRefusesWhileReferenced(t *testing.T) {
 // pipeline referencing a connection must serve/render EXACTLY the bytes an
 // embedded credential does, so the worker never learns which storage form a
 // pipeline uses and needs no new reader branch.
+//
+// Table-driven over every Google-backed source type. Parity is required
+// WITHIN a type, not across types: google_sheets serves the oauth member the
+// dlt source reads, duckdb/gdrive serves the flattened DuckDB secret the
+// extension reads, and those are different shapes by design.
 func TestResolverConnectionParity(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		sourceType  string
+		embedded    func() json.RawMessage
+		referencing func() json.RawMessage
+		wantSecret  string
+	}{
+		{
+			name:       "google_sheets",
+			sourceType: "google_sheets",
+			embedded: func() json.RawMessage {
+				raw, _ := storedGoogleOAuthCreds("google_sheets", nil, "rt-1", "alice@corp.com", "client-1")
+				return raw
+			},
+			referencing: func() json.RawMessage {
+				raw, _ := json.Marshal(googleSheetsCreds{OAuth: &googleOAuthCredential{ConnectionID: "c1"}})
+				return raw
+			},
+			wantSecret: `"client_secret":"sec-1"`,
+		},
+		{
+			name:       "duckdb gdrive",
+			sourceType: "duckdb",
+			embedded: func() json.RawMessage {
+				raw, _ := storedGoogleOAuthCreds("duckdb", nil, "rt-1", "alice@corp.com", "client-1")
+				return raw
+			},
+			referencing: func() json.RawMessage {
+				raw, _ := json.Marshal(duckdbCreds{OAuth: &googleOAuthCredential{ConnectionID: "c1"}})
+				return raw
+			},
+			// The gdrive extension authenticates through a DuckDB secret, so
+			// the served form is the flattened one, not the oauth member.
+			wantSecret: `"CLIENT_SECRET":"sec-1"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := &fakeConnectionStore{}
+			_ = store.CreateConnection(ctx, googleConn("c1", "acme", "rt-1", "alice@corp.com", "client-1"))
+			clients := &fakeOAuthClients{client: &OAuthClient{ClientID: "client-1", ClientSecret: "sec-1"}}
+
+			inject := func(raw json.RawMessage) json.RawMessage {
+				r := newOAuthClientResolver(clients, store, "acme")
+				p := &Pipeline{SourceType: tc.sourceType, SourceCredentials: raw}
+				out, ok := r.inject(ctx, p)
+				if !ok {
+					t.Fatalf("inject returned false for %s", raw)
+				}
+				return out
+			}
+
+			got, want := inject(tc.referencing()), inject(tc.embedded())
+			if string(got) != string(want) {
+				t.Fatalf("connection-referencing render differs from embedded:\n got: %s\nwant: %s", got, want)
+			}
+			if !strings.Contains(string(got), tc.wantSecret) {
+				t.Fatalf("client pair not injected: %s", got)
+			}
+			if strings.Contains(string(got), "connection_id") {
+				t.Fatalf("connection_id must not leak into the worker-facing shape: %s", got)
+			}
+		})
+	}
+}
+
+// TestResolverPreservesSiblingCredentials guards the merge in
+// resolveConnectionCredential. A duckdb credential carries attach_params and
+// its own secret keys beside the oauth member; rebuilding the envelope from
+// the connection alone would serve the pipeline with the rest of its
+// credentials silently stripped, and the run would fail somewhere unrelated.
+func TestResolverPreservesSiblingCredentials(t *testing.T) {
 	ctx := context.Background()
 	store := &fakeConnectionStore{}
 	_ = store.CreateConnection(ctx, googleConn("c1", "acme", "rt-1", "alice@corp.com", "client-1"))
 	clients := &fakeOAuthClients{client: &OAuthClient{ClientID: "client-1", ClientSecret: "sec-1"}}
 
-	embedded, _ := googleSheetsStoredOAuthCreds("rt-1", "alice@corp.com", "client-1")
-	referencing, _ := json.Marshal(googleSheetsCreds{OAuth: &googleSheetsOAuth{ConnectionID: "c1"}})
-
-	inject := func(raw json.RawMessage) json.RawMessage {
-		r := newOAuthClientResolver(clients, store, "acme")
-		p := &Pipeline{SourceType: "google_sheets", SourceCredentials: raw}
-		out, ok := r.inject(ctx, p)
-		if !ok {
-			t.Fatalf("inject returned false for %s", raw)
+	referencing, _ := json.Marshal(duckdbCreds{
+		AttachParams: map[string]string{"host": "db.example.com"},
+		Secret:       map[string]string{"EXTRA": "keep-me"},
+		OAuth:        &googleOAuthCredential{ConnectionID: "c1"},
+	})
+	r := newOAuthClientResolver(clients, store, "acme")
+	p := &Pipeline{SourceType: "duckdb", SourceCredentials: referencing}
+	out, ok := r.inject(ctx, p)
+	if !ok {
+		t.Fatal("expected the resolved credential to be returned")
+	}
+	for _, want := range []string{
+		`"host":"db.example.com"`,
+		`"EXTRA":"keep-me"`,
+		`"REFRESH_TOKEN":"rt-1"`,
+		`"CLIENT_SECRET":"sec-1"`,
+		`"PROVIDER":"config"`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("served credential lost %s: %s", want, out)
 		}
-		return out
 	}
-
-	got, want := inject(referencing), inject(embedded)
-	if string(got) != string(want) {
-		t.Fatalf("connection-referencing render differs from embedded:\n got: %s\nwant: %s", got, want)
-	}
-	if !strings.Contains(string(got), `"client_secret":"sec-1"`) {
-		t.Fatalf("client pair not injected: %s", got)
-	}
-	if strings.Contains(string(got), "connection_id") {
-		t.Fatalf("connection_id must not leak into the worker-facing shape: %s", got)
+	if strings.Contains(string(out), `"oauth"`) {
+		t.Errorf("the oauth member must not reach the worker: %s", out)
 	}
 }
 
@@ -285,7 +364,7 @@ func TestResolverConnectionWithoutClientPair(t *testing.T) {
 	store := &fakeConnectionStore{}
 	_ = store.CreateConnection(ctx, googleConn("c1", "acme", "rt-1", "alice@corp.com", "client-1"))
 
-	referencing, _ := json.Marshal(googleSheetsCreds{OAuth: &googleSheetsOAuth{ConnectionID: "c1"}})
+	referencing, _ := json.Marshal(googleSheetsCreds{OAuth: &googleOAuthCredential{ConnectionID: "c1"}})
 	r := newOAuthClientResolver(&fakeOAuthClients{}, store, "acme")
 	p := &Pipeline{SourceType: "google_sheets", SourceCredentials: referencing}
 	out, ok := r.inject(ctx, p)

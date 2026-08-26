@@ -192,6 +192,26 @@ func TestValidateSourceConfig(t *testing.T) {
 			raw:        json.RawMessage(`{"extension":"pdf","tables":[{"name":"pages","query":"SELECT page, text FROM read_pdf('https://example.com/report.pdf')"}]}`),
 		},
 		{
+			// The Drive-backed reader shape: gdrive registers a gdrive://
+			// filesystem, so the reader function is still pdf's.
+			name:       "duckdb reader extension query-only (gdrive pdf)",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+		},
+		{
+			name:       "duckdb gdrive native sheet via read_csv",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"gdrive","tables":[{"name":"budget","query":"SELECT * FROM read_csv('gdrive://Finance/Budget')"}]}`),
+		},
+		{
+			name:       "duckdb gdrive table needs query without attach",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "query is required when no attach template is set",
+		},
+		{
 			name:       "duckdb valid query-only with incremental",
 			sourceType: "duckdb",
 			raw:        json.RawMessage(`{"extension":"mysql","tables":[{"name":"orders","query":"SELECT * FROM src.orders","cursor_column":"updated_at","primary_key":"id"}]}`),
@@ -382,6 +402,49 @@ func TestValidateSourceCredentials(t *testing.T) {
 			sourceType: "duckdb",
 			config:     json.RawMessage(`{"extension":"mysql","tables":[{"name":"t","query":"SELECT 1"}]}`),
 			raw:        json.RawMessage(`{"secret":{"token":"abc"}}`),
+		},
+		{
+			// The shape the gdrive extension expects, pinned here because it
+			// is a cross-repo contract with the worker's duckdb_source.py.
+			name:       "duckdb gdrive creds oauth secret",
+			sourceType: "duckdb",
+			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+			raw:        json.RawMessage(`{"secret":{"PROVIDER":"config","REFRESH_TOKEN":"rt","CLIENT_ID":"cid","CLIENT_SECRET":"cs"}}`),
+		},
+		{
+			// The Connection path: one Google sign-in, referenced rather than
+			// pasted. Resolved to the flattened secret at serve/render time.
+			name:       "duckdb gdrive creds connection reference",
+			sourceType: "duckdb",
+			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+			raw:        json.RawMessage(`{"oauth":{"connection_id":"c1"}}`),
+		},
+		{
+			name:       "duckdb gdrive creds grant reference",
+			sourceType: "duckdb",
+			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+			raw:        json.RawMessage(`{"oauth":{"grant_id":"g1"}}`),
+		},
+		{
+			// This refusal is load-bearing: the serve and render paths read
+			// "duckdb credential with an oauth member" as "gdrive" without
+			// consulting source_config, which only holds if saves enforce it.
+			name:         "duckdb oauth rejected on non-gdrive extension",
+			sourceType:   "duckdb",
+			config:       json.RawMessage(`{"extension":"mysql","attach":"database=shop","tables":[{"name":"orders"}]}`),
+			raw:          json.RawMessage(`{"oauth":{"connection_id":"c1"}}`),
+			wantErr:      true,
+			wantCredsErr: true,
+			errSubstr:    `only used by the "gdrive" extension`,
+		},
+		{
+			name:         "duckdb gdrive oauth needs a reference or token",
+			sourceType:   "duckdb",
+			config:       json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT 1"}]}`),
+			raw:          json.RawMessage(`{"oauth":{}}`),
+			wantErr:      true,
+			wantCredsErr: true,
+			errSubstr:    "oauth requires grant_id",
 		},
 		{
 			name:         "sql_database creds oracle rejected",

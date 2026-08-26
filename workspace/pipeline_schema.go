@@ -644,7 +644,17 @@ const SourceTypeDuckDB = "duckdb"
 // an extension to the worker's baked set means extending this list and the
 // pipeline-draft capability prompt (llm/drafter.go) in the same change.
 var duckdbExtensionAllowlist = map[string]bool{
-	"mysql": true,
+	// Databases (ATTACH-style).
+	"mysql":    true,
+	"mssql":    true,
+	"firebird": true,
+	// Document/file readers (table-function style; no attach template —
+	// read_pdf/read_pdf_tables, read_html/read_xml/html_extract_tables).
+	"pdf":    true,
+	"webbed": true,
+	// Baked as an autoload helper for http(s) reads; allowlisted too so a
+	// query-only pipeline may read remote csv/parquet/json directly.
+	"httpfs": true,
 }
 
 // duckdbIdentRe matches the names the worker interpolates into SQL (the

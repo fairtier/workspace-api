@@ -187,6 +187,11 @@ func TestValidateSourceConfig(t *testing.T) {
 			raw:        json.RawMessage(`{"extension":"mysql","attach":"host={host} user={user} password={password} database=shop","tables":[{"name":"orders"}]}`),
 		},
 		{
+			name:       "duckdb reader extension query-only (pdf)",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"pdf","tables":[{"name":"pages","query":"SELECT page, text FROM read_pdf('https://example.com/report.pdf')"}]}`),
+		},
+		{
 			name:       "duckdb valid query-only with incremental",
 			sourceType: "duckdb",
 			raw:        json.RawMessage(`{"extension":"mysql","tables":[{"name":"orders","query":"SELECT * FROM src.orders","cursor_column":"updated_at","primary_key":"id"}]}`),

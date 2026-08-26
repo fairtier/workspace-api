@@ -651,6 +651,10 @@ var duckdbExtensionAllowlist = map[string]bool{
 	// read_pdf/read_pdf_tables, read_html/read_xml/html_extract_tables).
 	"pdf":    true,
 	"webbed": true,
+	// Google Drive virtual filesystem (gdrive:// paths for the readers,
+	// native Sheets via read_csv). Query-only; auth via secret
+	// {PROVIDER: config, REFRESH_TOKEN, CLIENT_ID, CLIENT_SECRET}.
+	"gdrive": true,
 	// Baked as an autoload helper for http(s) reads; allowlisted too so a
 	// query-only pipeline may read remote csv/parquet/json directly.
 	"httpfs": true,

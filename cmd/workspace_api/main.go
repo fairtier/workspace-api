@@ -353,7 +353,7 @@ func run() error {
 		return err
 	}
 	internalMux := http.NewServeMux()
-	internalServers, serviceNames := buildInternalServers(pipelineSvc, transformationSvc, googleOAuth, repo, logger)
+	internalServers, serviceNames := buildInternalServers(pipelineSvc, transformationSvc)
 	server.RegisterWorkspaceInternal(internalMux, internalServers, internalOpts)
 	internalMux.Handle(grpchealth.NewHandler(grpchealth.NewStaticChecker(serviceNames...)))
 	internalMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(serviceNames...)))
@@ -643,37 +643,21 @@ func buildInternalOpts(_ context.Context, logger *slog.Logger, ws *workspace.Wor
 }
 
 // buildInternalServers bundles the worker-facing handlers plus the health/
-// reflection service-name list that matches what is actually mounted. When the
-// box serves its own Google consent flow it also mounts a minter-only
-// BoxCredentialService: FetchBoxSecrets renders the DuckFlight reconcile SQL
-// from this database's connections (a cut-over box's connections live HERE, so
-// central cannot mint them), and the box-secrets sync loop queries this
-// endpoint beside central's and merges, local winning. Deposits stay
-// central-only — every store is nil and answers Unimplemented.
+// reflection service-name list that matches what is actually mounted. The box
+// binary never mounts BoxCredentialService: deposits are central-side, and the
+// minter-only FetchBoxSecrets it once served (DuckFlight reconcile SQL from
+// this database's connections) was retired with query-time federation
+// (2026-08-27) — the box-secrets sync loop tolerates the endpoint's absence,
+// exactly as before 0.16.0.
 func buildInternalServers(
 	pipelineSvc *workspace.PipelineService,
 	transformationSvc *workspace.TransformationService,
-	googleOAuth *oauthgoogle.Client,
-	repo *postgres.Repository,
-	logger *slog.Logger,
 ) (server.WorkspaceInternalServers, []string) {
 	servers := server.WorkspaceInternalServers{
 		Pipelines:       server.NewInternalPipelineServer(pipelineSvc),
 		Transformations: server.NewInternalTransformationServer(transformationSvc),
 	}
-	if googleOAuth == nil {
-		return servers, workspaceServiceNamesWithoutBoxCredential()
-	}
-	servers.BoxCredentials = &server.BoxCredentialServer{
-		Minter: &workspace.ConnectionBoxSecrets{
-			Connections:  repo,
-			OAuthClients: repo,
-			Google:       googleOAuth,
-			Logger:       logger,
-		},
-		Logger: logger,
-	}
-	return servers, server.WorkspaceServiceNames
+	return servers, workspaceServiceNamesWithoutBoxCredential()
 }
 
 // buildGoogleOAuth wires the box-local "Sign in with Google" consent flow from

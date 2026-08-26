@@ -230,53 +230,11 @@ func TestFetchBoxSecrets_StoreFailureIsInternal(t *testing.T) {
 	}
 }
 
-type fakeMinter struct {
-	minted  map[string]string
-	err     error
-	gotSlug string
-}
-
-func (f *fakeMinter) MintBoxSecrets(_ context.Context, slug string) (map[string]string, error) {
-	f.gotSlug = slug
-	return f.minted, f.err
-}
-
-func TestFetchBoxSecrets_MinterOnlyDeploymentServesMintedKeys(t *testing.T) {
-	// The box binary's shape: no static store at all, only the connection
-	// minter. Before minter-only serving this answered Unimplemented, which
-	// read as "this deployment cannot serve secrets" to the box sync loop.
-	minter := &fakeMinter{minted: map[string]string{"duckflight_reconcile_sql": "LOAD x;"}}
-	srv := &BoxCredentialServer{Minter: minter}
-
-	resp, err := srv.FetchBoxSecrets(withBoxCaller("dlt-worker", "acme"), fetchSecrets())
-	if err != nil {
-		t.Fatalf("FetchBoxSecrets: %v", err)
-	}
-	if minter.gotSlug != "acme" {
-		t.Errorf("minter slug = %q, want acme (issuer-bound, never request-named)", minter.gotSlug)
-	}
-	if got := resp.Msg.Secrets["duckflight_reconcile_sql"]; got != "LOAD x;" {
-		t.Errorf("secrets = %v, want the minted key", resp.Msg.Secrets)
-	}
-}
-
-func TestFetchBoxSecrets_MinterOnlyHonorsTheKeyFilter(t *testing.T) {
-	minter := &fakeMinter{minted: map[string]string{"duckflight_reconcile_sql": "LOAD x;"}}
-	srv := &BoxCredentialServer{Minter: minter}
-
-	resp, err := srv.FetchBoxSecrets(withBoxCaller("dlt-worker", "acme"), fetchSecrets("something_else"))
-	if err != nil {
-		t.Fatalf("FetchBoxSecrets: %v", err)
-	}
-	if len(resp.Msg.Secrets) != 0 {
-		t.Errorf("secrets = %v, want none (minted key was not requested)", resp.Msg.Secrets)
-	}
-}
-
 func TestDeposits_UnwiredStoresAreUnimplemented(t *testing.T) {
-	// The minter-only server mounts the whole service, so the deposit RPC
-	// becomes reachable on a box; a nil store must refuse cleanly, not panic.
-	srv := &BoxCredentialServer{Minter: &fakeMinter{}}
+	// A partially wired server mounts the whole service, so the deposit RPC
+	// is reachable wherever secrets are; a nil store must refuse cleanly,
+	// not panic.
+	srv := &BoxCredentialServer{Secrets: &fakeSecretStore{}}
 	caller := withBoxCaller("dlt-worker", "acme")
 
 	if _, err := srv.DepositFederationClient(caller, depositFederation("cid", "csecret")); connect.CodeOf(err) != connect.CodeUnimplemented {

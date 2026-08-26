@@ -23,10 +23,13 @@ const ConnectionTypeGoogle = "google"
 // Connection is a workspace-level authorization to an external system —
 // the customer connects Google ONCE, and everything that needs that access
 // consumes the connection: DLT pipelines reference it by id instead of
-// embedding a refresh token, and the box query engine receives short-lived
-// access tokens minted from it (query-time federation). Deleting the
-// connection kills every consumer, which is what a customer expects
-// "disconnect Google" to mean.
+// embedding a refresh token. Deleting the connection kills every consumer,
+// which is what a customer expects "disconnect Google" to mean.
+//
+// (The box query engine was a second consumer once — short-lived access
+// tokens minted into DuckFlight's reconcile SQL, the query-time-federation
+// PoC — retired 2026-08-27: nobody queried sheets live, pipelines are the
+// product. See docs/plans/query-time-federation.md in the platform repo.)
 //
 // Credentials is plaintext in the domain; the postgres layer encrypts it at
 // rest (same Encryptor as pipeline credentials). For Google it is a
@@ -78,14 +81,6 @@ type ConnectionStore interface {
 	// DeleteConnection removes the connection. Deleting one that does not
 	// exist is not an error.
 	DeleteConnection(ctx context.Context, customerSlug, id string) error
-}
-
-// GoogleTokenMinter mints a short-lived Google access token from a stored
-// refresh token under the customer's own OAuth client. Port interface —
-// oauthgoogle provides the implementation, wired in cmd (workspace may not
-// import oauthgoogle).
-type GoogleTokenMinter interface {
-	AccessToken(ctx context.Context, refreshToken, clientID, clientSecret string) (token string, ttl time.Duration, err error)
 }
 
 // Connection error sentinels. Beside the others in errors.go in spirit; kept

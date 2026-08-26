@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -22,26 +21,14 @@ import (
 //
 // The three repo-writing deposits (git token, snapshot bearer, age public
 // key) were retired with split Phase 3E; see the proto for why.
-//
-// The box binary registers this too, but minter-only: the federation deposit
-// is a central-side mechanism (a nil store answers Unimplemented), while
-// FetchBoxSecrets is how a CUT-OVER box's own sync loop obtains locally-minted
-// secrets — its connections live in the box database, which central cannot
-// mint from.
 type BoxCredentialServer struct {
 	Federation workspace.BoxFederationClientStore
 	// Secrets serves FetchBoxSecrets, the one direction that runs
-	// central→box. Optional: a deployment with neither it nor a Minter answers
-	// Unimplemented rather than an empty map, so a box can tell "central has
-	// no secrets for me" from "central cannot serve them yet".
+	// central→box. Optional: a deployment without it answers Unimplemented
+	// rather than an empty map, so a box can tell "central has no secrets
+	// for me" from "central cannot serve them yet".
 	Secrets workspace.BoxSecretStore
-	// Minter, when set, contributes dynamically-minted secrets to
-	// FetchBoxSecrets on top of the static box_secrets rows (minted wins on a
-	// key collision). Short-lived credentials — the DuckFlight reconcile SQL
-	// with its ~1h Google access token — are minted fresh per fetch, so the
-	// */15 sync loop always delivers a token with most of its life ahead.
-	Minter workspace.BoxSecretMinter
-	Logger *slog.Logger
+	Logger  *slog.Logger
 }
 
 // DepositFederationClient upserts the OAuth client the calling box minted for
@@ -96,7 +83,7 @@ func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.
 	if caller.Slug == "" {
 		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("secret fetch requires a box service token"))
 	}
-	if s.Secrets == nil && s.Minter == nil {
+	if s.Secrets == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("this deployment does not serve box secrets"))
 	}
 
@@ -107,17 +94,10 @@ func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.
 		}
 	}
 
-	// Minter-only deployments (the box binary) have no static rows to read.
-	var secrets map[string]string
-	if s.Secrets != nil {
-		var err error
-		secrets, err = s.Secrets.GetBoxSecrets(ctx, caller.Slug, keys)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
-		}
+	secrets, err := s.Secrets.GetBoxSecrets(ctx, caller.Slug, keys)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-
-	secrets = s.mergeMintedSecrets(ctx, caller.Slug, keys, secrets)
 
 	if s.Logger != nil {
 		// Key names and a count only. The values are the payload; none of
@@ -126,41 +106,4 @@ func (s *BoxCredentialServer) FetchBoxSecrets(ctx context.Context, req *connect.
 		s.Logger.Info("box secrets fetched", "slug", caller.Slug, "requested", len(keys), "returned", len(secrets))
 	}
 	return connect.NewResponse(&boxcredentialv1.FetchBoxSecretsResponse{Secrets: secrets}), nil
-}
-
-// mergeMintedSecrets overlays the Minter's dynamically-minted keys onto the
-// static box_secrets rows (minted wins). A minting failure is logged and
-// surfaces as omission, never as an error: failing the whole fetch over one
-// unmintable key would starve the unrelated static secrets in the same sync
-// cycle.
-func (s *BoxCredentialServer) mergeMintedSecrets(ctx context.Context, slug string, keys []string, secrets map[string]string) map[string]string {
-	if s.Minter == nil {
-		return secrets
-	}
-	minted, err := s.Minter.MintBoxSecrets(ctx, slug)
-	if err != nil && s.Logger != nil {
-		s.Logger.WarnContext(ctx, "mint box secrets", "slug", slug, "err", err)
-	}
-	if len(minted) == 0 {
-		return secrets
-	}
-	if secrets == nil {
-		secrets = make(map[string]string, len(minted))
-	}
-	for k, v := range minted {
-		if wantKey(keys, k) {
-			secrets[k] = v
-		}
-	}
-	return secrets
-}
-
-// wantKey applies FetchBoxSecrets' key filter to a minted key: an empty
-// request means "everything", otherwise only requested keys are returned —
-// the same contract the static store honors.
-func wantKey(keys []string, k string) bool {
-	if len(keys) == 0 {
-		return true
-	}
-	return slices.Contains(keys, k)
 }

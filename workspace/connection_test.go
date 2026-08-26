@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
 
 type fakeConnectionStore struct {
@@ -89,15 +88,6 @@ func (f *fakeOAuthClients) GetOAuthClient(context.Context, string, string) (*OAu
 	return f.client, nil
 }
 func (f *fakeOAuthClients) DeleteOAuthClient(context.Context, string, string) error { return nil }
-
-type fakeMinter struct {
-	token string
-	err   error
-}
-
-func (f *fakeMinter) AccessToken(context.Context, string, string, string) (string, time.Duration, error) {
-	return f.token, time.Hour, f.err
-}
 
 func googleConn(id, slug, refreshToken, email, clientID string) *Connection {
 	creds, _ := json.Marshal(googleConnectionCredentials{
@@ -249,64 +239,6 @@ func TestDeleteConnectionRefusesWhileReferenced(t *testing.T) {
 	}
 	if _, err := store.GetConnection(context.Background(), "acme", "c1"); !errors.Is(err, ErrConnectionNotFound) {
 		t.Fatal("connection should be gone")
-	}
-}
-
-func TestMintBoxSecretsRendersReconcileSQL(t *testing.T) {
-	store := &fakeConnectionStore{}
-	// Token with an embedded quote proves the SQL-literal escaping.
-	_ = store.CreateConnection(context.Background(), googleConn("c1", "acme", "rt-1", "alice@corp.com", "client-1"))
-	m := &ConnectionBoxSecrets{
-		Connections:  store,
-		OAuthClients: &fakeOAuthClients{client: &OAuthClient{ClientID: "client-1", ClientSecret: "sec"}},
-		Google:       &fakeMinter{token: "ya29.tok'en"},
-	}
-
-	secrets, err := m.MintBoxSecrets(context.Background(), "acme")
-	if err != nil {
-		t.Fatalf("MintBoxSecrets: %v", err)
-	}
-	sql, ok := secrets[BoxSecretKeyDuckFlightReconcileSQL]
-	if !ok {
-		t.Fatalf("missing %s key: %v", BoxSecretKeyDuckFlightReconcileSQL, secrets)
-	}
-	if !strings.Contains(sql, "LOAD gsheets;") {
-		t.Fatalf("reconcile SQL missing LOAD: %q", sql)
-	}
-	if !strings.Contains(sql, "TOKEN 'ya29.tok''en'") {
-		t.Fatalf("token not escaped as a SQL literal: %q", sql)
-	}
-}
-
-func TestMintBoxSecretsOmitsOnProblems(t *testing.T) {
-	ctx := context.Background()
-
-	// No connections → no key.
-	m := &ConnectionBoxSecrets{
-		Connections:  &fakeConnectionStore{},
-		OAuthClients: &fakeOAuthClients{client: &OAuthClient{ClientID: "client-1", ClientSecret: "sec"}},
-		Google:       &fakeMinter{token: "tok"},
-	}
-	if secrets, err := m.MintBoxSecrets(ctx, "acme"); err != nil || len(secrets) != 0 {
-		t.Fatalf("expected no secrets, got %v err %v", secrets, err)
-	}
-
-	// Client-id mismatch (customer swapped their Google app) → omit.
-	store := &fakeConnectionStore{}
-	_ = store.CreateConnection(ctx, googleConn("c1", "acme", "rt-1", "a@b.c", "old-client"))
-	m.Connections = store
-	if secrets, err := m.MintBoxSecrets(ctx, "acme"); err != nil || len(secrets) != 0 {
-		t.Fatalf("expected omission on stale client, got %v err %v", secrets, err)
-	}
-
-	// Mint failure → omit, no error (the sync loop's SKIP semantics keep the
-	// previous still-valid Secret on the box).
-	store2 := &fakeConnectionStore{}
-	_ = store2.CreateConnection(ctx, googleConn("c2", "acme", "rt-1", "a@b.c", "client-1"))
-	m.Connections = store2
-	m.Google = &fakeMinter{err: errors.New("google says no")}
-	if secrets, err := m.MintBoxSecrets(ctx, "acme"); err != nil || len(secrets) != 0 {
-		t.Fatalf("expected omission on mint failure, got %v err %v", secrets, err)
 	}
 }
 

@@ -645,9 +645,8 @@ const SourceTypeDuckDB = "duckdb"
 // pipeline-draft capability prompt (llm/drafter.go) in the same change.
 var duckdbExtensionAllowlist = map[string]bool{
 	// Databases (ATTACH-style).
-	"mysql":    true,
-	"mssql":    true,
-	"firebird": true,
+	"mysql": true,
+	"mssql": true,
 	// Document/file readers (table-function style; no attach template —
 	// read_pdf/read_pdf_tables, read_html/read_xml/html_extract_tables).
 	"pdf":    true,

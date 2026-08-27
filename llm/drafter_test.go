@@ -158,20 +158,28 @@ func TestDrafter_BadJSON(t *testing.T) {
 	}
 }
 
-// TestDrafter_DraftPipelineGDrivePDF pins the cross-layer agreement for the
-// Drive-PDF path: what the drafter is told to emit for a gdrive source must be
-// what ValidateSourceConfig accepts. The prompt naming the capability and the
+// TestDrafter_DraftPipelineGDrive pins the cross-layer agreement for the Drive
+// path: what the drafter is told to emit for a gdrive source must be what
+// ValidateSourceConfig accepts. The prompt naming the capability and the
 // validator's allowlist live in different packages and have drifted before.
-func TestDrafter_DraftPipelineGDrivePDF(t *testing.T) {
+//
+// The example is a csv/Sheet rather than the PDF it used to be, and that is the
+// whole point: the worker LOADs exactly one extension per pipeline, and DuckDB
+// does not autoload a *community* extension's functions (verified against
+// duckdb 1.5.5: read_pdf with only gdrive loaded is "Table Function with name
+// read_pdf does not exist"). So a gdrive source reaches the built-in readers
+// and nothing else, and a drafted read_pdf('gdrive://…') would pass every
+// validator here and then fail on the box.
+func TestDrafter_DraftPipelineGDrive(t *testing.T) {
 	caller := &fakeCaller{raw: `{
 		"name": "Drive invoices", "source_type": "duckdb", "dataset_name": "invoices",
 		"schedule": "0 6 * * *", "write_disposition": "append", "merge_strategy": "",
-		"source_config": "{\"extension\":\"gdrive\",\"tables\":[{\"name\":\"invoices\",\"query\":\"SELECT page, text FROM read_pdf('gdrive://id:1a2b3c')\"}]}",
+		"source_config": "{\"extension\":\"gdrive\",\"tables\":[{\"name\":\"invoices\",\"query\":\"SELECT * FROM read_csv('gdrive://id:1a2b3c')\"}]}",
 		"notes": "Connect Google to supply the refresh token."
 	}`}
 	d := NewDrafter(caller, nil)
 
-	draft, err := d.DraftPipeline(context.Background(), "load the monthly invoice PDFs from my Google Drive Reports folder")
+	draft, err := d.DraftPipeline(context.Background(), "load the monthly invoice exports from my Google Drive")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -201,6 +209,16 @@ func TestPipelineDraftPromptAdvertisesGDrive(t *testing.T) {
 		}
 		if !strings.Contains(tc.text, "Google Drive") {
 			t.Errorf("%s does not mention Google Drive", tc.name)
+		}
+		// ...and must say what a Drive source can actually read. One
+		// extension is loaded per pipeline and community-extension functions
+		// do not autoload, so read_pdf over gdrive:// is a draft that
+		// validates, saves, and then fails on the box.
+		if !strings.Contains(tc.text, "read_csv") {
+			t.Errorf("%s does not name the built-in reader a gdrive source must use", tc.name)
+		}
+		if strings.Contains(tc.text, "read_pdf('gdrive://") {
+			t.Errorf("%s still teaches read_pdf over gdrive://, which the worker cannot run", tc.name)
 		}
 	}
 }

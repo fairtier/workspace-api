@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/fairtier/workspace-api/core"
@@ -815,11 +816,29 @@ func validateDuckDBTables(attach string, tables []duckdbTable) error {
 	return nil
 }
 
+// DuckDBExtensions is the allowlist, sorted, for anyone outside this package
+// who needs to know what a `duckdb` pipeline may name.
+//
+// It exists so the Console can render one tile per *system the customer has*
+// (MySQL, a PDF, a Drive file) without keeping a copy of this list: the box
+// serves it in the bootstrap document, the Console renders the intersection of
+// what it has a form for and what this deployment accepts. That keeps the
+// three-way parity rule (worker baked set ↔ this allowlist ↔ the drafter
+// prompt) at three legs instead of four, and makes a box ahead of its Console
+// a non-event rather than a save-time refusal.
+func DuckDBExtensions() []string {
+	return duckdbSupportedExtensions()
+}
+
+// duckdbSupportedExtensions lists the allowlist in a stable order — it is also
+// what the save-time refusal names, and an error message that reshuffles itself
+// between two runs of the same request reads like two different errors.
 func duckdbSupportedExtensions() []string {
 	names := make([]string, 0, len(duckdbExtensionAllowlist))
 	for name := range duckdbExtensionAllowlist {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 

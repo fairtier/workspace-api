@@ -77,6 +77,19 @@ type WorkspaceCapabilities struct {
 	DuckFlight bool `json:"duckflight"`
 	FileDrop   bool `json:"filedrop"`
 
+	// DuckDBExtensions is the set of DuckDB extensions a `duckdb` pipeline may
+	// name here (workspace.DuckDBExtensions). Public by construction: it is the
+	// list the save-time refusal already prints back to anyone who guesses
+	// wrong, and it names software, not the customer.
+	//
+	// It travels so the Console can offer one tile per system the customer has
+	// — MySQL, a PDF, a file in Drive — instead of one "DuckDB engine" tile
+	// over a JSON box, without holding a second copy of the allowlist that
+	// would have to be released in lockstep with this one. A Console reading a
+	// box too old to send it falls back to offering everything it has a form
+	// for, which is what it did before this field existed.
+	DuckDBExtensions []string `json:"duckdb_extensions,omitempty"`
+
 	// GoogleOAuth reports only that this deployment CAN run the flow — it has a
 	// redirect URL and a state key. Whether the customer has connected their own
 	// Google app is a separate, mutable fact and deliberately not here: this
@@ -118,6 +131,9 @@ func BootstrapFromWorkspace(ws *workspace.Workspace, consoleClientID string, fil
 			DuckFlight:   ws.DuckFlightURL != "",
 			FileDrop:     fileDrop,
 			GoogleOAuth:  googleOAuth,
+			// A build-time constant, not a workspace fact: the allowlist is
+			// this binary's, so it is read here rather than passed in.
+			DuckDBExtensions: workspace.DuckDBExtensions(),
 		},
 	}
 }

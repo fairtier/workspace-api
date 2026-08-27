@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -108,6 +109,25 @@ func TestBootstrapCapabilities(t *testing.T) {
 	if doc.Capabilities.Cube || doc.Capabilities.DuckFlight ||
 		doc.Capabilities.FileDrop || doc.Capabilities.GoogleOAuth {
 		t.Errorf("unconfigured surfaces must not be advertised: %+v", doc.Capabilities)
+	}
+}
+
+// The Console renders one source tile per DuckDB extension this box accepts,
+// so the document has to carry the allowlist itself — not a boolean saying
+// duckdb pipelines exist. A Console offering a tile the box would refuse on
+// save is exactly the four-legged parity problem this field prevents.
+func TestBootstrapCarriesDuckDBAllowlist(t *testing.T) {
+	doc := BootstrapFromWorkspace(&workspace.Workspace{Slug: "acme"}, "console", false, false)
+
+	got := doc.Capabilities.DuckDBExtensions
+	if !reflect.DeepEqual(got, workspace.DuckDBExtensions()) {
+		t.Errorf("duckdb_extensions = %v, want the allowlist %v", got, workspace.DuckDBExtensions())
+	}
+	if len(got) == 0 {
+		t.Fatal("the allowlist is empty; the Console would offer no duckdb tile at all")
+	}
+	if !sort.StringsAreSorted(got) {
+		t.Errorf("duckdb_extensions = %v, want a stable (sorted) order", got)
 	}
 }
 

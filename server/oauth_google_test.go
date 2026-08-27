@@ -269,6 +269,55 @@ func TestGoogleOAuthCallback_Denied(t *testing.T) {
 	}
 }
 
+// A refusal must name the fix, and each refusal a different one. Every one of
+// these used to read "access to your Google account was not granted", which
+// sends a customer whose app is missing a scope looking for a Deny button they
+// never pressed.
+func TestGoogleOAuthCallback_RefusalNamesTheFix(t *testing.T) {
+	client := testOAuthClient(t, "")
+	h := GoogleOAuthCallbackHandler(slog.Default(), client, &stubGrantStore{}, testCustomerClients(), "https://console.fairtier.com")
+
+	page := func(query string) string {
+		rec := httptest.NewRecorder()
+		h(rec, httptest.NewRequest(http.MethodGet, "/oauth/google/callback?state=x&"+query, nil))
+		return rec.Body.String()
+	}
+
+	if got := page("error=invalid_scope"); !strings.Contains(got, "consent screen") {
+		t.Fatalf("a missing scope must point at the consent screen: %s", got)
+	}
+	if got := page("error=admin_policy_enforced"); !strings.Contains(got, "administrator") {
+		t.Fatalf("an admin block must say so: %s", got)
+	}
+	if got := page("error=access_denied"); !strings.Contains(got, "not granted") {
+		t.Fatalf("a real denial keeps its own wording: %s", got)
+	}
+}
+
+// The error branch runs BEFORE the state is verified — an error carries no
+// usable state — so anyone can point a browser at this handler with any text
+// they like. The page may therefore never render Google's description, and may
+// echo the code only when it looks like one.
+func TestGoogleOAuthCallback_RefusalEchoesNothingArbitrary(t *testing.T) {
+	client := testOAuthClient(t, "")
+	h := GoogleOAuthCallbackHandler(slog.Default(), client, &stubGrantStore{}, testCustomerClients(), "https://console.fairtier.com")
+
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodGet,
+		"/oauth/google/callback?error=Call+555+to+restore+your+account"+
+			"&error_description=Your+FairTier+account+is+suspended", nil))
+
+	body := rec.Body.String()
+	for _, leaked := range []string{"555", "suspended", "restore"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("the page rendered attacker-supplied text (%q): %s", leaked, body)
+		}
+	}
+	if !strings.Contains(body, "Google refused the sign-in") {
+		t.Fatalf("expected the generic refusal: %s", body)
+	}
+}
+
 func TestGoogleOAuthCallback_BadState(t *testing.T) {
 	client := testOAuthClient(t, "")
 	store := &stubGrantStore{}

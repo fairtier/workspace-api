@@ -109,7 +109,12 @@ func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client,
 
 		// The user may have denied consent, or Google reported an error.
 		if e := r.URL.Query().Get("error"); e != "" {
-			renderOAuthResult(w, consoleOrigin, oauthResult{Error: "access to your Google account was not granted"})
+			// Google's own description is the only place the actual cause is
+			// written, and it never reached anyone: not the customer (who got
+			// one generic sentence) and not the operator (nothing was logged).
+			logger.WarnContext(ctx, "oauth: consent refused by google",
+				"err", e, "description", r.URL.Query().Get("error_description"))
+			renderOAuthResult(w, consoleOrigin, oauthResult{Error: googleConsentError(e)})
 			return
 		}
 
@@ -168,6 +173,55 @@ func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client,
 
 		renderOAuthResult(w, consoleOrigin, oauthResult{GrantID: grant.GrantID, Email: grant.Email})
 	}
+}
+
+// googleConsentError turns Google's refusal code into a sentence naming the
+// fix. Every branch is OUR words keyed by Google's code — the description Google
+// sends alongside is logged, never echoed: this handler runs before the state is
+// verified (an error carries no usable state), so anyone can point a browser at
+// it with any text they like, and a page of ours that renders a stranger's
+// sentence is a phishing surface. The code is echoed only when it looks like an
+// OAuth error code.
+//
+// Before this, every one of these was "access to your Google account was not
+// granted" — which reads as "you clicked Deny" and sends a customer whose app is
+// missing a scope looking in precisely the wrong place.
+func googleConsentError(code string) string {
+	switch code {
+	case "access_denied":
+		return "access to your Google account was not granted"
+	case "invalid_scope":
+		return "your Google app does not allow one of the permissions this source needs. " +
+			"Add the scopes listed under Integrations to that app's OAuth consent screen in " +
+			"Google Cloud, then sign in again"
+	case "admin_policy_enforced":
+		return "your Google Workspace administrator blocks this app from the access this " +
+			"source needs. They have to allow it before the sign-in can complete"
+	case "org_internal":
+		return "this Google app is limited to its own organisation, and the account you " +
+			"signed in with is outside it"
+	case "disallowed_useragent", "invalid_request", "invalid_client", "unauthorized_client":
+		return "Google refused the sign-in request (" + safeErrorCode(code) + "). " +
+			"Check the client id, secret and redirect URI under Integrations"
+	}
+	if c := safeErrorCode(code); c != "" {
+		return "Google refused the sign-in (" + c + ")"
+	}
+	return "Google refused the sign-in"
+}
+
+// safeErrorCode passes a value through only when it looks like an OAuth error
+// code, so nothing arbitrary reaches the page.
+func safeErrorCode(code string) string {
+	if len(code) == 0 || len(code) > 40 {
+		return ""
+	}
+	for _, r := range code {
+		if (r < 'a' || r > 'z') && r != '_' {
+			return ""
+		}
+	}
+	return code
 }
 
 func writeOAuthError(w http.ResponseWriter, status int, msg string) {

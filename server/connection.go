@@ -131,6 +131,7 @@ func connectionProto(c *workspace.Connection) *connectionv1.Connection {
 		Name:   c.Name,
 		Status: c.Status,
 		Email:  c.GoogleEmail(),
+		Scopes: c.GoogleScopes(),
 	}
 	if !c.CreatedAt.IsZero() {
 		out.CreatedAt = c.CreatedAt.UTC().Format(time.RFC3339)

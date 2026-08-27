@@ -21,7 +21,12 @@ type GoogleOAuthGrant struct {
 	// ClientID is the customer's OAuth app that minted this token. A refresh
 	// token can only be refreshed by the client it was issued to, so it is
 	// carried through to the stored pipeline credential and compared there.
-	ClientID  string
+	ClientID string
+	// Scopes is what Google granted this token, as returned by the token
+	// endpoint — not what was asked for (the consent screen lets the user
+	// untick one). Carried through to the connection so the Console can tell a
+	// Sheets-only account from a Drive-capable one.
+	Scopes    []string
 	CreatedAt time.Time
 	ExpiresAt time.Time
 }

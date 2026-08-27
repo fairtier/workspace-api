@@ -251,19 +251,11 @@ func (s *PipelineService) commitOrCompensate(ctx context.Context, callerID core.
 // under the same "oauth" member, so one Google sign-in feeds either.
 func (s *PipelineService) swapGoogleOAuthGrant(ctx context.Context, customerSlug string, p *Pipeline) error {
 	// A connection reference is stored as-is (resolved at serve/render time so
-	// it follows the connection's lifecycle), but it must exist and belong to
-	// this tenant — otherwise the save would only defer the failure to a run.
+	// it follows the connection's lifecycle), but it must exist, belong to
+	// this tenant, and carry the authorization this source actually needs —
+	// otherwise the save would only defer the failure to a run.
 	if connID, ok := googleConnectionRef(p.SourceType, p.SourceCredentials); ok {
-		if s.Connections == nil {
-			return &ErrInvalidSourceCredentials{Field: "oauth", Msg: p.SourceType + ": connections are not enabled on this server"}
-		}
-		if _, err := s.Connections.GetConnection(ctx, customerSlug, connID); err != nil {
-			if errors.Is(err, ErrConnectionNotFound) {
-				return &ErrInvalidSourceCredentials{Field: "oauth", Msg: p.SourceType + ": the referenced Google connection does not exist; reconnect in Integrations"}
-			}
-			return fmt.Errorf("resolve connection: %w", err)
-		}
-		return nil
+		return s.checkGoogleConnection(ctx, customerSlug, p.SourceType, connID)
 	}
 
 	grantID, ok := googleGrantID(p.SourceType, p.SourceCredentials)
@@ -285,6 +277,32 @@ func (s *PipelineService) swapGoogleOAuthGrant(ctx context.Context, customerSlug
 		return fmt.Errorf("build oauth credentials: %w", err)
 	}
 	p.SourceCredentials = stored
+	return nil
+}
+
+// checkGoogleConnection validates a connection-referencing credential at save
+// time: the connection exists, belongs to this tenant, and was granted the
+// scope this source type needs.
+//
+// The scope check is the difference between a message on the screen the user
+// is looking at and a 403 inside a scheduled run on the box, hours later, in a
+// log they have no reason to open. It is also why the connection records what
+// its consent granted at all — see Connection.HasGoogleScope for why an
+// unrecorded scope set has to read as "unknown" and pass.
+func (s *PipelineService) checkGoogleConnection(ctx context.Context, customerSlug, sourceType, connID string) error {
+	if s.Connections == nil {
+		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: sourceType + ": connections are not enabled on this server"}
+	}
+	conn, err := s.Connections.GetConnection(ctx, customerSlug, connID)
+	if err != nil {
+		if errors.Is(err, ErrConnectionNotFound) {
+			return &ErrInvalidSourceCredentials{Field: "oauth", Msg: sourceType + ": the referenced Google connection does not exist; reconnect in Integrations"}
+		}
+		return fmt.Errorf("resolve connection: %w", err)
+	}
+	if scope := googleScopeRequired(sourceType); scope != "" && !conn.HasGoogleScope(scope) {
+		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: sourceType + ": this Google account is not authorized for Google Drive; reconnect it and allow Drive access"}
+	}
 	return nil
 }
 

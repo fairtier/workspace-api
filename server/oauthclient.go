@@ -136,7 +136,10 @@ func (s *OAuthClientServer) resolve(ctx context.Context, provider string) (slug,
 // back out to a browser.
 func (s *OAuthClientServer) state(ctx context.Context, slug, provider string) (*oauthclientv1.GetOAuthClientResponse, error) {
 	out := &oauthclientv1.GetOAuthClientResponse{
-		RequiredScopes: []string{oauthgoogle.SheetsReadonlyScope},
+		// Every scope this server can ask for, not the subset one pipeline
+		// needs: Google refuses a consent requesting a scope the customer's
+		// own app does not declare, so the setup page has to list them all.
+		RequiredScopes: oauthgoogle.AllScopes(),
 		FlowAvailable:  s.OAuth != nil,
 	}
 	if s.OAuth != nil {

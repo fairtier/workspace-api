@@ -55,7 +55,7 @@ func TestVerifyStateRejectsTampered(t *testing.T) {
 
 func TestAuthURL(t *testing.T) {
 	c := newTestClient(t)
-	raw := c.AuthURL("the-state", "cid")
+	raw := c.AuthURL("the-state", "cid", CapabilityNone)
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -69,6 +69,47 @@ func TestAuthURL(t *testing.T) {
 	}
 	if !strings.Contains(q.Get("scope"), SheetsReadonlyScope) {
 		t.Fatalf("scope missing sheets readonly: %q", q.Get("scope"))
+	}
+	// The base consent must NOT ask for Drive: a Sheets pipeline putting a
+	// Drive permission in front of the user is the thing the capability
+	// parameter exists to prevent.
+	if strings.Contains(q.Get("scope"), DriveFileScope) {
+		t.Fatalf("base consent asked for Drive: %q", q.Get("scope"))
+	}
+}
+
+func TestAuthURLDriveCapability(t *testing.T) {
+	c := newTestClient(t)
+	u, err := url.Parse(c.AuthURL("the-state", "cid", CapabilityDrive))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	scope := u.Query().Get("scope")
+	if !strings.Contains(scope, DriveFileScope) {
+		t.Fatalf("drive capability did not ask for %s: %q", DriveFileScope, scope)
+	}
+	// Additive, never a swap: the Drive consent still carries the base scopes,
+	// so one connection can serve a Sheets pipeline and a Drive pipeline both.
+	if !strings.Contains(scope, SheetsReadonlyScope) {
+		t.Fatalf("drive capability dropped the base scopes: %q", scope)
+	}
+	// drive.file is the whole point — drive.readonly is restricted and would
+	// put the customer in front of Google's security assessment.
+	if strings.Contains(scope, "auth/drive.readonly") {
+		t.Fatalf("asked for a restricted Drive scope: %q", scope)
+	}
+}
+
+func TestParseCapability(t *testing.T) {
+	for _, in := range []string{"", "drive"} {
+		if _, err := ParseCapability(in); err != nil {
+			t.Fatalf("ParseCapability(%q): %v", in, err)
+		}
+	}
+	// An unknown capability is refused rather than downgraded: silently
+	// dropping it would mint a token that fails on the box hours later.
+	if _, err := ParseCapability("dropbox"); err == nil {
+		t.Fatal("expected an unknown capability to be refused")
 	}
 }
 
@@ -94,6 +135,7 @@ func TestExchange(t *testing.T) {
 			"access_token":  "at",
 			"refresh_token": "1//refresh",
 			"id_token":      idToken,
+			"scope":         "openid email " + SheetsReadonlyScope,
 		})
 	}))
 	defer srv.Close()
@@ -110,6 +152,10 @@ func TestExchange(t *testing.T) {
 	}
 	if res.Email != "user@gmail.com" {
 		t.Fatalf("email: %q", res.Email)
+	}
+	// What Google GRANTED, which is not necessarily what was asked for.
+	if len(res.Scopes) != 3 || res.Scopes[2] != SheetsReadonlyScope {
+		t.Fatalf("granted scopes: %v", res.Scopes)
 	}
 }
 

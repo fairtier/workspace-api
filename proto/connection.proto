@@ -49,6 +49,14 @@ message Connection {
   string email = 5;
   // RFC 3339 creation timestamp.
   string created_at = 6;
+  // What the granting consent authorized (google connections). Empty means
+  // "not recorded" — a connection made before scopes were tracked — never
+  // "nothing granted", so a client must not refuse on an empty list.
+  //
+  // It is here so the connection picker can say "this account is connected for
+  // Sheets only, reconnect to add Drive" at the moment of choosing, instead of
+  // letting a scheduled run on the box discover it in a 403.
+  repeated string scopes = 7;
 }
 
 message ListConnectionsRequest {}

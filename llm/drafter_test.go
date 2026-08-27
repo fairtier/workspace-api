@@ -166,7 +166,7 @@ func TestDrafter_DraftPipelineGDrivePDF(t *testing.T) {
 	caller := &fakeCaller{raw: `{
 		"name": "Drive invoices", "source_type": "duckdb", "dataset_name": "invoices",
 		"schedule": "0 6 * * *", "write_disposition": "append", "merge_strategy": "",
-		"source_config": "{\"extension\":\"gdrive\",\"tables\":[{\"name\":\"invoices\",\"query\":\"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')\"}]}",
+		"source_config": "{\"extension\":\"gdrive\",\"tables\":[{\"name\":\"invoices\",\"query\":\"SELECT page, text FROM read_pdf('gdrive://id:1a2b3c')\"}]}",
 		"notes": "Connect Google to supply the refresh token."
 	}`}
 	d := NewDrafter(caller, nil)

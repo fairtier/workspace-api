@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -56,6 +57,15 @@ type googleConnectionCredentials struct {
 	// ClientID records which of the customer's OAuth apps minted the token;
 	// a refresh token is only refreshable by the client it was issued to.
 	ClientID string `json:"client_id,omitempty"`
+	// Scopes is what the granting consent actually authorized. It lives with
+	// the credential rather than in the non-secret Config because it describes
+	// *this token*: the two are minted together and a reconnect replaces both
+	// at once, which a separate column would have to remember to do.
+	//
+	// Empty means "not recorded" — every connection created before scopes were
+	// tracked — and must read as unknown, never as "no scopes". Refusing those
+	// would break working pipelines to state something we never measured.
+	Scopes []string `json:"scopes,omitempty"`
 }
 
 // ConnectionStore persists workspace connections. All reads and writes are
@@ -211,6 +221,7 @@ func (s *ConnectionService) redeemGoogleGrant(ctx context.Context, customerSlug,
 		RefreshToken: grant.RefreshToken,
 		Email:        grant.Email,
 		ClientID:     grant.ClientID,
+		Scopes:       grant.Scopes,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build connection credentials: %w", err)
@@ -292,6 +303,34 @@ func (c *Connection) GoogleEmail() string {
 		return ""
 	}
 	return gc.Email
+}
+
+// GoogleScopes reads the scopes the connection's consent granted. Empty when
+// absent (an older connection, minted before scopes were recorded) or not a
+// google connection — "unknown", never "none". See HasGoogleScope.
+func (c *Connection) GoogleScopes() []string {
+	if c.Type != ConnectionTypeGoogle || isEmptyJSON(c.Credentials) {
+		return nil
+	}
+	var gc googleConnectionCredentials
+	if err := json.Unmarshal(c.Credentials, &gc); err != nil {
+		return nil
+	}
+	return gc.Scopes
+}
+
+// HasGoogleScope reports whether the connection is known NOT to carry a scope.
+// It answers true both when the scope is present and when nothing was recorded,
+// because the only safe reading of an unrecorded scope set is "we do not know":
+// a connection granted before scopes were tracked may well carry it, and a save
+// that refused on that basis would break a working pipeline over a measurement
+// we never took.
+func (c *Connection) HasGoogleScope(scope string) bool {
+	scopes := c.GoogleScopes()
+	if len(scopes) == 0 {
+		return true
+	}
+	return slices.Contains(scopes, scope)
 }
 
 // googleCredentials parses a google connection's credential JSON.

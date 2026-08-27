@@ -34,7 +34,15 @@ type Connection struct {
 	// Granting account email, for display (google connections).
 	Email string `protobuf:"bytes,5,opt,name=email,proto3" json:"email,omitempty"`
 	// RFC 3339 creation timestamp.
-	CreatedAt     string `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CreatedAt string `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// What the granting consent authorized (google connections). Empty means
+	// "not recorded" — a connection made before scopes were tracked — never
+	// "nothing granted", so a client must not refuse on an empty list.
+	//
+	// It is here so the connection picker can say "this account is connected for
+	// Sheets only, reconnect to add Drive" at the moment of choosing, instead of
+	// letting a scheduled run on the box discover it in a 403.
+	Scopes        []string `protobuf:"bytes,7,rep,name=scopes,proto3" json:"scopes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -109,6 +117,13 @@ func (x *Connection) GetCreatedAt() string {
 		return x.CreatedAt
 	}
 	return ""
+}
+
+func (x *Connection) GetScopes() []string {
+	if x != nil {
+		return x.Scopes
+	}
+	return nil
 }
 
 type ListConnectionsRequest struct {
@@ -397,7 +412,7 @@ var File_connection_proto protoreflect.FileDescriptor
 
 const file_connection_proto_rawDesc = "" +
 	"\n" +
-	"\x10connection.proto\x12\rconnection.v1\"\x91\x01\n" +
+	"\x10connection.proto\x12\rconnection.v1\"\xa9\x01\n" +
 	"\n" +
 	"Connection\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -406,7 +421,8 @@ const file_connection_proto_rawDesc = "" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x14\n" +
 	"\x05email\x18\x05 \x01(\tR\x05email\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\tR\tcreatedAt\"\x18\n" +
+	"created_at\x18\x06 \x01(\tR\tcreatedAt\x12\x16\n" +
+	"\x06scopes\x18\a \x03(\tR\x06scopes\"\x18\n" +
 	"\x16ListConnectionsRequest\"V\n" +
 	"\x17ListConnectionsResponse\x12;\n" +
 	"\vconnections\x18\x01 \x03(\v2\x19.connection.v1.ConnectionR\vconnections\"a\n" +

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -152,11 +153,61 @@ func TestGoogleOAuthStart_UsesCustomerClientID(t *testing.T) {
 	}
 }
 
+// ?capability=drive is what a duckdb/gdrive pipeline asks for, and it must be
+// the ONLY thing that puts a Drive permission on the consent screen — a Sheets
+// pipeline asking for Drive is a customer wondering what we want with their
+// Drive.
+func TestGoogleOAuthStart_DriveCapability(t *testing.T) {
+	h, token := startHandlerFor(t, testCustomerClients())
+
+	scopeFor := func(query string) string {
+		req := httptest.NewRequest(http.MethodGet, "/oauth/google/start"+query, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		u, err := url.Parse(body["auth_url"])
+		if err != nil {
+			t.Fatalf("parse auth_url: %v", err)
+		}
+		return u.Query().Get("scope")
+	}
+
+	if got := scopeFor(""); strings.Contains(got, oauthgoogle.DriveFileScope) {
+		t.Fatalf("the default consent asked for Drive: %q", got)
+	}
+	if got := scopeFor("?capability=drive"); !strings.Contains(got, oauthgoogle.DriveFileScope) {
+		t.Fatalf("capability=drive did not ask for Drive: %q", got)
+	}
+}
+
+func TestGoogleOAuthStart_UnknownCapabilityRefused(t *testing.T) {
+	h, token := startHandlerFor(t, testCustomerClients())
+	req := httptest.NewRequest(http.MethodGet, "/oauth/google/start?capability=dropbox", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	// Refused, not quietly downgraded to the base scopes: a token missing the
+	// access the caller asked for fails much later and much further away.
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestGoogleOAuthCallback_Success(t *testing.T) {
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"user@gmail.com"}`))
 	idToken := "h." + payload + ".s"
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"refresh_token": "1//r", "id_token": idToken})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"refresh_token": "1//r", "id_token": idToken,
+			"scope": "openid email " + oauthgoogle.SheetsReadonlyScope + " " + oauthgoogle.DriveFileScope,
+		})
 	}))
 	defer tokenSrv.Close()
 
@@ -184,6 +235,11 @@ func TestGoogleOAuthCallback_Success(t *testing.T) {
 	// it a later app swap cannot be told from a working connection.
 	if store.created.ClientID != "cid" {
 		t.Fatalf("grant did not record the minting client: %+v", store.created)
+	}
+	// And what the consent actually granted, so a Drive pipeline can be
+	// refused at save time instead of at run time on the box.
+	if !slices.Contains(store.created.Scopes, oauthgoogle.DriveFileScope) {
+		t.Fatalf("grant did not record the granted scopes: %+v", store.created.Scopes)
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, store.created.GrantID) {

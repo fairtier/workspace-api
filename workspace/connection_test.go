@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/fairtier/workspace-api/core"
 )
 
 type fakeConnectionStore struct {
@@ -99,11 +101,25 @@ func googleConn(id, slug, refreshToken, email, clientID string) *Connection {
 	}
 }
 
+// An unrecorded scope set is "unknown", never "nothing granted": connections
+// minted before scopes were tracked must keep working, or the save-time gate
+// breaks pipelines over a measurement that was never taken.
+func TestHasGoogleScopeUnknownPasses(t *testing.T) {
+	legacy := &Connection{Type: ConnectionTypeGoogle, Credentials: json.RawMessage(`{"refresh_token":"rt"}`)}
+	if !legacy.HasGoogleScope(core.GoogleDriveFileScope) {
+		t.Fatal("a connection with no recorded scopes must not be refused")
+	}
+	if got := legacy.GoogleScopes(); len(got) != 0 {
+		t.Fatalf("GoogleScopes on a legacy connection = %v", got)
+	}
+}
+
 func TestCreateGoogleConnectionConsumesGrant(t *testing.T) {
 	store := &fakeConnectionStore{}
 	grants := &fakeGrantStore{grant: &GoogleOAuthGrant{
 		GrantID: "g1", CustomerSlug: "acme",
 		RefreshToken: "rt-1", Email: "alice@corp.com", ClientID: "client-1",
+		Scopes: []string{"openid", "email", core.GoogleSheetsReadonlyScope},
 	}}
 	svc := &ConnectionService{Connections: store, GoogleOAuth: grants}
 
@@ -123,6 +139,11 @@ func TestCreateGoogleConnectionConsumesGrant(t *testing.T) {
 	}
 	if gc.RefreshToken != "rt-1" || gc.ClientID != "client-1" {
 		t.Fatalf("credentials not carried over: %+v", gc)
+	}
+	// What the consent granted travels with the token it describes, so the
+	// picker can tell a Sheets-only account from a Drive-capable one.
+	if !c.HasGoogleScope(core.GoogleSheetsReadonlyScope) || c.HasGoogleScope(core.GoogleDriveFileScope) {
+		t.Fatalf("scopes not carried from the grant: %v", c.GoogleScopes())
 	}
 
 	// One-time use: the same grant cannot mint a second connection.

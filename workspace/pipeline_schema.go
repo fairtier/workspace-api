@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/fairtier/workspace-api/core"
 )
 
 // ErrInvalidSourceConfig indicates that the pipeline's sourceConfig JSON
@@ -537,6 +539,20 @@ func isGoogleOAuthSourceType(sourceType string) bool {
 		return true
 	}
 	return false
+}
+
+// googleScopeRequired returns the Google scope a source type needs on top of
+// the base consent, or "" when the base consent (sign-in + Sheets) already
+// covers it.
+//
+// duckdb here means gdrive, and only gdrive: validateDuckDBOAuth refuses an
+// oauth member on every other extension, which is what lets this — like the
+// serve and render paths — answer without carrying source_config around.
+func googleScopeRequired(sourceType string) string {
+	if sourceType == "duckdb" {
+		return core.GoogleDriveFileScope
+	}
+	return ""
 }
 
 // parseGoogleOAuth reads the Google OAuth credential out of whichever envelope

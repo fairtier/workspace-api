@@ -1,7 +1,9 @@
 // Package oauthgoogle implements the delegated-user "Sign in with Google" flow
-// for Google Sheets pipeline sources: it builds the consent URL, signs/verifies
-// the OAuth state parameter, and exchanges an authorization code for a refresh
-// token. It is a thin, no-SDK wrapper over Google's OAuth 2.0 endpoints (same
+// for the Google-backed pipeline sources — Sheets, and Drive files read through
+// the duckdb/gdrive extension: it builds the consent URL, signs/verifies the
+// OAuth state parameter, and exchanges an authorization code for a refresh
+// token. Which of the two a consent asks for is the caller's choice
+// (Capability), so a Sheets pipeline never requests Drive access. It is a thin, no-SDK wrapper over Google's OAuth 2.0 endpoints (same
 // plain net/http style as the llm package).
 //
 // The OAuth application is the CUSTOMER's, not ours: each workspace registers
@@ -35,6 +37,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/fairtier/workspace-api/core"
 )
 
 const (
@@ -45,16 +49,81 @@ const (
 	// scope (needs consent-screen verification) but deliberately NOT a drive.*
 	// *restricted* scope — reading a sheet by ID needs no Drive access, which
 	// keeps the app clear of Google's third-party security assessment.
-	SheetsReadonlyScope = "https://www.googleapis.com/auth/spreadsheets.readonly"
+	SheetsReadonlyScope = core.GoogleSheetsReadonlyScope
 
-	// scopes also requests openid+email so the token response carries an
-	// id_token we can read the granting account's email from (for display).
-	scopes = "openid email " + SheetsReadonlyScope
+	// DriveFileScope reaches individual Drive files — the ones the user picks
+	// through Google's own Picker, or that the app itself created — and never
+	// the whole Drive. Like Sheets it is a *sensitive* scope and NOT a
+	// *restricted* one, so it stays clear of the third-party security
+	// assessment that drive.readonly (the gdrive extension's own default)
+	// would drag in.
+	//
+	// Verified 2026-08-27 against gdrive v2026.08.07 on duckdb 1.5.5, under a
+	// grant carrying this scope and no other Drive scope: read_csv and
+	// read_pdf over gdrive://id:<id> both succeed (files.get 200 +
+	// files.media 206). Addressing a file by PATH does not work under it and
+	// is not a supported shape here — gdrive://Reports/monthly.pdf resolves
+	// each segment with files.list, which sees only the handful of files this
+	// grant covers, never the folder they sit in. Drive files are addressed
+	// by id. See docs/plans/duckdb-source-ui.md in the platform monorepo.
+	DriveFileScope = core.GoogleDriveFileScope
+
+	// baseScopes is what every consent asks for: the Sheets read, plus
+	// openid+email so the token response carries an id_token we can read the
+	// granting account's email from (for display).
+	baseScopes = "openid email " + SheetsReadonlyScope
 
 	// stateTTL bounds how long a consent round-trip may take. Matches the grant
 	// TTL on the server side.
 	stateTTL = 15 * time.Minute
 )
+
+// Capability names an extra authorization a consent may ask for on top of the
+// base set. It exists so a Sheets pipeline never triggers a Drive consent
+// screen: the caller says what the source actually needs, and only that is
+// requested. Widening later is cheap — AuthURL sets include_granted_scopes, so
+// a second consent adds Drive to the same account rather than replacing what
+// it already granted.
+type Capability string
+
+const (
+	// CapabilityNone asks for the base set only (sign-in + Sheets).
+	CapabilityNone Capability = ""
+	// CapabilityDrive additionally asks for DriveFileScope — what a
+	// duckdb/gdrive pipeline needs.
+	CapabilityDrive Capability = "drive"
+)
+
+// ParseCapability maps the wire value (a query parameter) onto a Capability.
+// An unknown value is an error rather than a silent downgrade to the base set:
+// silently dropping the Drive request would mint a token that fails on the box
+// hours later, which is the failure mode the capability exists to remove.
+func ParseCapability(s string) (Capability, error) {
+	switch Capability(s) {
+	case CapabilityNone:
+		return CapabilityNone, nil
+	case CapabilityDrive:
+		return CapabilityDrive, nil
+	default:
+		return CapabilityNone, fmt.Errorf("oauthgoogle: unknown capability %q", s)
+	}
+}
+
+// scopes returns the space-separated scope string to request.
+func (capability Capability) scopes() string {
+	if capability == CapabilityDrive {
+		return baseScopes + " " + DriveFileScope
+	}
+	return baseScopes
+}
+
+// AllScopes is every scope this deployment can ever request, which is what the
+// customer has to list on their own OAuth consent screen. Requesting a scope
+// their app does not declare is refused by Google at the consent, not at the
+// call — so the Console shows this list, not the per-capability subset.
+func AllScopes() []string {
+	return []string{"openid", "email", SheetsReadonlyScope, DriveFileScope}
+}
 
 // Client drives the Google OAuth flow. It carries the deployment-wide
 // configuration only; the customer's client id and secret are passed to the
@@ -99,14 +168,15 @@ func (c *Client) httpClient() *http.Client {
 }
 
 // AuthURL builds the Google consent URL for the given signed state, against the
-// customer's own OAuth client. access_type offline + prompt=consent guarantees a
+// customer's own OAuth client, asking for the base scopes plus whatever the
+// capability adds. access_type offline + prompt=consent guarantees a
 // refresh_token on every grant.
-func (c *Client) AuthURL(state, clientID string) string {
+func (c *Client) AuthURL(state, clientID string, capability Capability) string {
 	v := url.Values{}
 	v.Set("client_id", clientID)
 	v.Set("redirect_uri", c.redirectURL)
 	v.Set("response_type", "code")
-	v.Set("scope", scopes)
+	v.Set("scope", capability.scopes())
 	v.Set("access_type", "offline")
 	v.Set("prompt", "consent")
 	v.Set("include_granted_scopes", "true")
@@ -168,6 +238,11 @@ type TokenResult struct {
 	RefreshToken string
 	// Email is the granting Google account, for Console display only.
 	Email string
+	// Scopes is what Google actually granted, which is not necessarily what
+	// was asked for: the consent screen lets the user untick a scope. Recorded
+	// with the grant so the Console can tell a Sheets-only account from a
+	// Drive-capable one instead of letting a run on the box discover it.
+	Scopes []string
 }
 
 type tokenResponse struct {
@@ -221,6 +296,7 @@ func (c *Client) Exchange(ctx context.Context, code, clientID, clientSecret stri
 	return &TokenResult{
 		RefreshToken: tr.RefreshToken,
 		Email:        emailFromIDToken(tr.IDToken),
+		Scopes:       strings.Fields(tr.Scope),
 	}, nil
 }
 

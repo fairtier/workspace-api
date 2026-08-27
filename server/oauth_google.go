@@ -26,11 +26,16 @@ const grantTTL = 15 * time.Minute
 // exactly when it should be inviting the customer to Integrations.
 const oauthClientNotConfiguredCode = "oauth_client_not_configured"
 
-// GoogleOAuthStartHandler begins the "Sign in with Google" flow for a Google
-// Sheets pipeline source: GET /oauth/google/start. It is JWT-authed like the
-// RPC mux, resolves the caller's tenant and that tenant's own OAuth app, mints a
-// signed state, and returns the Google consent URL as JSON {"auth_url": "..."}.
-// The Console opens that URL in a popup.
+// GoogleOAuthStartHandler begins the "Sign in with Google" flow for a
+// Google-backed pipeline source: GET /oauth/google/start. It is JWT-authed like
+// the RPC mux, resolves the caller's tenant and that tenant's own OAuth app,
+// mints a signed state, and returns the Google consent URL as JSON
+// {"auth_url": "..."}. The Console opens that URL in a popup.
+//
+// ?capability=drive additionally asks for Drive access, which a duckdb/gdrive
+// pipeline needs. It is a parameter rather than a constant so a Sheets pipeline
+// never puts a Drive consent screen in front of the user: they are asked for
+// what their source actually reads, and nothing more.
 //
 // Two distinct refusals: 501 when the deployment has no OAuth configuration at
 // all (Console falls back to the service-account path), 412 when this customer
@@ -40,6 +45,15 @@ func GoogleOAuthStartHandler(logger *slog.Logger, auth core.UserAuth, client *oa
 		ctx := r.Context()
 		if client == nil || clients == nil {
 			writeOAuthError(w, http.StatusNotImplemented, "Sign in with Google is not configured on this server")
+			return
+		}
+
+		capability, err := oauthgoogle.ParseCapability(r.URL.Query().Get("capability"))
+		if err != nil {
+			// Not a silent fall back to the base scopes: that would mint a
+			// token missing the access the caller asked for and defer the
+			// failure to a run on the box.
+			writeOAuthError(w, http.StatusBadRequest, "unknown capability")
 			return
 		}
 
@@ -75,7 +89,7 @@ func GoogleOAuthStartHandler(logger *slog.Logger, auth core.UserAuth, client *oa
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"auth_url": client.AuthURL(state, cc.ClientID)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"auth_url": client.AuthURL(state, cc.ClientID, capability)})
 	}
 }
 
@@ -95,7 +109,7 @@ func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client,
 
 		// The user may have denied consent, or Google reported an error.
 		if e := r.URL.Query().Get("error"); e != "" {
-			renderOAuthResult(w, consoleOrigin, oauthResult{Error: "access to Google Sheets was not granted"})
+			renderOAuthResult(w, consoleOrigin, oauthResult{Error: "access to your Google account was not granted"})
 			return
 		}
 
@@ -138,8 +152,13 @@ func GoogleOAuthCallbackHandler(logger *slog.Logger, client *oauthgoogle.Client,
 			RefreshToken: tok.RefreshToken,
 			Email:        tok.Email,
 			ClientID:     cc.ClientID,
-			CreatedAt:    now,
-			ExpiresAt:    now.Add(grantTTL),
+			// What Google actually granted, which the consent screen lets the
+			// user narrow: a connection minted from this grant carries it, so
+			// a Drive pipeline can be refused at save time rather than at run
+			// time.
+			Scopes:    tok.Scopes,
+			CreatedAt: now,
+			ExpiresAt: now.Add(grantTTL),
 		}
 		if err := grants.CreateGoogleOAuthGrant(ctx, grant); err != nil {
 			logger.ErrorContext(ctx, "oauth: store grant", "err", err)

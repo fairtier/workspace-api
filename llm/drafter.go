@@ -49,7 +49,7 @@ var pipelineDraftSchema = map[string]any{
 			"enum": []string{"rest_api", "sql_database", "filesystem", "google_sheets", "file_upload", "duckdb", "unsupported"},
 			"description": "The dlt source type best matching the user's description, or \"unsupported\" when the request needs a capability the platform does not have. " +
 				"Use file_upload when the user has a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) to drop in — not filesystem, which is for an existing S3/GCS bucket the user already owns. " +
-				"Use duckdb for anything a supported DuckDB extension can read: the MySQL, SQL Server, and Firebird database engines, PDF documents, HTML/XML pages, and files kept in Google Drive — the gdrive extension exposes Drive as gdrive:// paths the other readers accept, so a PDF in the user's Drive is duckdb. A Google Sheet the user points at directly stays google_sheets; sql_database stays the PostgreSQL path.",
+				"Use duckdb for anything a supported DuckDB extension can read: the MySQL and SQL Server database engines, PDF documents, HTML/XML pages, and files kept in Google Drive — the gdrive extension exposes Drive as gdrive:// paths the other readers accept, so a PDF in the user's Drive is duckdb. A Google Sheet the user points at directly stays google_sheets; sql_database stays the PostgreSQL path.",
 		},
 		"dataset_name": map[string]any{
 			"type":        "string",
@@ -95,13 +95,13 @@ Given a user's natural-language description, draft a single dlt (data load tool)
 The platform's COMPLETE ingestion capabilities — there are no others:
 - rest_api: any HTTP API returning JSON (including SaaS products reachable over their REST API).
 - sql_database: PostgreSQL ONLY (this path has no other database driver).
-- duckdb: read through a DuckDB extension — the MySQL, SQL Server (mssql), and Firebird
+- duckdb: read through a DuckDB extension — the MySQL and SQL Server (mssql)
   database engines; PDF documents (pdf: read_pdf, read_pdf_tables); HTML/XML web pages
   (webbed: read_html, read_xml, html_extract_tables); remote csv/parquet/json files by
   URL (httpfs); and files kept in Google Drive (gdrive: a gdrive:// filesystem the readers
   above accept, so Drive documents are read in place — e.g.
   read_pdf('gdrive://Reports/monthly.pdf')). No other database engine yet — not MariaDB,
-  Oracle, MongoDB, SQLite, Snowflake, BigQuery, or anything else.
+  Oracle, Firebird, MongoDB, SQLite, Snowflake, BigQuery, or anything else.
 - filesystem: files in an S3-compatible object-storage bucket the user already owns.
 - google_sheets: a Google Sheets spreadsheet.
 - file_upload: a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) the user drops in.

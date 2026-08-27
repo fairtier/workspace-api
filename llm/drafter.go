@@ -49,7 +49,7 @@ var pipelineDraftSchema = map[string]any{
 			"enum": []string{"rest_api", "sql_database", "filesystem", "google_sheets", "file_upload", "duckdb", "unsupported"},
 			"description": "The dlt source type best matching the user's description, or \"unsupported\" when the request needs a capability the platform does not have. " +
 				"Use file_upload when the user has a local CSV/TSV/Parquet/JSONL file (or spreadsheet export) to drop in — not filesystem, which is for an existing S3/GCS bucket the user already owns. " +
-				"Use duckdb for anything a supported DuckDB extension can read: the MySQL and SQL Server database engines, PDF documents, HTML/XML pages, remote csv/parquet/json files, and csv/parquet/json files or native Google Sheets kept in Google Drive. A pipeline loads exactly ONE extension, so gdrive reaches only the readers DuckDB has built in (read_csv, read_parquet, read_json) — a PDF or a web page *inside* Drive is not readable yet; say so instead of drafting it. A PDF at an http(s) URL is fine. A Google Sheet the user points at directly stays google_sheets; sql_database stays the PostgreSQL path.",
+				"Use duckdb for anything a supported DuckDB extension can read: the MySQL and SQL Server database engines, PDF documents, HTML/XML pages, remote csv/parquet/json files, and files kept in Google Drive — csv/parquet/json, native Google Sheets, and PDFs or web pages too, by loading the reader's extension alongside gdrive. A Google Sheet the user points at directly stays google_sheets; sql_database stays the PostgreSQL path.",
 		},
 		"dataset_name": map[string]any{
 			"type":        "string",
@@ -75,7 +75,7 @@ var pipelineDraftSchema = map[string]any{
 				"sql_database may set tables or tables_config. " +
 				"filesystem requires bucket_url and may set file_glob. " +
 				"google_sheets requires spreadsheet_url_or_id and may set range_names (sheet tabs, A1 ranges, or named ranges; omit to load every tab). " +
-				"duckdb requires extension (one of mysql, mssql, pdf, webbed, gdrive, httpfs), tables (an array of {name, query?, cursor_column?, primary_key?}; query defaults to reading the source table of the same name). Database extensions (mysql, mssql) also need attach — an ATTACH template where every secret part is a {placeholder} the user fills in the credentials step, e.g. \"host={host} user={user} password={password} database=shop\". Reader extensions (pdf, webbed, httpfs) take no attach; give each table an explicit query over the reader function, e.g. \"SELECT page, text FROM read_pdf('https://example.com/report.pdf')\" or \"SELECT * FROM read_html('https://example.com/prices')\". The gdrive extension registers a gdrive:// filesystem, but only for DuckDB's BUILT-IN readers (read_csv, read_parquet, read_json): one pipeline loads one extension, so read_pdf/read_html are unavailable to a gdrive source. Address a Drive file BY ID — gdrive://id:<file id>, the id in the file's Drive URL — e.g. a csv or a native Google Sheet via \"SELECT * FROM read_csv('gdrive://id:1a2b3c')\". Never a folder path like gdrive://Reports/monthly.pdf: the access the user grants covers the individual files they pick, not the folders around them, so path lookup finds nothing. If the user has not given a file id, put the gdrive://id: form in the query with a placeholder id and say in notes which file id to paste in. Its credentials come from connecting Google under Integrations — the pipeline then references that connection and the server fills the token in — so notes should tell the user to connect Google rather than to paste anything. " +
+				"duckdb requires extension (one of mysql, mssql, pdf, webbed, gdrive, httpfs) — or extensions, an ordered ARRAY of them for a reader running over another extension's filesystem — plus tables (an array of {name, query?, cursor_column?, primary_key?}; query defaults to reading the source table of the same name). Database extensions (mysql, mssql) also need attach — an ATTACH template where every secret part is a {placeholder} the user fills in the credentials step, e.g. \"host={host} user={user} password={password} database=shop\". Reader extensions (pdf, webbed, httpfs) take no attach; give each table an explicit query over the reader function, e.g. \"SELECT page, text FROM read_pdf('https://example.com/report.pdf')\" or \"SELECT * FROM read_html('https://example.com/prices')\". The gdrive extension registers a gdrive:// filesystem and nothing else, so a reader that is not built into DuckDB needs its own extension loaded beside it: a Drive csv/parquet/json or native Sheet is extension \"gdrive\", while a Drive PDF is extensions [\"gdrive\", \"pdf\"] with \"SELECT page, text FROM read_pdf('gdrive://id:1a2b3c')\", and a Drive HTML file is extensions [\"gdrive\", \"webbed\"]. Put gdrive FIRST. Never set both extension and extensions. Address a Drive file BY ID — gdrive://id:<file id>, the id in the file's Drive URL — e.g. a csv or a native Google Sheet via \"SELECT * FROM read_csv('gdrive://id:1a2b3c')\". Never a folder path like gdrive://Reports/monthly.pdf: the access the user grants covers the individual files they pick, not the folders around them, so path lookup finds nothing. If the user has not given a file id, put the gdrive://id: form in the query with a placeholder id and say in notes which file id to paste in. Its credentials come from connecting Google under Integrations — the pipeline then references that connection and the server fills the token in — so notes should tell the user to connect Google rather than to paste anything. " +
 				"NEVER include credentials, API keys, passwords, connection strings, or access keys here — in a duckdb attach template that is what the {placeholder}s are for.",
 		},
 		"notes": map[string]any{
@@ -100,9 +100,9 @@ The platform's COMPLETE ingestion capabilities — there are no others:
   (webbed: read_html, read_xml, html_extract_tables); remote csv/parquet/json files by
   URL (httpfs); and csv/parquet/json files and native Google Sheets kept in Google Drive
   (gdrive: a gdrive:// filesystem, addressed by file id — e.g. read_csv('gdrive://id:1a2b3c')).
-  A pipeline loads ONE extension, so gdrive pairs only with DuckDB's built-in readers: a PDF
-  or web page *inside* Drive cannot be read yet, though one at an http(s) URL can.
-  No other database engine yet — not MariaDB,
+  gdrive is a filesystem only, so a Drive document read by a non-built-in reader loads both
+  extensions: {"extensions":["gdrive","pdf"]} for a PDF in Drive, ["gdrive","webbed"] for a
+  web page saved there. No other database engine yet — not MariaDB,
   Oracle, Firebird, MongoDB, SQLite, Snowflake, BigQuery, or anything else.
 - filesystem: files in an S3-compatible object-storage bucket the user already owns.
 - google_sheets: a Google Sheets spreadsheet.
@@ -121,9 +121,10 @@ Rules:
 - Prefer file_upload when the user has a local file (CSV/TSV/Parquet/JSONL) or a spreadsheet export to drop in; it needs no source_config or credentials (the files are uploaded in the next step). Use filesystem only for a bucket the user already owns.
 - Documents are duckdb, not file_upload: file_upload takes tabular files only, so PDFs and
   web pages go to duckdb with the pdf or webbed extension. When those documents live in the
-  user's Google Drive, use duckdb with extension "gdrive" and read them at gdrive://id:<file
-  id> — never a gdrive:// folder path, which the granted Drive access cannot resolve. A
-  Google Sheet the user names directly is still google_sheets.
+  user's Google Drive, keep that extension and add gdrive in front of it —
+  {"extensions":["gdrive","pdf"]} — and read them at gdrive://id:<file id>, never a
+  gdrive:// folder path, which the granted Drive access cannot resolve. A Google Sheet the
+  user names directly is still google_sheets.
 - Fill source_config with the NON-SENSITIVE configuration only.
 - NEVER invent or include credentials of any kind (API keys, tokens, passwords, connection strings, access keys). The user supplies those separately.
 - Prefer sensible defaults: write_disposition "append" unless the user implies upserts or a full refresh.

@@ -200,6 +200,10 @@ func TestPipelineDraftPromptAdvertisesGDrive(t *testing.T) {
 	if !ok {
 		t.Fatal("source_type property missing from pipelineDraftSchema")
 	}
+	sourceConfig, ok := pipelineDraftSchema["properties"].(map[string]any)["source_config"].(map[string]any)
+	if !ok {
+		t.Fatal("source_config property missing from pipelineDraftSchema")
+	}
 	for _, tc := range []struct{ name, text string }{
 		{"system prompt capability list", pipelineDraftSystemPrompt},
 		{"source_type description", sourceType["description"].(string)},
@@ -210,15 +214,21 @@ func TestPipelineDraftPromptAdvertisesGDrive(t *testing.T) {
 		if !strings.Contains(tc.text, "Google Drive") {
 			t.Errorf("%s does not mention Google Drive", tc.name)
 		}
-		// ...and must say what a Drive source can actually read. One
-		// extension is loaded per pipeline and community-extension functions
-		// do not autoload, so read_pdf over gdrive:// is a draft that
-		// validates, saves, and then fails on the box.
-		if !strings.Contains(tc.text, "read_csv") {
-			t.Errorf("%s does not name the built-in reader a gdrive source must use", tc.name)
+	}
+	// A Drive document read by a function DuckDB does not have built in needs
+	// that function's extension loaded beside gdrive — community extensions do
+	// not autoload. Teaching the single-extension form instead is a draft that
+	// validates, saves, and then fails on the box with "Table Function with
+	// name read_pdf does not exist", which is exactly what happened.
+	for _, tc := range []struct{ name, text string }{
+		{"system prompt capability list", pipelineDraftSystemPrompt},
+		{"source_config description", sourceConfig["description"].(string)},
+	} {
+		if !strings.Contains(tc.text, "extensions") || !strings.Contains(tc.text, `["gdrive"`) {
+			t.Errorf("%s does not teach the extensions pairing a Drive document needs", tc.name)
 		}
-		if strings.Contains(tc.text, "read_pdf('gdrive://") {
-			t.Errorf("%s still teaches read_pdf over gdrive://, which the worker cannot run", tc.name)
+		if !strings.Contains(tc.text, "gdrive://id:") {
+			t.Errorf("%s does not teach id addressing, the only form drive.file can resolve", tc.name)
 		}
 	}
 }

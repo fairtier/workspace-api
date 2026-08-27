@@ -375,6 +375,10 @@ func TestGetEnabledPipelines_ServesGDriveSecret(t *testing.T) {
 	}
 	got := string(out[0].SourceCredentials)
 	for _, want := range []string{
+		// The secret's own type, named rather than left to the worker's
+		// default (the primary extension) — which is not gdrive on a
+		// ["pdf","gdrive"] config.
+		`"type":"gdrive"`,
 		`"PROVIDER":"config"`,
 		`"REFRESH_TOKEN":"1//refresh"`,
 		`"CLIENT_ID":"acme-cid"`,

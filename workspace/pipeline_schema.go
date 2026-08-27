@@ -529,11 +529,11 @@ func validateGoogleSheetsServiceAccount(serviceAccountKey json.RawMessage) error
 // carry a Google delegated-user OAuth credential. THE registration point for
 // a Google-backed source: everything else in this file dispatches through it.
 //
-// duckdb qualifies only through the gdrive extension, but the extension name
-// lives in source_config, which the serve and render paths do not carry. They
-// do not need it: validateDuckDBCreds refuses an oauth block on any other
-// extension at save time, so a stored duckdb credential with one is already
-// known to be gdrive.
+// duckdb qualifies only by loading the gdrive extension, but the extension
+// list lives in source_config, which the serve and render paths do not carry.
+// They do not need it: validateDuckDBCreds refuses an oauth block on a config
+// that does not load gdrive, so a stored duckdb credential with one is already
+// known to be a Drive pipeline.
 func isGoogleOAuthSourceType(sourceType string) bool {
 	switch sourceType {
 	case "google_sheets", "duckdb":
@@ -546,9 +546,9 @@ func isGoogleOAuthSourceType(sourceType string) bool {
 // the base consent, or "" when the base consent (sign-in + Sheets) already
 // covers it.
 //
-// duckdb here means gdrive, and only gdrive: validateDuckDBOAuth refuses an
-// oauth member on every other extension, which is what lets this — like the
-// serve and render paths — answer without carrying source_config around.
+// duckdb here means "loads gdrive": validateDuckDBOAuth refuses an oauth
+// member on a config that does not, which is what lets this — like the serve
+// and render paths — answer without carrying source_config around.
 func googleScopeRequired(sourceType string) string {
 	if sourceType == "duckdb" {
 		return core.GoogleDriveFileScope
@@ -726,7 +726,7 @@ func validateFileUploadCreds(raw json.RawMessage) error {
 // --- duckdb ---
 
 // SourceTypeDuckDB is the DuckDB-extension source: the dlt-worker opens a
-// bounded in-memory DuckDB, LOADs one extension, optionally ATTACHes the
+// bounded in-memory DuckDB, LOADs the configured extension(s), optionally ATTACHes the
 // external system read-only as "src", and streams each configured table's
 // query into the normal load path — so any system a DuckDB extension can
 // read becomes an EL source without a driver of its own. The extension is
@@ -748,7 +748,10 @@ var duckdbExtensionAllowlist = map[string]bool{
 	"webbed": true,
 	// Google Drive virtual filesystem (gdrive:// paths for the readers,
 	// native Sheets via read_csv). Query-only; auth via secret
-	// {PROVIDER: config, REFRESH_TOKEN, CLIENT_ID, CLIENT_SECRET}.
+	// {PROVIDER: config, REFRESH_TOKEN, CLIENT_ID, CLIENT_SECRET}. A
+	// filesystem and nothing more: reading a PDF in Drive is
+	// extensions: ["gdrive", "pdf"], since DuckDB autoloads no community
+	// extension's functions.
 	"gdrive": true,
 	// Baked as an autoload helper for http(s) reads; allowlisted too so a
 	// query-only pipeline may read remote csv/parquet/json directly.
@@ -765,9 +768,64 @@ var duckdbIdentRe = regexp.MustCompile(`^[a-z0-9_]+$`)
 var duckdbPlaceholderRe = regexp.MustCompile(`\{([A-Za-z0-9_]+)\}`)
 
 type duckdbConfig struct {
-	Extension string        `json:"extension"`
-	Attach    string        `json:"attach"`
-	Tables    []duckdbTable `json:"tables"`
+	// Extension is the single-extension form, and stays the common one: a
+	// MySQL database, a PDF at a URL, a web page.
+	Extension string `json:"extension"`
+	// Extensions is the plural form, for a source whose reader has to run
+	// over another extension's filesystem — a PDF *in* Google Drive needs
+	// ["gdrive", "pdf"], because DuckDB autoloads no community extension's
+	// functions and the worker loads exactly what this names. Ordered: the
+	// first is what ATTACH names as its TYPE and what a CREATE SECRET
+	// defaults to. Exactly one of the two forms, never both.
+	Extensions []string      `json:"extensions"`
+	Attach     string        `json:"attach"`
+	Tables     []duckdbTable `json:"tables"`
+}
+
+// loadList resolves the two forms into the LOAD list the worker will use, or
+// names why it cannot. Every caller that asks "which extension is this?" goes
+// through here, so a plural config is never read as an extension-less one.
+func (c duckdbConfig) loadList() ([]string, error) {
+	if c.Extension != "" && len(c.Extensions) > 0 {
+		return nil, &ErrInvalidSourceConfig{Field: "extensions", Msg: "duckdb: set extension or extensions, not both"}
+	}
+	names := c.Extensions
+	if c.Extension != "" {
+		names = []string{c.Extension}
+	}
+	if len(names) == 0 {
+		return nil, &ErrInvalidSourceConfig{Field: "extension", Msg: "duckdb: extension is required"}
+	}
+	out := make([]string, 0, len(names))
+	seen := map[string]bool{}
+	for _, name := range names {
+		if !duckdbIdentRe.MatchString(name) {
+			return nil, &ErrInvalidSourceConfig{Field: "extension", Msg: fmt.Sprintf("duckdb: invalid extension name %q", name)}
+		}
+		if !duckdbExtensionAllowlist[name] {
+			return nil, &ErrInvalidSourceConfig{Field: "extension", Msg: fmt.Sprintf("duckdb: extension %q is not supported; supported: %s", name, strings.Join(duckdbSupportedExtensions(), ", "))}
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// hasExtension reports whether the config loads a given extension, in either
+// form. Used where the *presence* of one decides something — gdrive deciding
+// that a Google credential belongs here.
+func (c duckdbConfig) hasExtension(name string) bool {
+	if c.Extension == name {
+		return true
+	}
+	for _, e := range c.Extensions {
+		if e == name {
+			return true
+		}
+	}
+	return false
 }
 
 type duckdbTable struct {
@@ -786,14 +844,8 @@ func validateDuckDBConfig(raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return &ErrInvalidSourceConfig{Field: "source_config", Msg: fmt.Sprintf("duckdb: invalid sourceConfig JSON: %v", err)}
 	}
-	if cfg.Extension == "" {
-		return &ErrInvalidSourceConfig{Field: "extension", Msg: "duckdb: extension is required"}
-	}
-	if !duckdbIdentRe.MatchString(cfg.Extension) {
-		return &ErrInvalidSourceConfig{Field: "extension", Msg: fmt.Sprintf("duckdb: invalid extension name %q", cfg.Extension)}
-	}
-	if !duckdbExtensionAllowlist[cfg.Extension] {
-		return &ErrInvalidSourceConfig{Field: "extension", Msg: fmt.Sprintf("duckdb: extension %q is not supported; supported: %s", cfg.Extension, strings.Join(duckdbSupportedExtensions(), ", "))}
+	if _, err := cfg.loadList(); err != nil {
+		return err
 	}
 	if len(cfg.Tables) == 0 {
 		return &ErrInvalidSourceConfig{Field: "tables", Msg: "duckdb: tables must have at least one entry"}
@@ -868,6 +920,9 @@ const duckdbGDriveExtension = "gdrive"
 // Cross-repo contract with the worker's duckdb_source.py; changing a name here
 // silently breaks every Drive pipeline.
 const (
+	// duckdbSecretTypeKey is the worker's own key for a CREATE SECRET's TYPE
+	// (duckdb_source.py, _secret_sql) — lowercase, unlike the DuckDB keys.
+	duckdbSecretTypeKey         = "type"
 	duckdbGDriveProviderKey     = "PROVIDER"
 	duckdbGDriveProviderConfig  = "config"
 	duckdbGDriveRefreshTokenKey = "REFRESH_TOKEN"
@@ -890,6 +945,13 @@ func renderDuckDBGoogleSecret(raw json.RawMessage, o *googleOAuthCredential) (js
 	creds.OAuth = nil
 	if creds.Secret == nil {
 		creds.Secret = map[string]string{}
+	}
+	// Name the secret's type rather than letting the worker default it to the
+	// primary extension: with a list, the primary need not be gdrive
+	// (["pdf", "gdrive"] is a legal hand-written config), and a
+	// CREATE SECRET (TYPE pdf, …) would authenticate nothing.
+	if creds.Secret[duckdbSecretTypeKey] == "" {
+		creds.Secret[duckdbSecretTypeKey] = duckdbGDriveExtension
 	}
 	if creds.Secret[duckdbGDriveProviderKey] == "" {
 		creds.Secret[duckdbGDriveProviderKey] = duckdbGDriveProviderConfig
@@ -918,7 +980,7 @@ func validateDuckDBCreds(config, raw json.RawMessage) error {
 	if err := validateDuckDBAttachParams(cfg.Attach, creds.AttachParams); err != nil {
 		return err
 	}
-	return validateDuckDBOAuth(cfg.Extension, creds.OAuth)
+	return validateDuckDBOAuth(cfg, creds.OAuth)
 }
 
 // validateDuckDBAttachParams checks that every placeholder in the attach
@@ -940,16 +1002,18 @@ func validateDuckDBAttachParams(attach string, params map[string]string) error {
 	return nil
 }
 
-// validateDuckDBOAuth refuses a Google OAuth credential on any extension but
-// gdrive. That refusal is load-bearing: it is what lets the serve and render
-// paths read "a duckdb credential with an oauth member" as "gdrive" without
-// carrying source_config around to check.
-func validateDuckDBOAuth(extension string, o *googleOAuthCredential) error {
+// validateDuckDBOAuth refuses a Google OAuth credential on a config that does
+// not load gdrive. That refusal is load-bearing: it is what lets the serve and
+// render paths read "a duckdb credential with an oauth member" as "gdrive"
+// without carrying source_config around to check. It asks whether gdrive is
+// *among* the loaded extensions, not whether it is the only one — a PDF in
+// Drive loads ["gdrive", "pdf"] and is still a Google-backed source.
+func validateDuckDBOAuth(cfg duckdbConfig, o *googleOAuthCredential) error {
 	if o == nil {
 		return nil
 	}
-	if extension != duckdbGDriveExtension {
-		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: fmt.Sprintf("duckdb: oauth credentials are only used by the %q extension, not %q; use secret instead", duckdbGDriveExtension, extension)}
+	if !cfg.hasExtension(duckdbGDriveExtension) {
+		return &ErrInvalidSourceCredentials{Field: "oauth", Msg: fmt.Sprintf("duckdb: oauth credentials are only used by the %q extension; this pipeline does not load it, so use secret instead", duckdbGDriveExtension)}
 	}
 	return validateGoogleOAuth("duckdb", o)
 }

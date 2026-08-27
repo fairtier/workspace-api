@@ -193,10 +193,45 @@ func TestValidateSourceConfig(t *testing.T) {
 		},
 		{
 			// The Drive-backed reader shape: gdrive registers a gdrive://
-			// filesystem, so the reader function is still pdf's.
+			// filesystem, so the reader function is still pdf's — and pdf
+			// must therefore be LOADed beside it. `extension: "gdrive"`
+			// alone saved fine and then failed on the box with "Table
+			// Function with name read_pdf does not exist", which is what
+			// the plural form exists to stop.
 			name:       "duckdb reader extension query-only (gdrive pdf)",
 			sourceType: "duckdb",
-			raw:        json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+			raw:        json.RawMessage(`{"extensions":["gdrive","pdf"],"tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://id:1a2b3c')"}]}`),
+		},
+		{
+			name:       "duckdb extensions list, one entry",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extensions":["pdf"],"tables":[{"name":"pages","query":"SELECT * FROM read_pdf('https://example.com/r.pdf')"}]}`),
+		},
+		{
+			name:       "duckdb both extension forms refused",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extension":"gdrive","extensions":["gdrive","pdf"],"tables":[{"name":"t","query":"SELECT 1"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "set extension or extensions, not both",
+		},
+		{
+			name:       "duckdb extensions empty list is missing",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extensions":[],"tables":[{"name":"t","query":"SELECT 1"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  "extension is required",
+		},
+		{
+			// The allowlist applies to every member, not just the first:
+			// a list is not a way around it.
+			name:       "duckdb extensions member not allowlisted",
+			sourceType: "duckdb",
+			raw:        json.RawMessage(`{"extensions":["gdrive","postgres"],"tables":[{"name":"t","query":"SELECT 1"}]}`),
+			wantErr:    true,
+			wantCfgErr: true,
+			errSubstr:  `extension "postgres" is not supported`,
 		},
 		{
 			name:       "duckdb gdrive native sheet via read_csv",
@@ -408,7 +443,7 @@ func TestValidateSourceCredentials(t *testing.T) {
 			// is a cross-repo contract with the worker's duckdb_source.py.
 			name:       "duckdb gdrive creds oauth secret",
 			sourceType: "duckdb",
-			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT * FROM read_csv('gdrive://id:1a2b3c')"}]}`),
 			raw:        json.RawMessage(`{"secret":{"PROVIDER":"config","REFRESH_TOKEN":"rt","CLIENT_ID":"cid","CLIENT_SECRET":"cs"}}`),
 		},
 		{
@@ -416,22 +451,39 @@ func TestValidateSourceCredentials(t *testing.T) {
 			// pasted. Resolved to the flattened secret at serve/render time.
 			name:       "duckdb gdrive creds connection reference",
 			sourceType: "duckdb",
-			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT * FROM read_csv('gdrive://id:1a2b3c')"}]}`),
 			raw:        json.RawMessage(`{"oauth":{"connection_id":"c1"}}`),
 		},
 		{
 			name:       "duckdb gdrive creds grant reference",
 			sourceType: "duckdb",
-			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://Reports/monthly.pdf')"}]}`),
+			config:     json.RawMessage(`{"extension":"gdrive","tables":[{"name":"invoices","query":"SELECT * FROM read_csv('gdrive://id:1a2b3c')"}]}`),
 			raw:        json.RawMessage(`{"oauth":{"grant_id":"g1"}}`),
 		},
 		{
 			// This refusal is load-bearing: the serve and render paths read
 			// "duckdb credential with an oauth member" as "gdrive" without
 			// consulting source_config, which only holds if saves enforce it.
-			name:         "duckdb oauth rejected on non-gdrive extension",
+			name:         "duckdb oauth rejected when gdrive is not loaded",
 			sourceType:   "duckdb",
 			config:       json.RawMessage(`{"extension":"mysql","attach":"database=shop","tables":[{"name":"orders"}]}`),
+			raw:          json.RawMessage(`{"oauth":{"connection_id":"c1"}}`),
+			wantErr:      true,
+			wantCredsErr: true,
+			errSubstr:    `only used by the "gdrive" extension`,
+		},
+		{
+			// gdrive among several, not gdrive alone: a PDF in Drive is
+			// still a Google-backed source.
+			name:       "duckdb gdrive creds oauth with a second extension",
+			sourceType: "duckdb",
+			config:     json.RawMessage(`{"extensions":["gdrive","pdf"],"tables":[{"name":"invoices","query":"SELECT page, text FROM read_pdf('gdrive://id:1a2b3c')"}]}`),
+			raw:        json.RawMessage(`{"oauth":{"connection_id":"c1"}}`),
+		},
+		{
+			name:         "duckdb oauth rejected on a list without gdrive",
+			sourceType:   "duckdb",
+			config:       json.RawMessage(`{"extensions":["pdf","httpfs"],"tables":[{"name":"t","query":"SELECT 1"}]}`),
 			raw:          json.RawMessage(`{"oauth":{"connection_id":"c1"}}`),
 			wantErr:      true,
 			wantCredsErr: true,

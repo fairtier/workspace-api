@@ -30,14 +30,19 @@ type PipelineServer struct {
 	// DeleteUploadedFile). Nil returns UNIMPLEMENTED, keeping the internal
 	// mux (which never serves these) honest.
 	FileDrop *workspace.FileDropService
+	// SourceTests backs the "Test connection" RPCs on both muxes: the Console
+	// queues a test, the worker claims and reports it. Nil returns
+	// UNIMPLEMENTED, which is what a deployment without the store should say.
+	SourceTests *workspace.SourceTestService
 
 	worker workerAuth
 }
 
 // NewInternalPipelineServer builds the worker-facing PipelineServer for the
-// internal mux. No FileDrop: the worker only polls configs and reports runs.
-func NewInternalPipelineServer(svc *workspace.PipelineService) *PipelineServer {
-	return &PipelineServer{Service: svc, worker: newWorkerAuth()}
+// internal mux. No FileDrop: the worker polls configs, reports runs, and
+// claims source tests.
+func NewInternalPipelineServer(svc *workspace.PipelineService, tests *workspace.SourceTestService) *PipelineServer {
+	return &PipelineServer{Service: svc, SourceTests: tests, worker: newWorkerAuth()}
 }
 
 // --- User-facing RPCs ---
@@ -319,7 +324,134 @@ func (s *PipelineServer) DeleteUploadedFile(ctx context.Context, req *connect.Re
 	return connect.NewResponse(&pipelinev1.DeleteUploadedFileResponse{}), nil
 }
 
+// --- Source tests ---
+
+// sourceTestProto is the wire projection. Config and credentials never appear
+// in it: what a caller sent in does not come back out, and the worker's copy
+// travels on the internal mux only.
+func sourceTestProto(t *workspace.SourceTest) *pipelinev1.SourceTest {
+	var completedAt string
+	if t.CompletedAt != nil {
+		completedAt = t.CompletedAt.UTC().Format(time.RFC3339)
+	}
+	return &pipelinev1.SourceTest{
+		Id:          t.ID,
+		Status:      t.Status,
+		Message:     t.Message,
+		Details:     t.Details,
+		CreatedAt:   t.CreatedAt.UTC().Format(time.RFC3339),
+		CompletedAt: completedAt,
+	}
+}
+
+func (s *PipelineServer) TestSourceConnection(ctx context.Context, req *connect.Request[pipelinev1.TestSourceConnectionRequest]) (*connect.Response[pipelinev1.TestSourceConnectionResponse], error) {
+	callerID := core.UserIDFromContext(ctx)
+	if callerID == "" {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+	}
+	if s.SourceTests == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("source tests are not available on this endpoint"))
+	}
+	if req.Msg.SourceType == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("source_type is required"))
+	}
+
+	creds := json.RawMessage(req.Msg.SourceCredentials)
+	if len(creds) == 0 && req.Msg.PipelineId != "" {
+		// The edit form's "leave empty to keep": credentials are write-only,
+		// so a test of an existing pipeline has to reach for the stored ones
+		// rather than ask the user to retype a password to test it.
+		stored, err := s.SourceTests.PipelineCredentials(ctx, callerID, workspace.PipelineID(req.Msg.PipelineId))
+		if err != nil {
+			return nil, domainError(err)
+		}
+		creds = stored
+	}
+
+	test, err := s.SourceTests.StartSourceTest(ctx, callerID, &workspace.SourceTest{
+		SourceType:        req.Msg.SourceType,
+		SourceConfig:      json.RawMessage(req.Msg.SourceConfig),
+		SourceCredentials: creds,
+	})
+	if err != nil {
+		return nil, domainError(err)
+	}
+	return connect.NewResponse(&pipelinev1.TestSourceConnectionResponse{Test: sourceTestProto(test)}), nil
+}
+
+func (s *PipelineServer) GetSourceTest(ctx context.Context, req *connect.Request[pipelinev1.GetSourceTestRequest]) (*connect.Response[pipelinev1.GetSourceTestResponse], error) {
+	callerID := core.UserIDFromContext(ctx)
+	if callerID == "" {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+	}
+	if s.SourceTests == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("source tests are not available on this endpoint"))
+	}
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("id is required"))
+	}
+	test, err := s.SourceTests.GetSourceTest(ctx, callerID, req.Msg.Id)
+	if err != nil {
+		return nil, domainError(err)
+	}
+	return connect.NewResponse(&pipelinev1.GetSourceTestResponse{Test: sourceTestProto(test)}), nil
+}
+
 // --- Worker-facing RPCs (tenant-bound service auth, internal mux only) ---
+
+func (s *PipelineServer) GetPendingSourceTests(ctx context.Context, req *connect.Request[pipelinev1.GetPendingSourceTestsRequest]) (*connect.Response[pipelinev1.GetPendingSourceTestsResponse], error) {
+	if req.Msg.CustomerSlug == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("customer_slug is required"))
+	}
+	callerSlug, err := s.worker.callerSlug(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if callerSlug != req.Msg.CustomerSlug {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("token tenant does not match customer_slug"))
+	}
+	if s.SourceTests == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("source tests are not available on this endpoint"))
+	}
+
+	tests, err := s.SourceTests.ClaimSourceTests(ctx, req.Msg.CustomerSlug)
+	if err != nil {
+		return nil, domainError(err)
+	}
+	out := make([]*pipelinev1.PendingSourceTest, 0, len(tests))
+	for _, t := range tests {
+		out = append(out, &pipelinev1.PendingSourceTest{
+			Id:                t.ID,
+			SourceType:        t.SourceType,
+			SourceConfig:      string(t.SourceConfig),
+			SourceCredentials: string(t.SourceCredentials),
+		})
+	}
+	return connect.NewResponse(&pipelinev1.GetPendingSourceTestsResponse{Tests: out}), nil
+}
+
+func (s *PipelineServer) ReportSourceTest(ctx context.Context, req *connect.Request[pipelinev1.ReportSourceTestRequest]) (*connect.Response[pipelinev1.ReportSourceTestResponse], error) {
+	callerSlug, err := s.worker.callerSlug(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.SourceTests == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("source tests are not available on this endpoint"))
+	}
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("id is required"))
+	}
+	if req.Msg.Status == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("status is required"))
+	}
+
+	err = s.SourceTests.ReportSourceTest(ctx, callerSlug, req.Msg.Id, req.Msg.Status, req.Msg.Message,
+		workspace.SanitizeSourceTestDetails(req.Msg.Details))
+	if err != nil {
+		return nil, domainError(err)
+	}
+	return connect.NewResponse(&pipelinev1.ReportSourceTestResponse{}), nil
+}
 
 func (s *PipelineServer) GetPipelineConfigs(ctx context.Context, req *connect.Request[pipelinev1.GetPipelineConfigsRequest]) (*connect.Response[pipelinev1.GetPipelineConfigsResponse], error) {
 	if req.Msg.CustomerSlug == "" {

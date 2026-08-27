@@ -90,6 +90,15 @@ type WorkspaceCapabilities struct {
 	// for, which is what it did before this field existed.
 	DuckDBExtensions []string `json:"duckdb_extensions,omitempty"`
 
+	// TestableSourceTypes is the set of source types whose connection this
+	// box's worker can probe ("Test connection"). Served for the same reason
+	// as the list above: the Console shows the button for the intersection of
+	// what it can render and what this box can actually run, so adding a probe
+	// is a worker change plus one line here — never a Console release. Absent
+	// (an older box) means no button, which is the honest default: a button
+	// that queues a test nothing will ever claim is worse than none.
+	TestableSourceTypes []string `json:"testable_source_types,omitempty"`
+
 	// GoogleOAuth reports only that this deployment CAN run the flow — it has a
 	// redirect URL and a state key. Whether the customer has connected their own
 	// Google app is a separate, mutable fact and deliberately not here: this
@@ -133,7 +142,8 @@ func BootstrapFromWorkspace(ws *workspace.Workspace, consoleClientID string, fil
 			GoogleOAuth:  googleOAuth,
 			// A build-time constant, not a workspace fact: the allowlist is
 			// this binary's, so it is read here rather than passed in.
-			DuckDBExtensions: workspace.DuckDBExtensions(),
+			DuckDBExtensions:    workspace.DuckDBExtensions(),
+			TestableSourceTypes: workspace.TestableSourceTypes(),
 		},
 	}
 }

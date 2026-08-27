@@ -63,7 +63,38 @@ service PipelineService {
   // and from the pipeline's configuration.
   rpc DeleteUploadedFile(DeleteUploadedFileRequest) returns (DeleteUploadedFileResponse) {}
 
+  // --- Source tests ---
+
+  // TestSourceConnection asks the workspace's own worker to open the source
+  // described by a request and report whether it could read it.
+  //
+  // It is a queued job, not a call: the probe MUST run where extraction runs
+  // — the worker's subprocess-per-run isolation, on the box, with the drivers
+  // and the network the real run has — and never in this process. So this
+  // returns a pending SourceTest immediately and the client polls GetSourceTest.
+  // The alternative, discovering a wrong password from the first scheduled run
+  // hours later, is the hole this closes.
+  //
+  // The request carries the config being edited, so a test works before the
+  // pipeline is ever saved (the wizard's whole point). Credentials may be
+  // omitted for an existing pipeline: the stored ones are used, the same way
+  // an edit leaves the field blank to keep them.
+  rpc TestSourceConnection(TestSourceConnectionRequest) returns (TestSourceConnectionResponse) {}
+
+  // GetSourceTest returns one test's current state. Tenant-scoped: a test id
+  // from another workspace is NOT_FOUND, not a permission error.
+  rpc GetSourceTest(GetSourceTestRequest) returns (GetSourceTestResponse) {}
+
   // --- Worker-facing (internal only) ---
+
+  // GetPendingSourceTests claims the customer's queued source tests, marking
+  // each running so a second poll does not run it twice, and returns the
+  // config and resolved credentials to probe with. A claimed test the worker
+  // never reports on expires on its own.
+  rpc GetPendingSourceTests(GetPendingSourceTestsRequest) returns (GetPendingSourceTestsResponse) {}
+
+  // ReportSourceTest records a probe's outcome.
+  rpc ReportSourceTest(ReportSourceTestRequest) returns (ReportSourceTestResponse) {}
 
   // GetPipelineConfigs returns the worker's trigger feed for a customer:
   // every enabled pipeline plus any disabled one with a pending (manually
@@ -347,3 +378,77 @@ message ReportPipelineRunRequest {
 }
 
 message ReportPipelineRunResponse {}
+
+// --- Source tests ---
+
+// SourceTest is one "can this thing read my source?" probe.
+message SourceTest {
+  string id = 1;
+  // "pending" (queued for the worker), "running" (claimed), "success", or
+  // "failed". A test the worker never claimed stays pending until it expires.
+  string status = 2;
+  // One human-readable line: what worked, or what did not. Credential values
+  // are scrubbed out of it by the worker before it is ever sent.
+  string message = 3;
+  // Per-table or per-step detail lines, in the order they were probed —
+  // "orders: 8 columns", "customers: relation does not exist".
+  repeated string details = 4;
+  // RFC 3339 timestamps; completed_at is empty until the worker reports.
+  string created_at = 5;
+  string completed_at = 6;
+}
+
+message TestSourceConnectionRequest {
+  // The source as it is on screen — a test is run BEFORE a save, so this is
+  // not read from any stored pipeline.
+  string source_type = 1;
+  // JSON string, as in CreatePipeline.
+  string source_config = 2;
+  // JSON string. Empty means "use what pipeline_id already has stored", which
+  // is what an edit form shows when the user does not retype a password.
+  string source_credentials = 3;
+  // Optional: the pipeline being edited. Only used to resolve omitted
+  // credentials, and only for a pipeline of the caller's own workspace.
+  string pipeline_id = 4;
+}
+
+message TestSourceConnectionResponse {
+  SourceTest test = 1;
+}
+
+message GetSourceTestRequest {
+  string id = 1;
+}
+
+message GetSourceTestResponse {
+  SourceTest test = 1;
+}
+
+// PendingSourceTest is what the worker needs to run one probe: the same
+// config/credentials pair a run would receive, with a workspace Connection
+// reference already resolved into a usable credential.
+message PendingSourceTest {
+  string id = 1;
+  string source_type = 2;
+  // JSON strings.
+  string source_config = 3;
+  string source_credentials = 4;
+}
+
+message GetPendingSourceTestsRequest {
+  string customer_slug = 1;
+}
+
+message GetPendingSourceTestsResponse {
+  repeated PendingSourceTest tests = 1;
+}
+
+message ReportSourceTestRequest {
+  string id = 1;
+  // "success" or "failed".
+  string status = 2;
+  string message = 3;
+  repeated string details = 4;
+}
+
+message ReportSourceTestResponse {}

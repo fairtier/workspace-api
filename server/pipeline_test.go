@@ -45,7 +45,7 @@ func newTestPipelineService() *workspace.PipelineService {
 }
 
 func TestGetPipelineConfigs_TenantBinding(t *testing.T) {
-	srv := NewInternalPipelineServer(newTestPipelineService())
+	srv := NewInternalPipelineServer(newTestPipelineService(), nil)
 	req := connect.NewRequest(&pipelinev1.GetPipelineConfigsRequest{CustomerSlug: "acme"})
 
 	t.Run("matching dlt-worker token", func(t *testing.T) {
@@ -302,4 +302,80 @@ func TestPipelineRunToPB(t *testing.T) {
 			t.Errorf("CompletedAt = %q, want empty", pb.CompletedAt)
 		}
 	})
+}
+
+// stubSourceTests is the smallest SourceTestStore that lets the handler run:
+// the tenant checks in front of it are what this file is about.
+type stubSourceTests struct {
+	claimedFor string
+}
+
+func (s *stubSourceTests) CreateSourceTest(context.Context, *workspace.SourceTest) error { return nil }
+
+func (s *stubSourceTests) GetSourceTest(context.Context, string, string) (*workspace.SourceTest, error) {
+	return nil, workspace.ErrSourceTestNotFound
+}
+
+func (s *stubSourceTests) ClaimPendingSourceTests(_ context.Context, slug string) ([]workspace.SourceTest, error) {
+	s.claimedFor = slug
+	return []workspace.SourceTest{{ID: "t1", CustomerSlug: slug, SourceType: "duckdb"}}, nil
+}
+
+func (s *stubSourceTests) CompleteSourceTest(context.Context, string, string, string, string, []string) error {
+	return nil
+}
+
+func (s *stubSourceTests) DeleteExpiredSourceTests(context.Context) (int64, error) { return 0, nil }
+
+// A source test carries the credentials of whoever queued it, so the worker
+// RPCs that hand them out need exactly the tenant binding the config poll has.
+func TestGetPendingSourceTests_TenantBinding(t *testing.T) {
+	store := &stubSourceTests{}
+	srv := NewInternalPipelineServer(newTestPipelineService(), &workspace.SourceTestService{Tests: store})
+	req := connect.NewRequest(&pipelinev1.GetPendingSourceTestsRequest{CustomerSlug: "acme"})
+
+	t.Run("matching dlt-worker token", func(t *testing.T) {
+		resp, err := srv.GetPendingSourceTests(withInternalCaller("dlt-worker-acme"), req)
+		if err != nil {
+			t.Fatalf("GetPendingSourceTests() error = %v", err)
+		}
+		if len(resp.Msg.Tests) != 1 {
+			t.Fatalf("got %d tests, want 1", len(resp.Msg.Tests))
+		}
+		if store.claimedFor != "acme" {
+			t.Errorf("claimed for %q, want acme", store.claimedFor)
+		}
+	})
+
+	t.Run("foreign tenant token denied", func(t *testing.T) {
+		_, err := srv.GetPendingSourceTests(withInternalCaller("dlt-worker-evil"), req)
+		if connect.CodeOf(err) != connect.CodePermissionDenied {
+			t.Fatalf("error = %v, want PermissionDenied", err)
+		}
+	})
+
+	t.Run("unauthenticated denied", func(t *testing.T) {
+		_, err := srv.GetPendingSourceTests(context.Background(), req)
+		if connect.CodeOf(err) != connect.CodeUnauthenticated {
+			t.Fatalf("error = %v, want Unauthenticated", err)
+		}
+	})
+}
+
+// The public mux mounts the same struct, so the user-facing half must not be
+// reachable without a user — and the worker half not at all (workerAuth's zero
+// value), which TestRegisterWorkspacePlaneRejectsInternalHandlers covers from
+// the other side.
+func TestSourceTestRPCsRequireAUser(t *testing.T) {
+	srv := &PipelineServer{Service: newTestPipelineService(), SourceTests: &workspace.SourceTestService{}}
+	_, err := srv.TestSourceConnection(context.Background(), connect.NewRequest(&pipelinev1.TestSourceConnectionRequest{
+		SourceType: "duckdb",
+	}))
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("TestSourceConnection() error = %v, want Unauthenticated", err)
+	}
+	_, err = srv.GetSourceTest(context.Background(), connect.NewRequest(&pipelinev1.GetSourceTestRequest{Id: "t1"}))
+	if connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("GetSourceTest() error = %v, want Unauthenticated", err)
+	}
 }

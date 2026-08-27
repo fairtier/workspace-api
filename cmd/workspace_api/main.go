@@ -209,6 +209,18 @@ func run() error {
 		Logger:       logger,
 	}
 
+	// "Test connection": the Console queues a probe, this box's own worker
+	// runs it. Same credential resolution as the worker poll, so a test of a
+	// pipeline that references a Google connection exercises that connection.
+	sourceTestSvc := &workspace.SourceTestService{
+		Workspaces:   resolver,
+		Tests:        repo,
+		Pipelines:    repo,
+		OAuthClients: repo,
+		Connections:  repo,
+		Logger:       logger,
+	}
+
 	fileDropSvc := &workspace.FileDropService{
 		Workspaces: resolver,
 		Pipelines:  repo,
@@ -310,7 +322,7 @@ func run() error {
 		LakekeeperUsers: &server.LakekeeperUserServer{Service: lakekeeperUserSvc},
 		Warehouses:      &server.WarehouseServer{Service: warehouseSvc},
 		Snapshots:       &server.SnapshotServer{Workspaces: resolver, Snapshots: boxCreds, HTTPClient: http.DefaultClient},
-		Pipelines:       &server.PipelineServer{Service: pipelineSvc, FileDrop: fileDropSvc},
+		Pipelines:       &server.PipelineServer{Service: pipelineSvc, FileDrop: fileDropSvc, SourceTests: sourceTestSvc},
 		Transformations: transformationServer,
 		PipelineAssist:  pipelineAssistServer,
 		Assist:          assistServer,
@@ -353,7 +365,7 @@ func run() error {
 		return err
 	}
 	internalMux := http.NewServeMux()
-	internalServers, serviceNames := buildInternalServers(pipelineSvc, transformationSvc)
+	internalServers, serviceNames := buildInternalServers(pipelineSvc, sourceTestSvc, transformationSvc)
 	server.RegisterWorkspaceInternal(internalMux, internalServers, internalOpts)
 	internalMux.Handle(grpchealth.NewHandler(grpchealth.NewStaticChecker(serviceNames...)))
 	internalMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(serviceNames...)))
@@ -365,6 +377,10 @@ func run() error {
 		PipelineMirror:       pipelineMirror,
 		TransformationMirror: transformationMirror,
 	})
+	// A source test carries a credential and belongs to nobody once it is
+	// answered, so it is swept like an abandoned OAuth grant rather than left
+	// to accumulate.
+	go workspace.SweepExpiredSourceTests(ctx, repo, loadDurationEnv("SOURCE_TEST_SWEEP_INTERVAL", 15*time.Minute), logger)
 	if googleOAuth != nil {
 		// This binary now mints grants, so it inherits the abandoned-grant
 		// sweep (a row left by a closed popup holds a live refresh token).
@@ -651,10 +667,11 @@ func buildInternalOpts(_ context.Context, logger *slog.Logger, ws *workspace.Wor
 // exactly as before 0.16.0.
 func buildInternalServers(
 	pipelineSvc *workspace.PipelineService,
+	sourceTestSvc *workspace.SourceTestService,
 	transformationSvc *workspace.TransformationService,
 ) (server.WorkspaceInternalServers, []string) {
 	servers := server.WorkspaceInternalServers{
-		Pipelines:       server.NewInternalPipelineServer(pipelineSvc),
+		Pipelines:       server.NewInternalPipelineServer(pipelineSvc, sourceTestSvc),
 		Transformations: server.NewInternalTransformationServer(transformationSvc),
 	}
 	return servers, workspaceServiceNamesWithoutBoxCredential()

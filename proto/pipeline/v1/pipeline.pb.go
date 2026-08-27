@@ -1919,6 +1919,570 @@ func (*ReportPipelineRunResponse) Descriptor() ([]byte, []int) {
 	return file_pipeline_proto_rawDescGZIP(), []int{30}
 }
 
+// SourceTest is one "can this thing read my source?" probe.
+type SourceTest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// "pending" (queued for the worker), "running" (claimed), "success", or
+	// "failed". A test the worker never claimed stays pending until it expires.
+	Status string `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	// One human-readable line: what worked, or what did not. Credential values
+	// are scrubbed out of it by the worker before it is ever sent.
+	Message string `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	// Per-table or per-step detail lines, in the order they were probed —
+	// "orders: 8 columns", "customers: relation does not exist".
+	Details []string `protobuf:"bytes,4,rep,name=details,proto3" json:"details,omitempty"`
+	// RFC 3339 timestamps; completed_at is empty until the worker reports.
+	CreatedAt     string `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CompletedAt   string `protobuf:"bytes,6,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SourceTest) Reset() {
+	*x = SourceTest{}
+	mi := &file_pipeline_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SourceTest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SourceTest) ProtoMessage() {}
+
+func (x *SourceTest) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SourceTest.ProtoReflect.Descriptor instead.
+func (*SourceTest) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *SourceTest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SourceTest) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *SourceTest) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *SourceTest) GetDetails() []string {
+	if x != nil {
+		return x.Details
+	}
+	return nil
+}
+
+func (x *SourceTest) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *SourceTest) GetCompletedAt() string {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return ""
+}
+
+type TestSourceConnectionRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The source as it is on screen — a test is run BEFORE a save, so this is
+	// not read from any stored pipeline.
+	SourceType string `protobuf:"bytes,1,opt,name=source_type,json=sourceType,proto3" json:"source_type,omitempty"`
+	// JSON string, as in CreatePipeline.
+	SourceConfig string `protobuf:"bytes,2,opt,name=source_config,json=sourceConfig,proto3" json:"source_config,omitempty"`
+	// JSON string. Empty means "use what pipeline_id already has stored", which
+	// is what an edit form shows when the user does not retype a password.
+	SourceCredentials string `protobuf:"bytes,3,opt,name=source_credentials,json=sourceCredentials,proto3" json:"source_credentials,omitempty"`
+	// Optional: the pipeline being edited. Only used to resolve omitted
+	// credentials, and only for a pipeline of the caller's own workspace.
+	PipelineId    string `protobuf:"bytes,4,opt,name=pipeline_id,json=pipelineId,proto3" json:"pipeline_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TestSourceConnectionRequest) Reset() {
+	*x = TestSourceConnectionRequest{}
+	mi := &file_pipeline_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TestSourceConnectionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TestSourceConnectionRequest) ProtoMessage() {}
+
+func (x *TestSourceConnectionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TestSourceConnectionRequest.ProtoReflect.Descriptor instead.
+func (*TestSourceConnectionRequest) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *TestSourceConnectionRequest) GetSourceType() string {
+	if x != nil {
+		return x.SourceType
+	}
+	return ""
+}
+
+func (x *TestSourceConnectionRequest) GetSourceConfig() string {
+	if x != nil {
+		return x.SourceConfig
+	}
+	return ""
+}
+
+func (x *TestSourceConnectionRequest) GetSourceCredentials() string {
+	if x != nil {
+		return x.SourceCredentials
+	}
+	return ""
+}
+
+func (x *TestSourceConnectionRequest) GetPipelineId() string {
+	if x != nil {
+		return x.PipelineId
+	}
+	return ""
+}
+
+type TestSourceConnectionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Test          *SourceTest            `protobuf:"bytes,1,opt,name=test,proto3" json:"test,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TestSourceConnectionResponse) Reset() {
+	*x = TestSourceConnectionResponse{}
+	mi := &file_pipeline_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TestSourceConnectionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TestSourceConnectionResponse) ProtoMessage() {}
+
+func (x *TestSourceConnectionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TestSourceConnectionResponse.ProtoReflect.Descriptor instead.
+func (*TestSourceConnectionResponse) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *TestSourceConnectionResponse) GetTest() *SourceTest {
+	if x != nil {
+		return x.Test
+	}
+	return nil
+}
+
+type GetSourceTestRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSourceTestRequest) Reset() {
+	*x = GetSourceTestRequest{}
+	mi := &file_pipeline_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSourceTestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSourceTestRequest) ProtoMessage() {}
+
+func (x *GetSourceTestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSourceTestRequest.ProtoReflect.Descriptor instead.
+func (*GetSourceTestRequest) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *GetSourceTestRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type GetSourceTestResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Test          *SourceTest            `protobuf:"bytes,1,opt,name=test,proto3" json:"test,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSourceTestResponse) Reset() {
+	*x = GetSourceTestResponse{}
+	mi := &file_pipeline_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSourceTestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSourceTestResponse) ProtoMessage() {}
+
+func (x *GetSourceTestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSourceTestResponse.ProtoReflect.Descriptor instead.
+func (*GetSourceTestResponse) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *GetSourceTestResponse) GetTest() *SourceTest {
+	if x != nil {
+		return x.Test
+	}
+	return nil
+}
+
+// PendingSourceTest is what the worker needs to run one probe: the same
+// config/credentials pair a run would receive, with a workspace Connection
+// reference already resolved into a usable credential.
+type PendingSourceTest struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	SourceType string                 `protobuf:"bytes,2,opt,name=source_type,json=sourceType,proto3" json:"source_type,omitempty"`
+	// JSON strings.
+	SourceConfig      string `protobuf:"bytes,3,opt,name=source_config,json=sourceConfig,proto3" json:"source_config,omitempty"`
+	SourceCredentials string `protobuf:"bytes,4,opt,name=source_credentials,json=sourceCredentials,proto3" json:"source_credentials,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *PendingSourceTest) Reset() {
+	*x = PendingSourceTest{}
+	mi := &file_pipeline_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PendingSourceTest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PendingSourceTest) ProtoMessage() {}
+
+func (x *PendingSourceTest) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PendingSourceTest.ProtoReflect.Descriptor instead.
+func (*PendingSourceTest) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *PendingSourceTest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PendingSourceTest) GetSourceType() string {
+	if x != nil {
+		return x.SourceType
+	}
+	return ""
+}
+
+func (x *PendingSourceTest) GetSourceConfig() string {
+	if x != nil {
+		return x.SourceConfig
+	}
+	return ""
+}
+
+func (x *PendingSourceTest) GetSourceCredentials() string {
+	if x != nil {
+		return x.SourceCredentials
+	}
+	return ""
+}
+
+type GetPendingSourceTestsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CustomerSlug  string                 `protobuf:"bytes,1,opt,name=customer_slug,json=customerSlug,proto3" json:"customer_slug,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPendingSourceTestsRequest) Reset() {
+	*x = GetPendingSourceTestsRequest{}
+	mi := &file_pipeline_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPendingSourceTestsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPendingSourceTestsRequest) ProtoMessage() {}
+
+func (x *GetPendingSourceTestsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPendingSourceTestsRequest.ProtoReflect.Descriptor instead.
+func (*GetPendingSourceTestsRequest) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *GetPendingSourceTestsRequest) GetCustomerSlug() string {
+	if x != nil {
+		return x.CustomerSlug
+	}
+	return ""
+}
+
+type GetPendingSourceTestsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tests         []*PendingSourceTest   `protobuf:"bytes,1,rep,name=tests,proto3" json:"tests,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPendingSourceTestsResponse) Reset() {
+	*x = GetPendingSourceTestsResponse{}
+	mi := &file_pipeline_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPendingSourceTestsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPendingSourceTestsResponse) ProtoMessage() {}
+
+func (x *GetPendingSourceTestsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPendingSourceTestsResponse.ProtoReflect.Descriptor instead.
+func (*GetPendingSourceTestsResponse) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *GetPendingSourceTestsResponse) GetTests() []*PendingSourceTest {
+	if x != nil {
+		return x.Tests
+	}
+	return nil
+}
+
+type ReportSourceTestRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// "success" or "failed".
+	Status        string   `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	Message       string   `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	Details       []string `protobuf:"bytes,4,rep,name=details,proto3" json:"details,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportSourceTestRequest) Reset() {
+	*x = ReportSourceTestRequest{}
+	mi := &file_pipeline_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportSourceTestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportSourceTestRequest) ProtoMessage() {}
+
+func (x *ReportSourceTestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportSourceTestRequest.ProtoReflect.Descriptor instead.
+func (*ReportSourceTestRequest) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ReportSourceTestRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ReportSourceTestRequest) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ReportSourceTestRequest) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *ReportSourceTestRequest) GetDetails() []string {
+	if x != nil {
+		return x.Details
+	}
+	return nil
+}
+
+type ReportSourceTestResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportSourceTestResponse) Reset() {
+	*x = ReportSourceTestResponse{}
+	mi := &file_pipeline_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportSourceTestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportSourceTestResponse) ProtoMessage() {}
+
+func (x *ReportSourceTestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pipeline_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportSourceTestResponse.ProtoReflect.Descriptor instead.
+func (*ReportSourceTestResponse) Descriptor() ([]byte, []int) {
+	return file_pipeline_proto_rawDescGZIP(), []int{40}
+}
+
 var File_pipeline_proto protoreflect.FileDescriptor
 
 const file_pipeline_proto_rawDesc = "" +
@@ -2069,7 +2633,45 @@ const file_pipeline_proto_rawDesc = "" +
 	"rowsLoaded\x12#\n" +
 	"\rerror_message\x18\x06 \x01(\tR\ferrorMessage\x12\x15\n" +
 	"\x06run_id\x18\a \x01(\tR\x05runId\"\x1b\n" +
-	"\x19ReportPipelineRunResponse2\xb8\t\n" +
+	"\x19ReportPipelineRunResponse\"\xaa\x01\n" +
+	"\n" +
+	"SourceTest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x12\x18\n" +
+	"\adetails\x18\x04 \x03(\tR\adetails\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\tR\tcreatedAt\x12!\n" +
+	"\fcompleted_at\x18\x06 \x01(\tR\vcompletedAt\"\xb3\x01\n" +
+	"\x1bTestSourceConnectionRequest\x12\x1f\n" +
+	"\vsource_type\x18\x01 \x01(\tR\n" +
+	"sourceType\x12#\n" +
+	"\rsource_config\x18\x02 \x01(\tR\fsourceConfig\x12-\n" +
+	"\x12source_credentials\x18\x03 \x01(\tR\x11sourceCredentials\x12\x1f\n" +
+	"\vpipeline_id\x18\x04 \x01(\tR\n" +
+	"pipelineId\"K\n" +
+	"\x1cTestSourceConnectionResponse\x12+\n" +
+	"\x04test\x18\x01 \x01(\v2\x17.pipeline.v1.SourceTestR\x04test\"&\n" +
+	"\x14GetSourceTestRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"D\n" +
+	"\x15GetSourceTestResponse\x12+\n" +
+	"\x04test\x18\x01 \x01(\v2\x17.pipeline.v1.SourceTestR\x04test\"\x98\x01\n" +
+	"\x11PendingSourceTest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
+	"\vsource_type\x18\x02 \x01(\tR\n" +
+	"sourceType\x12#\n" +
+	"\rsource_config\x18\x03 \x01(\tR\fsourceConfig\x12-\n" +
+	"\x12source_credentials\x18\x04 \x01(\tR\x11sourceCredentials\"C\n" +
+	"\x1cGetPendingSourceTestsRequest\x12#\n" +
+	"\rcustomer_slug\x18\x01 \x01(\tR\fcustomerSlug\"U\n" +
+	"\x1dGetPendingSourceTestsResponse\x124\n" +
+	"\x05tests\x18\x01 \x03(\v2\x1e.pipeline.v1.PendingSourceTestR\x05tests\"u\n" +
+	"\x17ReportSourceTestRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x12\x18\n" +
+	"\adetails\x18\x04 \x03(\tR\adetails\"\x1a\n" +
+	"\x18ReportSourceTestResponse2\xd6\f\n" +
 	"\x0fPipelineService\x12[\n" +
 	"\x0eCreatePipeline\x12\".pipeline.v1.CreatePipelineRequest\x1a#.pipeline.v1.CreatePipelineResponse\"\x00\x12X\n" +
 	"\rListPipelines\x12!.pipeline.v1.ListPipelinesRequest\x1a\".pipeline.v1.ListPipelinesResponse\"\x00\x12R\n" +
@@ -2080,7 +2682,11 @@ const file_pipeline_proto_rawDesc = "" +
 	"\x14ListPipelineVersions\x12(.pipeline.v1.ListPipelineVersionsRequest\x1a).pipeline.v1.ListPipelineVersionsResponse\"\x00\x12s\n" +
 	"\x16RestorePipelineVersion\x12*.pipeline.v1.RestorePipelineVersionRequest\x1a+.pipeline.v1.RestorePipelineVersionResponse\"\x00\x12d\n" +
 	"\x11ListUploadedFiles\x12%.pipeline.v1.ListUploadedFilesRequest\x1a&.pipeline.v1.ListUploadedFilesResponse\"\x00\x12g\n" +
-	"\x12DeleteUploadedFile\x12&.pipeline.v1.DeleteUploadedFileRequest\x1a'.pipeline.v1.DeleteUploadedFileResponse\"\x00\x12g\n" +
+	"\x12DeleteUploadedFile\x12&.pipeline.v1.DeleteUploadedFileRequest\x1a'.pipeline.v1.DeleteUploadedFileResponse\"\x00\x12m\n" +
+	"\x14TestSourceConnection\x12(.pipeline.v1.TestSourceConnectionRequest\x1a).pipeline.v1.TestSourceConnectionResponse\"\x00\x12X\n" +
+	"\rGetSourceTest\x12!.pipeline.v1.GetSourceTestRequest\x1a\".pipeline.v1.GetSourceTestResponse\"\x00\x12p\n" +
+	"\x15GetPendingSourceTests\x12).pipeline.v1.GetPendingSourceTestsRequest\x1a*.pipeline.v1.GetPendingSourceTestsResponse\"\x00\x12a\n" +
+	"\x10ReportSourceTest\x12$.pipeline.v1.ReportSourceTestRequest\x1a%.pipeline.v1.ReportSourceTestResponse\"\x00\x12g\n" +
 	"\x12GetPipelineConfigs\x12&.pipeline.v1.GetPipelineConfigsRequest\x1a'.pipeline.v1.GetPipelineConfigsResponse\"\x00\x12d\n" +
 	"\x11ReportPipelineRun\x12%.pipeline.v1.ReportPipelineRunRequest\x1a&.pipeline.v1.ReportPipelineRunResponse\"\x00B@Z>github.com/fairtier/workspace-api/proto/pipeline/v1;pipelinev1b\x06proto3"
 
@@ -2096,7 +2702,7 @@ func file_pipeline_proto_rawDescGZIP() []byte {
 	return file_pipeline_proto_rawDescData
 }
 
-var file_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
+var file_pipeline_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_pipeline_proto_goTypes = []any{
 	(*Pipeline)(nil),                       // 0: pipeline.v1.Pipeline
 	(*PipelineRun)(nil),                    // 1: pipeline.v1.PipelineRun
@@ -2129,6 +2735,16 @@ var file_pipeline_proto_goTypes = []any{
 	(*PipelineConfigItem)(nil),             // 28: pipeline.v1.PipelineConfigItem
 	(*ReportPipelineRunRequest)(nil),       // 29: pipeline.v1.ReportPipelineRunRequest
 	(*ReportPipelineRunResponse)(nil),      // 30: pipeline.v1.ReportPipelineRunResponse
+	(*SourceTest)(nil),                     // 31: pipeline.v1.SourceTest
+	(*TestSourceConnectionRequest)(nil),    // 32: pipeline.v1.TestSourceConnectionRequest
+	(*TestSourceConnectionResponse)(nil),   // 33: pipeline.v1.TestSourceConnectionResponse
+	(*GetSourceTestRequest)(nil),           // 34: pipeline.v1.GetSourceTestRequest
+	(*GetSourceTestResponse)(nil),          // 35: pipeline.v1.GetSourceTestResponse
+	(*PendingSourceTest)(nil),              // 36: pipeline.v1.PendingSourceTest
+	(*GetPendingSourceTestsRequest)(nil),   // 37: pipeline.v1.GetPendingSourceTestsRequest
+	(*GetPendingSourceTestsResponse)(nil),  // 38: pipeline.v1.GetPendingSourceTestsResponse
+	(*ReportSourceTestRequest)(nil),        // 39: pipeline.v1.ReportSourceTestRequest
+	(*ReportSourceTestResponse)(nil),       // 40: pipeline.v1.ReportSourceTestResponse
 }
 var file_pipeline_proto_depIdxs = []int32{
 	2,  // 0: pipeline.v1.ValidationErrors.violations:type_name -> pipeline.v1.FieldViolation
@@ -2142,35 +2758,46 @@ var file_pipeline_proto_depIdxs = []int32{
 	0,  // 8: pipeline.v1.RestorePipelineVersionResponse.pipeline:type_name -> pipeline.v1.Pipeline
 	21, // 9: pipeline.v1.ListUploadedFilesResponse.files:type_name -> pipeline.v1.UploadedFile
 	28, // 10: pipeline.v1.GetPipelineConfigsResponse.pipelines:type_name -> pipeline.v1.PipelineConfigItem
-	4,  // 11: pipeline.v1.PipelineService.CreatePipeline:input_type -> pipeline.v1.CreatePipelineRequest
-	6,  // 12: pipeline.v1.PipelineService.ListPipelines:input_type -> pipeline.v1.ListPipelinesRequest
-	8,  // 13: pipeline.v1.PipelineService.GetPipeline:input_type -> pipeline.v1.GetPipelineRequest
-	10, // 14: pipeline.v1.PipelineService.UpdatePipeline:input_type -> pipeline.v1.UpdatePipelineRequest
-	12, // 15: pipeline.v1.PipelineService.DeletePipeline:input_type -> pipeline.v1.DeletePipelineRequest
-	14, // 16: pipeline.v1.PipelineService.TriggerPipeline:input_type -> pipeline.v1.TriggerPipelineRequest
-	16, // 17: pipeline.v1.PipelineService.ListPipelineVersions:input_type -> pipeline.v1.ListPipelineVersionsRequest
-	19, // 18: pipeline.v1.PipelineService.RestorePipelineVersion:input_type -> pipeline.v1.RestorePipelineVersionRequest
-	22, // 19: pipeline.v1.PipelineService.ListUploadedFiles:input_type -> pipeline.v1.ListUploadedFilesRequest
-	24, // 20: pipeline.v1.PipelineService.DeleteUploadedFile:input_type -> pipeline.v1.DeleteUploadedFileRequest
-	26, // 21: pipeline.v1.PipelineService.GetPipelineConfigs:input_type -> pipeline.v1.GetPipelineConfigsRequest
-	29, // 22: pipeline.v1.PipelineService.ReportPipelineRun:input_type -> pipeline.v1.ReportPipelineRunRequest
-	5,  // 23: pipeline.v1.PipelineService.CreatePipeline:output_type -> pipeline.v1.CreatePipelineResponse
-	7,  // 24: pipeline.v1.PipelineService.ListPipelines:output_type -> pipeline.v1.ListPipelinesResponse
-	9,  // 25: pipeline.v1.PipelineService.GetPipeline:output_type -> pipeline.v1.GetPipelineResponse
-	11, // 26: pipeline.v1.PipelineService.UpdatePipeline:output_type -> pipeline.v1.UpdatePipelineResponse
-	13, // 27: pipeline.v1.PipelineService.DeletePipeline:output_type -> pipeline.v1.DeletePipelineResponse
-	15, // 28: pipeline.v1.PipelineService.TriggerPipeline:output_type -> pipeline.v1.TriggerPipelineResponse
-	18, // 29: pipeline.v1.PipelineService.ListPipelineVersions:output_type -> pipeline.v1.ListPipelineVersionsResponse
-	20, // 30: pipeline.v1.PipelineService.RestorePipelineVersion:output_type -> pipeline.v1.RestorePipelineVersionResponse
-	23, // 31: pipeline.v1.PipelineService.ListUploadedFiles:output_type -> pipeline.v1.ListUploadedFilesResponse
-	25, // 32: pipeline.v1.PipelineService.DeleteUploadedFile:output_type -> pipeline.v1.DeleteUploadedFileResponse
-	27, // 33: pipeline.v1.PipelineService.GetPipelineConfigs:output_type -> pipeline.v1.GetPipelineConfigsResponse
-	30, // 34: pipeline.v1.PipelineService.ReportPipelineRun:output_type -> pipeline.v1.ReportPipelineRunResponse
-	23, // [23:35] is the sub-list for method output_type
-	11, // [11:23] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	31, // 11: pipeline.v1.TestSourceConnectionResponse.test:type_name -> pipeline.v1.SourceTest
+	31, // 12: pipeline.v1.GetSourceTestResponse.test:type_name -> pipeline.v1.SourceTest
+	36, // 13: pipeline.v1.GetPendingSourceTestsResponse.tests:type_name -> pipeline.v1.PendingSourceTest
+	4,  // 14: pipeline.v1.PipelineService.CreatePipeline:input_type -> pipeline.v1.CreatePipelineRequest
+	6,  // 15: pipeline.v1.PipelineService.ListPipelines:input_type -> pipeline.v1.ListPipelinesRequest
+	8,  // 16: pipeline.v1.PipelineService.GetPipeline:input_type -> pipeline.v1.GetPipelineRequest
+	10, // 17: pipeline.v1.PipelineService.UpdatePipeline:input_type -> pipeline.v1.UpdatePipelineRequest
+	12, // 18: pipeline.v1.PipelineService.DeletePipeline:input_type -> pipeline.v1.DeletePipelineRequest
+	14, // 19: pipeline.v1.PipelineService.TriggerPipeline:input_type -> pipeline.v1.TriggerPipelineRequest
+	16, // 20: pipeline.v1.PipelineService.ListPipelineVersions:input_type -> pipeline.v1.ListPipelineVersionsRequest
+	19, // 21: pipeline.v1.PipelineService.RestorePipelineVersion:input_type -> pipeline.v1.RestorePipelineVersionRequest
+	22, // 22: pipeline.v1.PipelineService.ListUploadedFiles:input_type -> pipeline.v1.ListUploadedFilesRequest
+	24, // 23: pipeline.v1.PipelineService.DeleteUploadedFile:input_type -> pipeline.v1.DeleteUploadedFileRequest
+	32, // 24: pipeline.v1.PipelineService.TestSourceConnection:input_type -> pipeline.v1.TestSourceConnectionRequest
+	34, // 25: pipeline.v1.PipelineService.GetSourceTest:input_type -> pipeline.v1.GetSourceTestRequest
+	37, // 26: pipeline.v1.PipelineService.GetPendingSourceTests:input_type -> pipeline.v1.GetPendingSourceTestsRequest
+	39, // 27: pipeline.v1.PipelineService.ReportSourceTest:input_type -> pipeline.v1.ReportSourceTestRequest
+	26, // 28: pipeline.v1.PipelineService.GetPipelineConfigs:input_type -> pipeline.v1.GetPipelineConfigsRequest
+	29, // 29: pipeline.v1.PipelineService.ReportPipelineRun:input_type -> pipeline.v1.ReportPipelineRunRequest
+	5,  // 30: pipeline.v1.PipelineService.CreatePipeline:output_type -> pipeline.v1.CreatePipelineResponse
+	7,  // 31: pipeline.v1.PipelineService.ListPipelines:output_type -> pipeline.v1.ListPipelinesResponse
+	9,  // 32: pipeline.v1.PipelineService.GetPipeline:output_type -> pipeline.v1.GetPipelineResponse
+	11, // 33: pipeline.v1.PipelineService.UpdatePipeline:output_type -> pipeline.v1.UpdatePipelineResponse
+	13, // 34: pipeline.v1.PipelineService.DeletePipeline:output_type -> pipeline.v1.DeletePipelineResponse
+	15, // 35: pipeline.v1.PipelineService.TriggerPipeline:output_type -> pipeline.v1.TriggerPipelineResponse
+	18, // 36: pipeline.v1.PipelineService.ListPipelineVersions:output_type -> pipeline.v1.ListPipelineVersionsResponse
+	20, // 37: pipeline.v1.PipelineService.RestorePipelineVersion:output_type -> pipeline.v1.RestorePipelineVersionResponse
+	23, // 38: pipeline.v1.PipelineService.ListUploadedFiles:output_type -> pipeline.v1.ListUploadedFilesResponse
+	25, // 39: pipeline.v1.PipelineService.DeleteUploadedFile:output_type -> pipeline.v1.DeleteUploadedFileResponse
+	33, // 40: pipeline.v1.PipelineService.TestSourceConnection:output_type -> pipeline.v1.TestSourceConnectionResponse
+	35, // 41: pipeline.v1.PipelineService.GetSourceTest:output_type -> pipeline.v1.GetSourceTestResponse
+	38, // 42: pipeline.v1.PipelineService.GetPendingSourceTests:output_type -> pipeline.v1.GetPendingSourceTestsResponse
+	40, // 43: pipeline.v1.PipelineService.ReportSourceTest:output_type -> pipeline.v1.ReportSourceTestResponse
+	27, // 44: pipeline.v1.PipelineService.GetPipelineConfigs:output_type -> pipeline.v1.GetPipelineConfigsResponse
+	30, // 45: pipeline.v1.PipelineService.ReportPipelineRun:output_type -> pipeline.v1.ReportPipelineRunResponse
+	30, // [30:46] is the sub-list for method output_type
+	14, // [14:30] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_pipeline_proto_init() }
@@ -2184,7 +2811,7 @@ func file_pipeline_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pipeline_proto_rawDesc), len(file_pipeline_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   31,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

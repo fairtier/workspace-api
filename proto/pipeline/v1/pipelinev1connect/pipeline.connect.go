@@ -63,6 +63,18 @@ const (
 	// PipelineServiceDeleteUploadedFileProcedure is the fully-qualified name of the PipelineService's
 	// DeleteUploadedFile RPC.
 	PipelineServiceDeleteUploadedFileProcedure = "/pipeline.v1.PipelineService/DeleteUploadedFile"
+	// PipelineServiceTestSourceConnectionProcedure is the fully-qualified name of the PipelineService's
+	// TestSourceConnection RPC.
+	PipelineServiceTestSourceConnectionProcedure = "/pipeline.v1.PipelineService/TestSourceConnection"
+	// PipelineServiceGetSourceTestProcedure is the fully-qualified name of the PipelineService's
+	// GetSourceTest RPC.
+	PipelineServiceGetSourceTestProcedure = "/pipeline.v1.PipelineService/GetSourceTest"
+	// PipelineServiceGetPendingSourceTestsProcedure is the fully-qualified name of the
+	// PipelineService's GetPendingSourceTests RPC.
+	PipelineServiceGetPendingSourceTestsProcedure = "/pipeline.v1.PipelineService/GetPendingSourceTests"
+	// PipelineServiceReportSourceTestProcedure is the fully-qualified name of the PipelineService's
+	// ReportSourceTest RPC.
+	PipelineServiceReportSourceTestProcedure = "/pipeline.v1.PipelineService/ReportSourceTest"
 	// PipelineServiceGetPipelineConfigsProcedure is the fully-qualified name of the PipelineService's
 	// GetPipelineConfigs RPC.
 	PipelineServiceGetPipelineConfigsProcedure = "/pipeline.v1.PipelineService/GetPipelineConfigs"
@@ -101,6 +113,31 @@ type PipelineServiceClient interface {
 	// DeleteUploadedFile removes one dropped file from the customer's storage
 	// and from the pipeline's configuration.
 	DeleteUploadedFile(context.Context, *connect.Request[v1.DeleteUploadedFileRequest]) (*connect.Response[v1.DeleteUploadedFileResponse], error)
+	// TestSourceConnection asks the workspace's own worker to open the source
+	// described by a request and report whether it could read it.
+	//
+	// It is a queued job, not a call: the probe MUST run where extraction runs
+	// — the worker's subprocess-per-run isolation, on the box, with the drivers
+	// and the network the real run has — and never in this process. So this
+	// returns a pending SourceTest immediately and the client polls GetSourceTest.
+	// The alternative, discovering a wrong password from the first scheduled run
+	// hours later, is the hole this closes.
+	//
+	// The request carries the config being edited, so a test works before the
+	// pipeline is ever saved (the wizard's whole point). Credentials may be
+	// omitted for an existing pipeline: the stored ones are used, the same way
+	// an edit leaves the field blank to keep them.
+	TestSourceConnection(context.Context, *connect.Request[v1.TestSourceConnectionRequest]) (*connect.Response[v1.TestSourceConnectionResponse], error)
+	// GetSourceTest returns one test's current state. Tenant-scoped: a test id
+	// from another workspace is NOT_FOUND, not a permission error.
+	GetSourceTest(context.Context, *connect.Request[v1.GetSourceTestRequest]) (*connect.Response[v1.GetSourceTestResponse], error)
+	// GetPendingSourceTests claims the customer's queued source tests, marking
+	// each running so a second poll does not run it twice, and returns the
+	// config and resolved credentials to probe with. A claimed test the worker
+	// never reports on expires on its own.
+	GetPendingSourceTests(context.Context, *connect.Request[v1.GetPendingSourceTestsRequest]) (*connect.Response[v1.GetPendingSourceTestsResponse], error)
+	// ReportSourceTest records a probe's outcome.
+	ReportSourceTest(context.Context, *connect.Request[v1.ReportSourceTestRequest]) (*connect.Response[v1.ReportSourceTestResponse], error)
 	// GetPipelineConfigs returns the worker's trigger feed for a customer:
 	// every enabled pipeline plus any disabled one with a pending (manually
 	// triggered) run, carrying triggers, file_upload storage credentials and
@@ -183,6 +220,30 @@ func NewPipelineServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(pipelineServiceMethods.ByName("DeleteUploadedFile")),
 			connect.WithClientOptions(opts...),
 		),
+		testSourceConnection: connect.NewClient[v1.TestSourceConnectionRequest, v1.TestSourceConnectionResponse](
+			httpClient,
+			baseURL+PipelineServiceTestSourceConnectionProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("TestSourceConnection")),
+			connect.WithClientOptions(opts...),
+		),
+		getSourceTest: connect.NewClient[v1.GetSourceTestRequest, v1.GetSourceTestResponse](
+			httpClient,
+			baseURL+PipelineServiceGetSourceTestProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("GetSourceTest")),
+			connect.WithClientOptions(opts...),
+		),
+		getPendingSourceTests: connect.NewClient[v1.GetPendingSourceTestsRequest, v1.GetPendingSourceTestsResponse](
+			httpClient,
+			baseURL+PipelineServiceGetPendingSourceTestsProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("GetPendingSourceTests")),
+			connect.WithClientOptions(opts...),
+		),
+		reportSourceTest: connect.NewClient[v1.ReportSourceTestRequest, v1.ReportSourceTestResponse](
+			httpClient,
+			baseURL+PipelineServiceReportSourceTestProcedure,
+			connect.WithSchema(pipelineServiceMethods.ByName("ReportSourceTest")),
+			connect.WithClientOptions(opts...),
+		),
 		getPipelineConfigs: connect.NewClient[v1.GetPipelineConfigsRequest, v1.GetPipelineConfigsResponse](
 			httpClient,
 			baseURL+PipelineServiceGetPipelineConfigsProcedure,
@@ -210,6 +271,10 @@ type pipelineServiceClient struct {
 	restorePipelineVersion *connect.Client[v1.RestorePipelineVersionRequest, v1.RestorePipelineVersionResponse]
 	listUploadedFiles      *connect.Client[v1.ListUploadedFilesRequest, v1.ListUploadedFilesResponse]
 	deleteUploadedFile     *connect.Client[v1.DeleteUploadedFileRequest, v1.DeleteUploadedFileResponse]
+	testSourceConnection   *connect.Client[v1.TestSourceConnectionRequest, v1.TestSourceConnectionResponse]
+	getSourceTest          *connect.Client[v1.GetSourceTestRequest, v1.GetSourceTestResponse]
+	getPendingSourceTests  *connect.Client[v1.GetPendingSourceTestsRequest, v1.GetPendingSourceTestsResponse]
+	reportSourceTest       *connect.Client[v1.ReportSourceTestRequest, v1.ReportSourceTestResponse]
 	getPipelineConfigs     *connect.Client[v1.GetPipelineConfigsRequest, v1.GetPipelineConfigsResponse]
 	reportPipelineRun      *connect.Client[v1.ReportPipelineRunRequest, v1.ReportPipelineRunResponse]
 }
@@ -264,6 +329,26 @@ func (c *pipelineServiceClient) DeleteUploadedFile(ctx context.Context, req *con
 	return c.deleteUploadedFile.CallUnary(ctx, req)
 }
 
+// TestSourceConnection calls pipeline.v1.PipelineService.TestSourceConnection.
+func (c *pipelineServiceClient) TestSourceConnection(ctx context.Context, req *connect.Request[v1.TestSourceConnectionRequest]) (*connect.Response[v1.TestSourceConnectionResponse], error) {
+	return c.testSourceConnection.CallUnary(ctx, req)
+}
+
+// GetSourceTest calls pipeline.v1.PipelineService.GetSourceTest.
+func (c *pipelineServiceClient) GetSourceTest(ctx context.Context, req *connect.Request[v1.GetSourceTestRequest]) (*connect.Response[v1.GetSourceTestResponse], error) {
+	return c.getSourceTest.CallUnary(ctx, req)
+}
+
+// GetPendingSourceTests calls pipeline.v1.PipelineService.GetPendingSourceTests.
+func (c *pipelineServiceClient) GetPendingSourceTests(ctx context.Context, req *connect.Request[v1.GetPendingSourceTestsRequest]) (*connect.Response[v1.GetPendingSourceTestsResponse], error) {
+	return c.getPendingSourceTests.CallUnary(ctx, req)
+}
+
+// ReportSourceTest calls pipeline.v1.PipelineService.ReportSourceTest.
+func (c *pipelineServiceClient) ReportSourceTest(ctx context.Context, req *connect.Request[v1.ReportSourceTestRequest]) (*connect.Response[v1.ReportSourceTestResponse], error) {
+	return c.reportSourceTest.CallUnary(ctx, req)
+}
+
 // GetPipelineConfigs calls pipeline.v1.PipelineService.GetPipelineConfigs.
 func (c *pipelineServiceClient) GetPipelineConfigs(ctx context.Context, req *connect.Request[v1.GetPipelineConfigsRequest]) (*connect.Response[v1.GetPipelineConfigsResponse], error) {
 	return c.getPipelineConfigs.CallUnary(ctx, req)
@@ -304,6 +389,31 @@ type PipelineServiceHandler interface {
 	// DeleteUploadedFile removes one dropped file from the customer's storage
 	// and from the pipeline's configuration.
 	DeleteUploadedFile(context.Context, *connect.Request[v1.DeleteUploadedFileRequest]) (*connect.Response[v1.DeleteUploadedFileResponse], error)
+	// TestSourceConnection asks the workspace's own worker to open the source
+	// described by a request and report whether it could read it.
+	//
+	// It is a queued job, not a call: the probe MUST run where extraction runs
+	// — the worker's subprocess-per-run isolation, on the box, with the drivers
+	// and the network the real run has — and never in this process. So this
+	// returns a pending SourceTest immediately and the client polls GetSourceTest.
+	// The alternative, discovering a wrong password from the first scheduled run
+	// hours later, is the hole this closes.
+	//
+	// The request carries the config being edited, so a test works before the
+	// pipeline is ever saved (the wizard's whole point). Credentials may be
+	// omitted for an existing pipeline: the stored ones are used, the same way
+	// an edit leaves the field blank to keep them.
+	TestSourceConnection(context.Context, *connect.Request[v1.TestSourceConnectionRequest]) (*connect.Response[v1.TestSourceConnectionResponse], error)
+	// GetSourceTest returns one test's current state. Tenant-scoped: a test id
+	// from another workspace is NOT_FOUND, not a permission error.
+	GetSourceTest(context.Context, *connect.Request[v1.GetSourceTestRequest]) (*connect.Response[v1.GetSourceTestResponse], error)
+	// GetPendingSourceTests claims the customer's queued source tests, marking
+	// each running so a second poll does not run it twice, and returns the
+	// config and resolved credentials to probe with. A claimed test the worker
+	// never reports on expires on its own.
+	GetPendingSourceTests(context.Context, *connect.Request[v1.GetPendingSourceTestsRequest]) (*connect.Response[v1.GetPendingSourceTestsResponse], error)
+	// ReportSourceTest records a probe's outcome.
+	ReportSourceTest(context.Context, *connect.Request[v1.ReportSourceTestRequest]) (*connect.Response[v1.ReportSourceTestResponse], error)
 	// GetPipelineConfigs returns the worker's trigger feed for a customer:
 	// every enabled pipeline plus any disabled one with a pending (manually
 	// triggered) run, carrying triggers, file_upload storage credentials and
@@ -382,6 +492,30 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 		connect.WithSchema(pipelineServiceMethods.ByName("DeleteUploadedFile")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pipelineServiceTestSourceConnectionHandler := connect.NewUnaryHandler(
+		PipelineServiceTestSourceConnectionProcedure,
+		svc.TestSourceConnection,
+		connect.WithSchema(pipelineServiceMethods.ByName("TestSourceConnection")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pipelineServiceGetSourceTestHandler := connect.NewUnaryHandler(
+		PipelineServiceGetSourceTestProcedure,
+		svc.GetSourceTest,
+		connect.WithSchema(pipelineServiceMethods.ByName("GetSourceTest")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pipelineServiceGetPendingSourceTestsHandler := connect.NewUnaryHandler(
+		PipelineServiceGetPendingSourceTestsProcedure,
+		svc.GetPendingSourceTests,
+		connect.WithSchema(pipelineServiceMethods.ByName("GetPendingSourceTests")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pipelineServiceReportSourceTestHandler := connect.NewUnaryHandler(
+		PipelineServiceReportSourceTestProcedure,
+		svc.ReportSourceTest,
+		connect.WithSchema(pipelineServiceMethods.ByName("ReportSourceTest")),
+		connect.WithHandlerOptions(opts...),
+	)
 	pipelineServiceGetPipelineConfigsHandler := connect.NewUnaryHandler(
 		PipelineServiceGetPipelineConfigsProcedure,
 		svc.GetPipelineConfigs,
@@ -416,6 +550,14 @@ func NewPipelineServiceHandler(svc PipelineServiceHandler, opts ...connect.Handl
 			pipelineServiceListUploadedFilesHandler.ServeHTTP(w, r)
 		case PipelineServiceDeleteUploadedFileProcedure:
 			pipelineServiceDeleteUploadedFileHandler.ServeHTTP(w, r)
+		case PipelineServiceTestSourceConnectionProcedure:
+			pipelineServiceTestSourceConnectionHandler.ServeHTTP(w, r)
+		case PipelineServiceGetSourceTestProcedure:
+			pipelineServiceGetSourceTestHandler.ServeHTTP(w, r)
+		case PipelineServiceGetPendingSourceTestsProcedure:
+			pipelineServiceGetPendingSourceTestsHandler.ServeHTTP(w, r)
+		case PipelineServiceReportSourceTestProcedure:
+			pipelineServiceReportSourceTestHandler.ServeHTTP(w, r)
 		case PipelineServiceGetPipelineConfigsProcedure:
 			pipelineServiceGetPipelineConfigsHandler.ServeHTTP(w, r)
 		case PipelineServiceReportPipelineRunProcedure:
@@ -467,6 +609,22 @@ func (UnimplementedPipelineServiceHandler) ListUploadedFiles(context.Context, *c
 
 func (UnimplementedPipelineServiceHandler) DeleteUploadedFile(context.Context, *connect.Request[v1.DeleteUploadedFileRequest]) (*connect.Response[v1.DeleteUploadedFileResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pipeline.v1.PipelineService.DeleteUploadedFile is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) TestSourceConnection(context.Context, *connect.Request[v1.TestSourceConnectionRequest]) (*connect.Response[v1.TestSourceConnectionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pipeline.v1.PipelineService.TestSourceConnection is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) GetSourceTest(context.Context, *connect.Request[v1.GetSourceTestRequest]) (*connect.Response[v1.GetSourceTestResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pipeline.v1.PipelineService.GetSourceTest is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) GetPendingSourceTests(context.Context, *connect.Request[v1.GetPendingSourceTestsRequest]) (*connect.Response[v1.GetPendingSourceTestsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pipeline.v1.PipelineService.GetPendingSourceTests is not implemented"))
+}
+
+func (UnimplementedPipelineServiceHandler) ReportSourceTest(context.Context, *connect.Request[v1.ReportSourceTestRequest]) (*connect.Response[v1.ReportSourceTestResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("pipeline.v1.PipelineService.ReportSourceTest is not implemented"))
 }
 
 func (UnimplementedPipelineServiceHandler) GetPipelineConfigs(context.Context, *connect.Request[v1.GetPipelineConfigsRequest]) (*connect.Response[v1.GetPipelineConfigsResponse], error) {

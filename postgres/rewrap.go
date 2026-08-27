@@ -58,6 +58,11 @@ func WorkspaceEncryptedColumns() []EncryptedColumn {
 		{Table: "google_oauth_grants", KeyColumns: []string{"grant_id"}, Column: "refresh_token"},
 		{Table: "customer_oauth_clients", KeyColumns: []string{"customer_slug", "provider"}, Column: "client_secret"},
 		{Table: "connections", KeyColumns: []string{"id"}, Column: "credentials"},
+		// Short-lived (15 minutes, swept), but listed all the same: the audit
+		// half walks every text column and would find its ciphertext with or
+		// without this line, and a rotation that skipped it would leave a
+		// live credential under a key about to be destroyed.
+		{Table: "source_tests", KeyColumns: []string{"id"}, Column: "source_credentials"},
 	}
 }
 

@@ -51,6 +51,8 @@ linters:
               desc: infra adapter — consume via a workspace port
             - pkg: github.com/fairtier/workspace-api/llm
               desc: infra adapter — consume via a workspace port
+            - pkg: github.com/fairtier/workspace-api/relay
+              desc: infra adapter — consume via a workspace port
             - pkg: github.com/fairtier/workspace-api/duckflight
               desc: infra adapter — consume via a workspace port
             - pkg: github.com/fairtier/workspace-api/oauthgoogle

@@ -3,18 +3,16 @@ package llm
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/fairtier/workspace-api/relay"
 	"github.com/fairtier/workspace-api/workspace"
 )
 
@@ -42,9 +40,8 @@ type RemoteCaller struct {
 	HTTPClient *http.Client
 	Logger     *slog.Logger
 
-	mu       sync.Mutex
-	token    string
-	tokenExp time.Time
+	tokensOnce sync.Once
+	tokens     *relay.TokenSource
 }
 
 // NewRemoteCaller constructs a relay caller.
@@ -211,69 +208,17 @@ func relayStatusError(status int, body []byte) error {
 	return fmt.Errorf("FairTier API assist relay: status %d (%s): %s", status, ce.Code, msg)
 }
 
-// bearer returns a cached token, minting a fresh one when missing, near
-// expiry, or when force is set (after a 401).
+// bearer returns the relay token, minted and cached by the shared
+// relay.TokenSource (built lazily so the zero-value caller from tests and
+// the constructor both work).
 func (c *RemoteCaller) bearer(ctx context.Context, force bool) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !force && c.token != "" && time.Now().Before(c.tokenExp.Add(-60*time.Second)) {
-		return c.token, nil
-	}
-
-	form := url.Values{
-		"grant_type":    {"client_credentials"},
-		"client_id":     {c.ClientID},
-		"client_secret": {c.ClientSecret},
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenURL,
-		strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("build token request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.httpClient().Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("mint box token: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("mint box token: status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
-	}
-
-	var out struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode token response: %w", err)
-	}
-	if out.AccessToken == "" {
-		return "", fmt.Errorf("mint box token: empty access_token")
-	}
-
-	c.token = out.AccessToken
-	c.tokenExp = tokenExpiry(out.AccessToken, out.ExpiresIn)
-	return c.token, nil
-}
-
-// tokenExpiry picks the token's lifetime: expires_in when given, else the
-// JWT's own exp claim (decoded without verification — this is a cache hint,
-// not an authentication decision), else a conservative five minutes.
-func tokenExpiry(token string, expiresIn int64) time.Time {
-	if expiresIn > 0 {
-		return time.Now().Add(time.Duration(expiresIn) * time.Second)
-	}
-	if parts := strings.Split(token, "."); len(parts) == 3 {
-		if payload, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
-			var claims struct {
-				Exp int64 `json:"exp"`
-			}
-			if json.Unmarshal(payload, &claims) == nil && claims.Exp > 0 {
-				return time.Unix(claims.Exp, 0)
-			}
+	c.tokensOnce.Do(func() {
+		c.tokens = &relay.TokenSource{
+			TokenURL:     c.TokenURL,
+			ClientID:     c.ClientID,
+			ClientSecret: c.ClientSecret,
+			HTTPClient:   c.httpClient(),
 		}
-	}
-	return time.Now().Add(5 * time.Minute)
+	})
+	return c.tokens.Bearer(ctx, force)
 }

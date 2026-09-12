@@ -12,7 +12,7 @@ require (
 	github.com/MicahParks/jwkset v0.11.3
 	github.com/MicahParks/keyfunc/v3 v3.8.2
 	github.com/anthropics/anthropic-sdk-go v1.71.0
-	github.com/apache/arrow-go/v18 v18.7.0
+	github.com/apache/arrow-go/v18 v18.8.0
 	github.com/casdoor/casdoor-go-sdk v1.54.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
@@ -42,7 +42,7 @@ require (
 	atomicgo.dev/schedule v0.1.0 // indirect
 	cloud.google.com/go v0.123.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
-	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/andybalholm/brotli v1.2.3 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/apache/iceberg-go v0.6.0 // indirect
 	github.com/apache/thrift v0.24.0 // indirect
@@ -87,6 +87,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/lithammer/fuzzysearch v1.1.8 // indirect
 	github.com/mattn/go-runewidth v0.0.28 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
@@ -105,7 +106,7 @@ require (
 	// Held at 1.7.x: avro 1.8.0 changed SchemaNode to an interface, which
 	// does not compile against apache/iceberg-go v0.6.0 (the latest).
 	// Unpin once iceberg-go ships a release built against avro 1.8.
-	github.com/twmb/avro v1.7.2 // indirect
+	github.com/twmb/avro v1.8.0 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect

@@ -54,8 +54,8 @@ jobs:
           # Pinned rather than floating on latest: the config enables the
           # gofumpt formatter, and a linter bump can add formatting rules that
           # turn an unrelated PR red. Keep in step with the monorepo's
-          # golangci_version pin in ci/lint-go.yml.
-          version: v2.13.1
+          # golangci-version input in .github/workflows/pr-checks.yml.
+          version: v2.13.2
           args: --timeout=5m
 
   test:

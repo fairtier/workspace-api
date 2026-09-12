@@ -17,8 +17,10 @@ import (
 const alertPath = "/alertrelay.v1.AlertRelayService/ReportPipelineFailure"
 
 // alertTimeout bounds one report end to end, token mint included. The
-// pipeline service calls this after the run is already recorded, so a slow
-// relay must not hold the worker's report.
+// pipeline service calls this synchronously, after the run is already
+// recorded, so this bound is time the worker's report call can still wait:
+// the dlt-worker's report client allows 30s for the whole call, and 10s here
+// sits well inside that.
 const alertTimeout = 10 * time.Second
 
 // AlertClient implements workspace.PipelineAlerter against the FairTier API's

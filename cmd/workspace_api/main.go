@@ -48,6 +48,7 @@ import (
 	"github.com/fairtier/workspace-api/objstore"
 	"github.com/fairtier/workspace-api/postgres"
 	"github.com/fairtier/workspace-api/proto/boxcredential/v1/boxcredentialv1connect"
+	"github.com/fairtier/workspace-api/relay"
 	"github.com/fairtier/workspace-api/server"
 	"github.com/fairtier/workspace-api/telemetry"
 	"github.com/fairtier/workspace-api/version"
@@ -208,6 +209,11 @@ func run() error {
 		OAuthClients: repo,
 		Logger:       logger,
 	}
+
+	// Failure emails ride the FairTier API's alert relay on a hosted
+	// workspace; nil (unset) means the in-app notification is the only
+	// signal. See buildAlertRelay for the ladder.
+	pipelineSvc.Alerts = buildAlertRelay(os.Getenv, logger)
 
 	// "Test connection": the Console queues a probe, this box's own worker
 	// runs it. Same credential resolution as the worker poll, so a test of a
@@ -745,6 +751,43 @@ func buildAssistServers(resolver workspace.Resolver, logger *slog.Logger) (*serv
 	return &server.PipelineAssistServer{Service: pipelineAssist}, &server.AssistServer{Service: assistSvc}
 }
 
+// relayIdentity returns the client-credentials identity every FairTier API
+// relay authenticates with — this workspace's own Casdoor token endpoint and
+// OAuth client pair. The generic FAIRTIER_RELAY_* names are read first; the
+// assist-named trio is honoured as a fallback for one release so a hosted
+// chart that predates the generic names keeps drafting.
+func relayIdentity(getenv func(string) string) (tokenURL, clientID, clientSecret string) {
+	tokenURL = cmp.Or(getenv("FAIRTIER_RELAY_TOKEN_URL"), getenv("FAIRTIER_ASSIST_TOKEN_URL"))
+	clientID = cmp.Or(getenv("FAIRTIER_RELAY_OIDC_CLIENT_ID"), getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID"))
+	clientSecret = cmp.Or(getenv("FAIRTIER_RELAY_OIDC_CLIENT_SECRET"), getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET"))
+	return tokenURL, clientID, clientSecret
+}
+
+// buildAlertRelay wires pipeline-failure emails through the FairTier API's
+// alert relay when FAIRTIER_ALERT_RELAY_URL is set (by the hosted chart, never
+// by hand). Nil keeps PipelineService.Alerts off: a failed run then raises
+// the in-app notification alone, which is what a self-hosted workspace gets
+// until it configures a sender of its own. A half-set configuration is a
+// warning, not a fatal — a workspace keeps serving whatever the alert wiring
+// says.
+func buildAlertRelay(getenv func(string) string, logger *slog.Logger) workspace.PipelineAlerter {
+	baseURL := getenv("FAIRTIER_ALERT_RELAY_URL")
+	if baseURL == "" {
+		return nil
+	}
+	tokenURL, clientID, clientSecret := relayIdentity(getenv)
+	if tokenURL == "" || clientID == "" || clientSecret == "" {
+		logger.Warn("pipeline failure alerts disabled: FAIRTIER_ALERT_RELAY_URL is set but FAIRTIER_RELAY_TOKEN_URL or the OIDC client pair is missing")
+		return nil
+	}
+	logger.Info("pipeline failure alerts enabled", "provider", "fairtier_relay")
+	return relay.NewAlertClient(baseURL, &relay.TokenSource{
+		TokenURL:     tokenURL,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+	}, logger)
+}
+
 // chooseStructuredCaller picks the LLM backend for AI drafting; first match
 // wins, nil means unconfigured (the draft RPCs answer UNIMPLEMENTED):
 //
@@ -754,10 +797,10 @@ func buildAssistServers(resolver workspace.Resolver, logger *slog.Logger) (*serv
 //     (OpenAI, Groq, a local Ollama/vLLM; LLM_API_KEY may be "none" for
 //     endpoints without auth, but must be set so a half-configured pair is
 //     visible rather than silently unauthenticated).
-//  4. FAIRTIER_ASSIST_URL + FAIRTIER_ASSIST_TOKEN_URL +
-//     FAIRTIER_ASSIST_OIDC_CLIENT_ID/_SECRET — the FairTier API assist relay.
-//     Set by the hosted box chart, never by hand, which is what makes any
-//     explicit self-hoster key above win automatically.
+//  4. FAIRTIER_ASSIST_URL + the relay identity (FAIRTIER_RELAY_TOKEN_URL +
+//     FAIRTIER_RELAY_OIDC_CLIENT_ID/_SECRET, see relayIdentity) — the FairTier
+//     API assist relay. Set by the hosted chart, never by hand, which is what
+//     makes any explicit self-hoster key above win automatically.
 //
 // Explicit keys sit above the relay on purpose: an operator who configures
 // their own provider has opted out of relayed drafting entirely.
@@ -772,7 +815,13 @@ func chooseStructuredCaller(getenv func(string) string, logger *slog.Logger) llm
 	case getenv("LLM_BASE_URL") != "":
 		return openAICompatCallerFromEnv(getenv, logger)
 	case getenv("FAIRTIER_ASSIST_URL") != "":
-		return relayCallerFromEnv(getenv, logger)
+		tokenURL, clientID, clientSecret := relayIdentity(getenv)
+		if tokenURL == "" || clientID == "" || clientSecret == "" {
+			logger.Warn("AI drafting disabled: FAIRTIER_ASSIST_URL is set but the relay token URL or OIDC client pair is missing")
+			return nil
+		}
+		logger.Info("AI drafting enabled", "provider", "fairtier_relay")
+		return llm.NewRemoteCaller(getenv("FAIRTIER_ASSIST_URL"), tokenURL, clientID, clientSecret, logger)
 	}
 	return nil
 }
@@ -790,24 +839,6 @@ func openAICompatCallerFromEnv(getenv func(string) string, logger *slog.Logger) 
 	}
 	logger.Info("AI drafting enabled", "provider", "openai_compat", "model", getenv("LLM_MODEL"))
 	return llm.NewOpenAICompatCaller(getenv("LLM_BASE_URL"), apiKey, getenv("LLM_MODEL"), logger)
-}
-
-// relayCallerFromEnv builds the FairTier API relay rung; likewise, a partial
-// FAIRTIER_ASSIST_* set disables drafting.
-func relayCallerFromEnv(getenv func(string) string, logger *slog.Logger) llm.StructuredCaller {
-	if getenv("FAIRTIER_ASSIST_TOKEN_URL") == "" ||
-		getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID") == "" ||
-		getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET") == "" {
-		logger.Warn("AI drafting disabled: FAIRTIER_ASSIST_URL is set but the token URL or OIDC client pair is missing")
-		return nil
-	}
-	logger.Info("AI drafting enabled", "provider", "fairtier_relay")
-	return llm.NewRemoteCaller(
-		getenv("FAIRTIER_ASSIST_URL"),
-		getenv("FAIRTIER_ASSIST_TOKEN_URL"),
-		getenv("FAIRTIER_ASSIST_OIDC_CLIENT_ID"),
-		getenv("FAIRTIER_ASSIST_OIDC_CLIENT_SECRET"),
-		logger)
 }
 
 // buildFingerprinter mirrors the control-plane binary: keyed HMAC fingerprints

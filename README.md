@@ -99,6 +99,8 @@ for co-located workers and should not be published.
 | `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` (plus `ANTHROPIC_MODEL` / `DEEPSEEK_MODEL`) | | Enables the optional AI drafting assists with your own provider key. Without any AI backend those endpoints stay unavailable. |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | | AI drafting against any OpenAI-compatible chat-completions endpoint (OpenAI, Groq, a local Ollama/vLLM). All three are required; set `LLM_API_KEY=none` for endpoints without auth. An explicit `DEEPSEEK_API_KEY`/`ANTHROPIC_API_KEY` takes precedence. |
 | `FAIRTIER_ASSIST_URL`, `FAIRTIER_ASSIST_TOKEN_URL`, `FAIRTIER_ASSIST_OIDC_CLIENT_ID`, `FAIRTIER_ASSIST_OIDC_CLIENT_SECRET` | | AI drafting through the FairTier API's assist relay (hosted deployments; set by the platform, not by hand). Any of the provider keys above takes precedence, so a self-hoster's own key always wins. |
+| `FAIRTIER_ALERT_RELAY_URL` | | Pipeline failure emails through the FairTier API's alert relay (hosted deployments; set by the platform, not by hand). Unset: a failed run raises the in-app notification only. |
+| `FAIRTIER_RELAY_TOKEN_URL`, `FAIRTIER_RELAY_OIDC_CLIENT_ID`, `FAIRTIER_RELAY_OIDC_CLIENT_SECRET` | | The one identity every FairTier API relay authenticates with — this workspace's own Casdoor token endpoint and OAuth client pair. The `FAIRTIER_ASSIST_TOKEN_URL` / `_OIDC_CLIENT_*` names are still read as a fallback. |
 | `DEMO_R2_*` | | Object storage holding the sample dataset for the starter project. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | | OTLP collector to send traces and metrics to. Unset means no telemetry is produced at all — see [Observability](#observability). |
 

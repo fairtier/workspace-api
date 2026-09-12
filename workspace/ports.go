@@ -47,8 +47,10 @@ type CasdoorAppManager interface {
 // PipelineAlerter, when set on PipelineService, sends an out-of-band alert
 // (email) for a failed run. Optional (nil = no alerts). Best-effort: errors
 // are logged by the caller, never propagated to the worker's run report.
-// The email implementation stays on the control plane (domain.
-// EmailAlertService) — it resolves the owner via central identity.
+// A hosted workspace satisfies it with relay.AlertClient, which pushes the
+// event to the FairTier API — the owner's address, preference, and sender
+// identity live there, not here. A self-hosted workspace's own sender is
+// another implementation of the same port.
 type PipelineAlerter interface {
 	AlertPipelineFailure(ctx context.Context, customerSlug, pipelineName, errorMessage string) error
 }

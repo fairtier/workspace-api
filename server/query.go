@@ -49,10 +49,13 @@ func (s *QueryServer) engine(ctx context.Context) (endpoint, token string, err e
 	if err != nil {
 		return "", "", domainError(err)
 	}
-	if ws.DuckFlightURL == "" || ws.DuckFlightAuthToken == "" {
+	// The dial URL, not the advertised one: on a box they differ, and this is
+	// the side that has to connect.
+	endpoint = ws.DuckFlightServiceURL()
+	if endpoint == "" || ws.DuckFlightAuthToken == "" {
 		return "", "", connect.NewError(connect.CodeFailedPrecondition, errors.New("the query engine is not enabled for this workspace"))
 	}
-	return ws.DuckFlightURL, ws.DuckFlightAuthToken, nil
+	return endpoint, ws.DuckFlightAuthToken, nil
 }
 
 func (s *QueryServer) execute(ctx context.Context, sql string, maxRows int) (*duckflight.Result, error) {

@@ -500,22 +500,26 @@ func loadStaticWorkspace() (*workspace.Workspace, error) {
 		OnVM:                true,
 		CustomerDomain:      customerDomain,
 		LakekeeperURL:       cmp.Or(os.Getenv("WORKSPACE_LAKEKEEPER_URL"), "https://lakekeeper."+customerDomain),
+		LakekeeperDialURL:   os.Getenv("WORKSPACE_LAKEKEEPER_DIAL_URL"),
 		LakekeeperWarehouse: cmp.Or(os.Getenv("WORKSPACE_LAKEKEEPER_WAREHOUSE"), "default"),
 		CasdoorIssuer:       casdoorIssuer,
 		CasdoorOrg:          casdoorOrg,
 		OIDCClientID:        os.Getenv("WORKSPACE_OIDC_CLIENT_ID"),
 		OIDCClientSecret:    os.Getenv("WORKSPACE_OIDC_CLIENT_SECRET"),
 		DuckFlightURL:       cmp.Or(os.Getenv("WORKSPACE_DUCKFLIGHT_URL"), "https://duckflight."+customerDomain),
+		DuckFlightDialURL:   os.Getenv("WORKSPACE_DUCKFLIGHT_DIAL_URL"),
 		DuckFlightAuthToken: os.Getenv("WORKSPACE_DUCKFLIGHT_AUTH_TOKEN"),
 		EffectiveS3:         loadS3Config(),
 		RillEnabled:         os.Getenv("WORKSPACE_RILL_ENABLED") != "false",
 		CubeEnabled:         os.Getenv("WORKSPACE_CUBE_ENABLED") == "true",
 		RillURL:             cmp.Or(os.Getenv("WORKSPACE_RILL_URL"), "https://rill."+customerDomain),
 		CubeURL:             cmp.Or(os.Getenv("WORKSPACE_CUBE_URL"), "https://cube."+customerDomain),
-		// Unset = the public hostname, exactly as before. Unlike every URL
-		// above, these two are only ever dialed by this process and never
-		// advertised, so an in-cluster value is safe here and would break the
-		// Console anywhere else — see Workspace.BoxGiteaURL.
+		// Unset = the public hostname, exactly as before. Like the two
+		// *_DIAL_URL overrides above — and unlike every other URL here —
+		// these are only ever dialed by this process and never advertised, so
+		// an in-cluster value is safe and would break the Console anywhere
+		// else. Gitea and the snapshot sidecar need no advertised twin
+		// because nothing advertises them at all; see Workspace.BoxGiteaURL.
 		GiteaURL:    os.Getenv("WORKSPACE_GITEA_URL"),
 		SnapshotURL: os.Getenv("WORKSPACE_RILL_SNAPSHOT_URL"),
 	}, nil

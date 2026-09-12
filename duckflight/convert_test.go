@@ -156,17 +156,42 @@ func TestRowValue(t *testing.T) {
 
 func TestNormalizeAddr(t *testing.T) {
 	tests := []struct {
-		in, want string
+		in, want      string
+		wantPlaintext bool
 	}{
-		{"grpc://duckflight.customer-a.fairtier.com:443", "duckflight.customer-a.fairtier.com:443"},
-		{"https://duckflight.customer-a.fairtier.com", "duckflight.customer-a.fairtier.com:443"},
-		{"https://duckflight.customer-a.fairtier.com/", "duckflight.customer-a.fairtier.com:443"},
-		{"duckflight.customer-a.fairtier.com", "duckflight.customer-a.fairtier.com:443"},
-		{"localhost:31337", "localhost:31337"},
+		{in: "grpc://duckflight.customer-a.fairtier.com:443", want: "duckflight.customer-a.fairtier.com:443"},
+		{in: "https://duckflight.customer-a.fairtier.com", want: "duckflight.customer-a.fairtier.com:443"},
+		{in: "https://duckflight.customer-a.fairtier.com/", want: "duckflight.customer-a.fairtier.com:443"},
+		{in: "duckflight.customer-a.fairtier.com", want: "duckflight.customer-a.fairtier.com:443"},
+		{in: "localhost:31337", want: "localhost:31337"},
+		// The dial-override shape: the box's in-cluster Service, which is the
+		// h2c backend with no TLS-terminating edge in front of it.
+		{in: "http://duckflight:31337", want: "duckflight:31337", wantPlaintext: true},
+		{in: "http://duckflight:31337/", want: "duckflight:31337", wantPlaintext: true},
+		// Plaintext with no port is :80, not the TLS default.
+		{in: "http://duckflight", want: "duckflight:80", wantPlaintext: true},
+		// grpc:// stays TLS: it is what the shared substrate already stores.
+		{in: "grpc+tls://duckflight.customer-a.fairtier.com:443", want: "duckflight.customer-a.fairtier.com:443"},
 	}
 	for _, tt := range tests {
-		if got := normalizeAddr(tt.in); got != tt.want {
-			t.Errorf("normalizeAddr(%q) = %q, want %q", tt.in, got, tt.want)
+		got, plaintext := normalizeAddr(tt.in)
+		if got != tt.want || plaintext != tt.wantPlaintext {
+			t.Errorf("normalizeAddr(%q) = (%q, %v), want (%q, %v)", tt.in, got, plaintext, tt.want, tt.wantPlaintext)
 		}
+	}
+}
+
+// TestBearerCredsFollowTransport pins the reason bearerCreds carries a flag at
+// all: gRPC refuses per-RPC credentials demanding transport security over an
+// insecure connection, so a plaintext dial that kept requireTLS would fail
+// before the token ever left the process.
+func TestBearerCredsFollowTransport(t *testing.T) {
+	tls := bearerCreds{token: "t", requireTLS: true}
+	if !tls.RequireTransportSecurity() {
+		t.Error("a TLS dial must still demand transport security")
+	}
+	plain := bearerCreds{token: "t", requireTLS: false}
+	if plain.RequireTransportSecurity() {
+		t.Error("a plaintext dial must not demand transport security")
 	}
 }

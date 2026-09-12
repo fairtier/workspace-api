@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // tracer names this package as the instrumentation scope for the query spans.
@@ -58,13 +59,21 @@ func NewClient() *Client { return &Client{} }
 // bearerCreds injects the DuckFlight static bearer token into every RPC
 // (DuckFlight validates `authorization: Bearer <token>` per call; the Flight
 // Handshake flow is only for its basic-auth backend).
-type bearerCreds struct{ token string }
+//
+// requireTLS mirrors the transport rather than being a constant: gRPC refuses
+// per-RPC credentials that demand transport security on an insecure
+// connection, so a plaintext in-cluster dial has to say so or the token is
+// rejected before it ever leaves this process.
+type bearerCreds struct {
+	token      string
+	requireTLS bool
+}
 
 func (b bearerCreds) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
 	return map[string]string{"authorization": "Bearer " + b.token}, nil
 }
 
-func (bearerCreds) RequireTransportSecurity() bool { return true }
+func (b bearerCreds) RequireTransportSecurity() bool { return b.requireTLS }
 
 // Execute runs sql and reads at most maxRows rows, setting Result.Truncated
 // when more were available.
@@ -88,9 +97,14 @@ func (c *Client) Execute(ctx context.Context, endpoint, token, sql string, maxRo
 		span.End()
 	}()
 
-	fc, err := flightsql.NewClientCtx(ctx, normalizeAddr(endpoint), nil, nil,
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})),
-		grpc.WithPerRPCCredentials(bearerCreds{token: token}),
+	addr, plaintext := normalizeAddr(endpoint)
+	transport := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	if plaintext {
+		transport = insecure.NewCredentials()
+	}
+	fc, err := flightsql.NewClientCtx(ctx, addr, nil, nil,
+		grpc.WithTransportCredentials(transport),
+		grpc.WithPerRPCCredentials(bearerCreds{token: token, requireTLS: !plaintext}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dial duckflight: %w", err)
@@ -158,21 +172,36 @@ func appendRecord(rec arrow.RecordBatch, maxRows int, res *Result) bool {
 	return false
 }
 
-// normalizeAddr turns the stored DuckFlight URL into a gRPC dial target.
+// normalizeAddr turns a DuckFlight URL into a gRPC dial target, and reports
+// whether it must be dialed without TLS.
+//
 // Provisioning emits two shapes: `grpc://host:443` (shared substrate) and
-// `https://host` (dedicated box) — both are TLS at the edge (Traefik/Envoy
-// terminates, backend is h2c).
-func normalizeAddr(endpoint string) string {
-	addr := endpoint
-	for _, p := range []string{"grpc://", "grpc+tls://", "https://", "http://"} {
-		if rest, ok := strings.CutPrefix(addr, p); ok {
-			addr = rest
-			break
+// `https://host` (dedicated box) — both TLS at the edge, which terminates and
+// speaks h2c to the backend. Workspace.DuckFlightDialURL adds a third,
+// `http://duckflight:31337`: that same h2c backend with no edge in front of
+// it. So only `http://` selects plaintext. `grpc://` deliberately does not,
+// even though the Arrow convention says otherwise — it is the scheme the
+// shared substrate already has stored, over TLS, and this is not the change
+// that flips it.
+func normalizeAddr(endpoint string) (addr string, plaintext bool) {
+	addr = endpoint
+	if rest, ok := strings.CutPrefix(addr, "http://"); ok {
+		addr, plaintext = rest, true
+	} else {
+		for _, p := range []string{"grpc://", "grpc+tls://", "https://"} {
+			if rest, ok := strings.CutPrefix(addr, p); ok {
+				addr = rest
+				break
+			}
 		}
 	}
 	addr = strings.TrimSuffix(strings.TrimSpace(addr), "/")
 	if !strings.Contains(addr, ":") {
-		addr += ":443"
+		if plaintext {
+			addr += ":80"
+		} else {
+			addr += ":443"
+		}
 	}
-	return addr
+	return addr, plaintext
 }

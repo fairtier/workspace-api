@@ -30,9 +30,20 @@ type Workspace struct {
 	// Namespace is the tenant namespace on the shared substrate; empty on VM.
 	Namespace string
 
-	// LakekeeperURL is the external (Console-facing) catalog URL.
+	// LakekeeperURL is the ADVERTISED catalog URL: what
+	// BootstrapFromWorkspace publishes in /.well-known/fairtier-workspace for
+	// the Console's connection card, and what a customer pastes into their own
+	// DuckDB or Spark. It has to resolve from a browser on the public
+	// internet. It is NOT necessarily what this process dials — see
+	// LakekeeperDialURL and LakekeeperServiceURL.
 	LakekeeperURL       string
 	LakekeeperWarehouse string
+
+	// LakekeeperDialURL replaces the address THIS process dials for the
+	// catalog. Empty = the cluster-internal Service on the shared substrate,
+	// the advertised URL on a box. Nothing advertises it, so an in-cluster
+	// value is safe here and would break the Console anywhere else.
+	LakekeeperDialURL string
 
 	// CasdoorIssuer is the Casdoor base URL owning the workspace OIDC
 	// client; empty means the central Casdoor (the TokenProvider default).
@@ -48,8 +59,18 @@ type Workspace struct {
 	// as opaque.
 	CasdoorOrg string
 
+	// DuckFlightURL is the ADVERTISED Flight SQL endpoint, published in the
+	// same bootstrap document and shown in the Console's connection card so a
+	// customer's own client can reach it. Whether it is set is also what
+	// "this workspace has a query engine" means.
 	DuckFlightURL       string
 	DuckFlightAuthToken string
+
+	// DuckFlightDialURL replaces the address THIS process dials for
+	// ExecuteQuery. Empty = the advertised URL. An http:// value dials
+	// plaintext h2c, which is exactly what the box's in-cluster
+	// duckflight:31337 speaks behind its TLS-terminating IngressRoute.
+	DuckFlightDialURL string
 
 	// EffectiveS3 is the resolved customer bucket (R2-derived or BYOS).
 	EffectiveS3 core.S3Config
@@ -67,12 +88,11 @@ type Workspace struct {
 	// would otherwise dial for its OWN services. Empty = derive the public
 	// form from CustomerDomain, which is what central always does.
 	//
-	// These are deliberately separate fields rather than reusing LakekeeperURL
-	// or DuckFlightURL. Those two are dual-purpose: BootstrapFromWorkspace
-	// publishes them in /.well-known/fairtier-workspace for the Console and
-	// for customer connection strings, so pointing either in-cluster would fix
-	// the dial and hand the customer's browser an unreachable address. Nothing
-	// advertises these two, so they are safe to override.
+	// Gitea and the Rill snapshot sidecar are advertised to nobody, so one
+	// field can be both the dial address and the only address. The catalog and
+	// the query engine cannot: publishing an in-cluster value would fix the
+	// dial and hand the customer's browser an unreachable address, which is
+	// why each of those carries a separate *DialURL above.
 	GiteaURL    string
 	SnapshotURL string
 }
@@ -99,16 +119,32 @@ func (w *Workspace) BareDomain() string {
 	return strings.TrimPrefix(w.CustomerDomain, "*.")
 }
 
-// LakekeeperServiceURL returns the cluster-internal Lakekeeper URL on the
-// shared substrate. The external URL goes through Envoy Gateway which
-// decodes %2F in paths, breaking DELETE /management/v1/user/{user_id} for
-// IDs containing "/". On VM boxes Namespace is empty and the external URL
-// is the only route.
+// LakekeeperServiceURL is the address this process dials for the catalog,
+// which is not necessarily the one it advertises.
+//
+// An explicit LakekeeperDialURL wins everywhere. Failing that, the shared
+// substrate prefers its cluster-internal Service because the external URL goes
+// through Envoy Gateway, which decodes %2F in paths and so breaks DELETE
+// /management/v1/user/{user_id} for IDs containing "/". On a VM box Namespace
+// is empty and there is no Envoy, so the advertised URL is the fallback and
+// the dial URL is what avoids sending a pod out to its own node's public
+// hostname — this fleet's recorded boot-flake shape, the same one AUTH_JWKS_URL
+// and BoxGiteaURL exist for.
 func (w *Workspace) LakekeeperServiceURL() string {
+	if w.LakekeeperDialURL != "" {
+		return w.LakekeeperDialURL
+	}
 	if w.Namespace == "" {
 		return w.LakekeeperURL
 	}
 	return "http://lakekeeper." + w.Namespace + ".svc:8181"
+}
+
+// DuckFlightServiceURL is the address this process dials for Flight SQL, which
+// is not necessarily the one it advertises. Empty means there is nothing to
+// dial at all: no override and no advertised endpoint.
+func (w *Workspace) DuckFlightServiceURL() string {
+	return cmp.Or(w.DuckFlightDialURL, w.DuckFlightURL)
 }
 
 // RillSnapshotURL returns the cluster-internal URL for the Rill snapshot

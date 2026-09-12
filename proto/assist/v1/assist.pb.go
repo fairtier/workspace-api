@@ -130,12 +130,20 @@ type DraftTransformationResponse struct {
 	Draft *v1.CreateTransformationRequest `protobuf:"bytes,1,opt,name=draft,proto3" json:"draft,omitempty"`
 	// Starter dbt files for the hosted repo (models/**.sql + schema.yml),
 	// rendered read-only for review; the user commits them via the box repo
-	// editor or copy-paste.
+	// editor or copy-paste. Empty when unsupported_reason is set.
 	Files []*DraftFile `protobuf:"bytes,2,rep,name=files,proto3" json:"files,omitempty"`
 	// Short human-readable explanation of the draft and any assumptions made.
-	Notes         string `protobuf:"bytes,3,opt,name=notes,proto3" json:"notes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// When unsupported_reason is set: what to do instead.
+	Notes string `protobuf:"bytes,3,opt,name=notes,proto3" json:"notes,omitempty"`
+	// The model's explicit refusal: the request needs data the warehouse does
+	// not hold, or a dbt capability the platform cannot run (dbt reaches no
+	// database but the workspace's own warehouse; no python models, no
+	// snapshots). The client renders it as a standing warning and leaves the
+	// form untouched. Additive — empty (the proto3 default) means a normal
+	// draft, so older clients keep their existing behaviour.
+	UnsupportedReason string `protobuf:"bytes,4,opt,name=unsupported_reason,json=unsupportedReason,proto3" json:"unsupported_reason,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DraftTransformationResponse) Reset() {
@@ -185,6 +193,13 @@ func (x *DraftTransformationResponse) GetFiles() []*DraftFile {
 func (x *DraftTransformationResponse) GetNotes() string {
 	if x != nil {
 		return x.Notes
+	}
+	return ""
+}
+
+func (x *DraftTransformationResponse) GetUnsupportedReason() string {
+	if x != nil {
+		return x.UnsupportedReason
 	}
 	return ""
 }
@@ -246,11 +261,21 @@ func (x *DraftRillDashboardRequest) GetExistingPaths() []string {
 type DraftRillDashboardResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Drafted files (metrics/<name>.yaml, dashboards/<name>.yaml, optional
-	// models/<name>.sql), YAML-validated server-side.
-	Files         []*DraftFile `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
-	Notes         string       `protobuf:"bytes,2,opt,name=notes,proto3" json:"notes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// models/<name>.sql), YAML-validated server-side. Empty when
+	// unsupported_reason is set.
+	Files []*DraftFile `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
+	// Explanation and assumptions. When unsupported_reason is set: what to do
+	// instead.
+	Notes string `protobuf:"bytes,2,opt,name=notes,proto3" json:"notes,omitempty"`
+	// The model's explicit refusal: the request needs data the warehouse does
+	// not hold, or a Rill capability the platform cannot run (the only data
+	// source is the attached warehouse; no alerts, no scheduled delivery, no
+	// public or embedded dashboards). The client opens no editor buffers and
+	// renders it as a standing warning. Additive — empty (the proto3 default)
+	// means a normal draft.
+	UnsupportedReason string `protobuf:"bytes,3,opt,name=unsupported_reason,json=unsupportedReason,proto3" json:"unsupported_reason,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DraftRillDashboardResponse) Reset() {
@@ -293,6 +318,13 @@ func (x *DraftRillDashboardResponse) GetFiles() []*DraftFile {
 func (x *DraftRillDashboardResponse) GetNotes() string {
 	if x != nil {
 		return x.Notes
+	}
+	return ""
+}
+
+func (x *DraftRillDashboardResponse) GetUnsupportedReason() string {
+	if x != nil {
+		return x.UnsupportedReason
 	}
 	return ""
 }
@@ -761,17 +793,19 @@ const file_assist_proto_rawDesc = "" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\"4\n" +
 	"\x1aDraftTransformationRequest\x12\x16\n" +
-	"\x06prompt\x18\x01 \x01(\tR\x06prompt\"\xa5\x01\n" +
+	"\x06prompt\x18\x01 \x01(\tR\x06prompt\"\xd4\x01\n" +
 	"\x1bDraftTransformationResponse\x12D\n" +
 	"\x05draft\x18\x01 \x01(\v2..transformation.v1.CreateTransformationRequestR\x05draft\x12*\n" +
 	"\x05files\x18\x02 \x03(\v2\x14.assist.v1.DraftFileR\x05files\x12\x14\n" +
-	"\x05notes\x18\x03 \x01(\tR\x05notes\"Z\n" +
+	"\x05notes\x18\x03 \x01(\tR\x05notes\x12-\n" +
+	"\x12unsupported_reason\x18\x04 \x01(\tR\x11unsupportedReason\"Z\n" +
 	"\x19DraftRillDashboardRequest\x12\x16\n" +
 	"\x06prompt\x18\x01 \x01(\tR\x06prompt\x12%\n" +
-	"\x0eexisting_paths\x18\x02 \x03(\tR\rexistingPaths\"^\n" +
+	"\x0eexisting_paths\x18\x02 \x03(\tR\rexistingPaths\"\x8d\x01\n" +
 	"\x1aDraftRillDashboardResponse\x12*\n" +
 	"\x05files\x18\x01 \x03(\v2\x14.assist.v1.DraftFileR\x05files\x12\x14\n" +
-	"\x05notes\x18\x02 \x01(\tR\x05notes\"J\n" +
+	"\x05notes\x18\x02 \x01(\tR\x05notes\x12-\n" +
+	"\x12unsupported_reason\x18\x03 \x01(\tR\x11unsupportedReason\"J\n" +
 	"\x0fDraftSqlRequest\x12\x16\n" +
 	"\x06prompt\x18\x01 \x01(\tR\x06prompt\x12\x1f\n" +
 	"\vcurrent_sql\x18\x02 \x01(\tR\n" +

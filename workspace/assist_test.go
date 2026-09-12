@@ -120,6 +120,57 @@ func TestAssistService_DraftTransformation(t *testing.T) {
 		}
 	})
 
+	t.Run("refusal passes through without a draft", func(t *testing.T) {
+		svc := &workspace.AssistService{
+			Workspaces: acmeReader(),
+			Transformations: &mockTransformationDrafter{fn: func(context.Context, string) (*workspace.TransformationDraft, error) {
+				return &workspace.TransformationDraft{
+					UnsupportedReason: "dbt on this workspace reads only the ingested warehouse.",
+					Notes:             "Add a pipeline for Salesforce first.",
+				}, nil
+			}},
+		}
+		draft, err := svc.DraftTransformation(context.Background(), "u1", "churn from Salesforce")
+		if err != nil {
+			t.Fatalf("a refusal is a valid answer, not an error: %v", err)
+		}
+		if draft.UnsupportedReason == "" || len(draft.Files) != 0 {
+			t.Fatalf("bad refusal: %+v", draft)
+		}
+	})
+
+	t.Run("refusal without a reason rejected", func(t *testing.T) {
+		svc := &workspace.AssistService{
+			Workspaces: acmeReader(),
+			Transformations: &mockTransformationDrafter{fn: func(context.Context, string) (*workspace.TransformationDraft, error) {
+				return &workspace.TransformationDraft{UnsupportedReason: "  "}, nil
+			}},
+		}
+		_, err := svc.DraftTransformation(context.Background(), "u1", "p")
+		var invalid *workspace.ErrInvalidSourceConfig
+		if !errors.As(err, &invalid) || invalid.Field != "name" {
+			t.Fatalf("want name validation error for a blank-reason refusal, got %v", err)
+		}
+	})
+
+	t.Run("refusal drops any files the model still emitted", func(t *testing.T) {
+		svc := &workspace.AssistService{
+			Workspaces: acmeReader(),
+			Transformations: &mockTransformationDrafter{fn: func(context.Context, string) (*workspace.TransformationDraft, error) {
+				d := validTransformationDraft()
+				d.UnsupportedReason = "no listed table holds that"
+				return d, nil
+			}},
+		}
+		draft, err := svc.DraftTransformation(context.Background(), "u1", "p")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(draft.Files) != 0 {
+			t.Fatalf("a refusal must not half-fill the editor: %+v", draft.Files)
+		}
+	})
+
 	t.Run("missing name rejected", func(t *testing.T) {
 		svc := &workspace.AssistService{
 			Workspaces: acmeReader(),
@@ -244,6 +295,25 @@ func TestAssistService_DraftRillDashboard(t *testing.T) {
 		}
 		if _, err := svc.DraftRillDashboard(context.Background(), "u1", "p", nil); err == nil {
 			t.Fatal("want validation error for empty draft")
+		}
+	})
+
+	t.Run("refusal is not an empty draft", func(t *testing.T) {
+		svc := &workspace.AssistService{
+			Workspaces: acmeReader(),
+			Rill: &mockRillDrafter{fn: func(context.Context, string, []string) (*workspace.RillDraft, error) {
+				return &workspace.RillDraft{
+					UnsupportedReason: "This workspace has no ClickHouse connector.",
+					Notes:             "Rill here reads the attached warehouse only.",
+				}, nil
+			}},
+		}
+		draft, err := svc.DraftRillDashboard(context.Background(), "u1", "dashboard over ClickHouse", nil)
+		if err != nil {
+			t.Fatalf("a refusal must not be rejected as an empty draft: %v", err)
+		}
+		if draft.UnsupportedReason == "" || len(draft.Files) != 0 {
+			t.Fatalf("bad refusal: %+v", draft)
 		}
 	})
 

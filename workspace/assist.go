@@ -27,6 +27,12 @@ type TransformationDraft struct {
 	DBTSelector string
 	Files       []DraftFile
 	Notes       string
+	// UnsupportedReason is the model's explicit refusal (the output schema
+	// forces a status enum, so it is a decision, never an accidentally empty
+	// field): the request needs data the warehouse does not hold, or a dbt
+	// capability this platform cannot run. Empty means a normal draft; when
+	// set, every other field is empty and Notes carry the way forward.
+	UnsupportedReason string
 }
 
 // RillDraft is the LLM-produced draft of Rill project files (metrics views,
@@ -34,6 +40,10 @@ type TransformationDraft struct {
 type RillDraft struct {
 	Files []DraftFile
 	Notes string
+	// UnsupportedReason mirrors TransformationDraft.UnsupportedReason for the
+	// Rill surface (a connector the box does not have, alerting or scheduled
+	// delivery it cannot do, data nothing has ingested).
+	UnsupportedReason string
 }
 
 // SqlDraft is the LLM-produced draft of one read-only DuckDB query. Never
@@ -182,6 +192,10 @@ func (s *AssistService) DraftTransformation(ctx context.Context, callerID core.U
 		return nil, fmt.Errorf("draft transformation: %w", err)
 	}
 
+	if refused(draft.UnsupportedReason) {
+		draft.Files = nil
+		return draft, nil
+	}
 	if strings.TrimSpace(draft.Name) == "" {
 		return nil, &ErrInvalidSourceConfig{Field: "name", Msg: "draft is missing a name"}
 	}
@@ -209,6 +223,10 @@ func (s *AssistService) DraftRillDashboard(ctx context.Context, callerID core.Us
 		return nil, fmt.Errorf("draft rill dashboard: %w", err)
 	}
 
+	if refused(draft.UnsupportedReason) {
+		draft.Files = nil
+		return draft, nil
+	}
 	if len(draft.Files) == 0 {
 		return nil, &ErrInvalidSourceConfig{Field: "files", Msg: "draft produced no files"}
 	}
@@ -228,6 +246,15 @@ func (s *AssistService) DraftRillDashboard(ctx context.Context, callerID core.Us
 		}
 	}
 	return draft, nil
+}
+
+// refused reports whether a draft is a refusal. The reason IS the flag — a
+// blank one is not a refusal but an ordinary draft, which then has to satisfy
+// the usual validation (it will fail it, loudly, rather than reach the user as
+// an explanation-free "no"). A refusal short-circuits that validation: it
+// legitimately carries no name and no files, which the normal checks reject.
+func refused(reason string) bool {
+	return strings.TrimSpace(reason) != ""
 }
 
 // draftSchemaContext builds the warehouse schema block for the dbt/Rill

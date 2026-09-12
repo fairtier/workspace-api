@@ -41,8 +41,9 @@ func (s *AssistServer) DraftTransformation(ctx context.Context, req *connect.Req
 			Schedule:       draft.Schedule,
 			DbtSelector:    draft.DBTSelector,
 		},
-		Files: draftFiles(draft.Files),
-		Notes: draft.Notes,
+		Files:             draftFiles(draft.Files),
+		Notes:             draft.Notes,
+		UnsupportedReason: draft.UnsupportedReason,
 	}), nil
 }
 
@@ -61,8 +62,9 @@ func (s *AssistServer) DraftRillDashboard(ctx context.Context, req *connect.Requ
 	}
 
 	return connect.NewResponse(&assistv1.DraftRillDashboardResponse{
-		Files: draftFiles(draft.Files),
-		Notes: draft.Notes,
+		Files:             draftFiles(draft.Files),
+		Notes:             draft.Notes,
+		UnsupportedReason: draft.UnsupportedReason,
 	}), nil
 }
 

@@ -197,11 +197,17 @@ var draftFileSchema = map[string]any{
 var transformationDraftSchema = map[string]any{
 	"type":                 "object",
 	"additionalProperties": false,
-	"required":             []string{"name", "schedule", "dbt_selector", "files", "notes"},
+	"required":             []string{"status", "name", "schedule", "dbt_selector", "files", "notes", "unsupported_reason"},
 	"properties": map[string]any{
+		"status": map[string]any{
+			"type": "string",
+			"enum": []string{"ok", "unsupported"},
+			"description": "ok: the drafted files answer the request from the listed tables. " +
+				"unsupported: the request needs data the warehouse does not hold, or a dbt capability this platform cannot run — files is empty and unsupported_reason says why.",
+		},
 		"name": map[string]any{
 			"type":        "string",
-			"description": "Short human-readable transformation name.",
+			"description": "Short human-readable transformation name. Empty string when status is unsupported.",
 		},
 		"schedule": map[string]any{
 			"type":        "string",
@@ -213,12 +219,16 @@ var transformationDraftSchema = map[string]any{
 		},
 		"files": map[string]any{
 			"type":        "array",
-			"description": "Starter dbt files under models/ — one or two .sql models plus one schema.yml. Paths like models/staging/stg_orders.sql, models/marts/orders_daily.sql, models/marts/schema.yml.",
+			"description": "Starter dbt files under models/ — one or two .sql models plus one schema.yml. Paths like models/staging/stg_orders.sql, models/marts/orders_daily.sql, models/marts/schema.yml. Empty array when status is unsupported.",
 			"items":       draftFileSchema,
 		},
 		"notes": map[string]any{
 			"type":        "string",
-			"description": "One or two sentences explaining the draft, any assumptions, and which source tables the user must confirm exist.",
+			"description": "One or two sentences explaining the draft, any assumptions, and which source tables the user must confirm exist. When status is unsupported: what to do instead (which data to ingest first, which tool to use).",
+		},
+		"unsupported_reason": map[string]any{
+			"type":        "string",
+			"description": "Empty string when status is ok. When status is unsupported: one or two sentences naming exactly what is missing — the subject no listed table holds, or the dbt capability this platform does not have. Never suggest an unrelated listed table as if it answered the request.",
 		},
 	},
 }
@@ -228,21 +238,42 @@ Given a user's natural-language description, draft a dbt transformation: its con
 for the customer's hosted dbt project (a seeded repo whose dbt_project.yml targets the "lake" catalog,
 with a staging -> marts layout and sources defined for the ingested datasets).
 
+The platform's COMPLETE dbt capabilities — there are no others:
+- One adapter, dbt-duckdb, against the customer's own Iceberg warehouse. dbt reaches NO other
+  database, API or file store: data gets into the warehouse through an ingestion pipeline first,
+  never from inside a model.
+- SQL models and schema tests. No python models, no snapshots (the attached Iceberg catalog cannot
+  do the rename/merge they need), no delete+insert incremental strategies (partitioned Iceberg
+  tables cannot DELETE).
+- Drafted files are models only: models/**.sql plus one schema.yml. dbt_project.yml, macros/,
+  seeds/, packages.yml and profiles.yml are not drafted here — the user edits those in the repo.
+- No dbt Cloud and no dbt Fusion features (this is dbt Core).
+
 Rules:
 - Output one or two .sql models under models/ (staging and/or marts) and one schema.yml alongside them.
 - Models select from ingested tables via {{ source('<dataset>', '<table>') }} and from each other via {{ ref('<model>') }}.
 - Use DuckDB SQL. Keep model and column names lowercase snake_case.
 - When a "Warehouse schema" listing is appended to the request, it is the complete set of ingested
   tables: a listed namespace.table is referenced as {{ source('<namespace>', '<table>') }}, and you
-  must NOT reference tables absent from the listing. If the data the user describes is not in the
-  listing, build on the closest listed tables only when that genuinely serves the request, and say
-  clearly in notes what is missing.
-- Without a schema listing, source tables are unverified: flag every assumed table in notes.
+  must NOT reference tables absent from the listing.
+- Feasibility vs ambiguity are different things. An AMBIGUOUS request (unclear grain, several
+  plausible tables, no schedule stated) gets a reasonable choice explained in notes. An INFEASIBLE
+  request gets status "unsupported" with an unsupported_reason naming exactly what is missing:
+  either the request's subject is in no listed table, or it needs a capability outside the list
+  above. NEVER build on the nearest listed table instead: a mart answering a question the user did
+  not ask is worse than a clear no.
+- Ambiguity is about WHICH listed table answers the user's actual subject; it never licenses
+  changing the subject. Apply this test before writing any model: does some listed table actually
+  contain the thing the user asked about? If none does, refuse.
+- With status "unsupported", set unsupported_reason and notes, leave name, schedule and
+  dbt_selector empty strings, and files an empty array.
+- Without a schema listing you cannot know what was ingested, so do NOT refuse for missing data:
+  source tables are unverified, and every assumed table goes in notes. Capability refusals still apply.
 - NEVER invent or include credentials, repo URLs, or tokens of any kind. Leave repository choice to the platform.
-- schedule is a cron expression, or empty for manual runs. Prefer empty unless the user asks for a schedule.
-- If the description is ambiguous (unknown source tables, unclear grain), make a reasonable choice and say so in notes.`
+- schedule is a cron expression, or empty for manual runs. Prefer empty unless the user asks for a schedule.`
 
 type transformationDraftOutput struct {
+	Status      string `json:"status"`
 	Name        string `json:"name"`
 	Schedule    string `json:"schedule"`
 	DBTSelector string `json:"dbt_selector"`
@@ -250,7 +281,8 @@ type transformationDraftOutput struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	} `json:"files"`
-	Notes string `json:"notes"`
+	Notes             string `json:"notes"`
+	UnsupportedReason string `json:"unsupported_reason"`
 }
 
 // DraftTransformation calls the model and returns a structured dbt draft. The
@@ -278,6 +310,14 @@ func (d *Drafter) DraftTransformation(ctx context.Context, prompt, schemaContext
 		return nil, fmt.Errorf("parse model output: %w", err)
 	}
 
+	refused, err := draftStatus(out.Status, out.UnsupportedReason, len(out.Files))
+	if err != nil {
+		return nil, err
+	}
+	if refused {
+		return &workspace.TransformationDraft{UnsupportedReason: out.UnsupportedReason, Notes: out.Notes}, nil
+	}
+
 	draft := &workspace.TransformationDraft{
 		Name:        out.Name,
 		Schedule:    out.Schedule,
@@ -290,19 +330,52 @@ func (d *Drafter) DraftTransformation(ctx context.Context, prompt, schemaContext
 	return draft, nil
 }
 
+// draftStatus is the shared draft-or-refusal contract of the two file-producing
+// drafters, mirroring DraftSql's: the status is an explicit machine-readable
+// code, never a sentinel sniffed from empty fields. Anything off-contract — an
+// unknown status, a refusal with no reason, an "ok" that produced no files —
+// fails like any other malformed model output rather than reaching the user as
+// a silently empty draft.
+func draftStatus(status, unsupportedReason string, files int) (bool, error) {
+	switch status {
+	case "unsupported":
+		if strings.TrimSpace(unsupportedReason) == "" {
+			return false, fmt.Errorf("parse model output: status %q with no unsupported_reason", status)
+		}
+		return true, nil
+	case "ok":
+		if files == 0 {
+			return false, fmt.Errorf("parse model output: status %q with no files", status)
+		}
+		return false, nil
+	default:
+		return false, fmt.Errorf("parse model output: unknown status %q", status)
+	}
+}
+
 var rillDraftSchema = map[string]any{
 	"type":                 "object",
 	"additionalProperties": false,
-	"required":             []string{"files", "notes"},
+	"required":             []string{"status", "files", "notes", "unsupported_reason"},
 	"properties": map[string]any{
+		"status": map[string]any{
+			"type": "string",
+			"enum": []string{"ok", "unsupported"},
+			"description": "ok: the drafted files answer the request from the listed tables. " +
+				"unsupported: the request needs data the warehouse does not hold, or a Rill capability this platform cannot run — files is empty and unsupported_reason says why.",
+		},
 		"files": map[string]any{
 			"type":        "array",
-			"description": "Rill project files: metrics/<name>.yaml (metrics view), dashboards/<name>.yaml (explore dashboard), and optionally models/<name>.sql.",
+			"description": "Rill project files: metrics/<name>.yaml (metrics view), dashboards/<name>.yaml (explore dashboard), and optionally models/<name>.sql. Empty array when status is unsupported.",
 			"items":       draftFileSchema,
 		},
 		"notes": map[string]any{
 			"type":        "string",
-			"description": "One or two sentences explaining the draft and any assumptions about the underlying tables.",
+			"description": "One or two sentences explaining the draft and any assumptions about the underlying tables. When status is unsupported: what to do instead (which data to ingest first, where that capability does exist).",
+		},
+		"unsupported_reason": map[string]any{
+			"type":        "string",
+			"description": "Empty string when status is ok. When status is unsupported: one or two sentences naming exactly what is missing — the subject no listed table holds, or the Rill capability this platform does not have. Never suggest an unrelated listed table as if it answered the request.",
 		},
 	},
 }
@@ -322,17 +395,36 @@ File kinds:
 - dashboards/<name>.yaml — "type: explore" with "metrics_view: <metrics view name>" and optional
   "dimensions: '*'" / "measures: '*'".
 
+The platform's COMPLETE Rill capabilities — there are no others:
+- One data source: the attached DuckDB catalog "lk" over the customer's Iceberg warehouse. There
+  are no external connectors (ClickHouse, Druid, BigQuery, Snowflake, S3, Postgres, ...) and the
+  workspace holds no credentials for one — data is dashboarded after an ingestion pipeline has
+  loaded it into the warehouse.
+- Dashboards are served only to signed-in members of the workspace: no public links, no tokened
+  share links, no anonymous embedding, no row-level security policies.
+- No alerts and no scheduled report delivery (no email, no Slack) — the workspace has no mailer.
+- No Rill Cloud: this is Rill OSS running on the customer's own machine.
+
 Rules:
 - NEVER invent or include credentials of any kind.
 - Never emit rill.yaml, duckdb.yaml or .env — those are platform-managed.
 - Keep file and field names lowercase snake_case.
 - When a "Warehouse schema" listing is appended to the request, it is the complete warehouse: a
   listed namespace.table is referenced as lk.<namespace>.<table>, and you must NOT reference tables
-  absent from the listing (existing repo models remain fair game via their model names). If the data
-  the user describes is not in the listing, build on the closest listed tables only when that
-  genuinely serves the request, and say clearly in notes what is missing.
-- Without a schema listing, if the user's description references tables you cannot see in the
-  provided repo paths, make a reasonable assumption and flag it in notes.`
+  absent from the listing (existing repo models remain fair game via their model names).
+- Feasibility vs ambiguity are different things. An AMBIGUOUS request (which measure, which grain,
+  several plausible tables) gets a reasonable choice explained in notes. An INFEASIBLE request gets
+  status "unsupported" with an unsupported_reason naming exactly what is missing: either the
+  request's subject is in no listed table, or it needs a capability outside the list above. NEVER
+  build the dashboard on the nearest listed table instead — a dashboard of the wrong subject is
+  worse than a clear no.
+- Ambiguity is about WHICH listed table answers the user's actual subject; it never licenses
+  changing the subject. Apply this test before writing any file: does some listed table actually
+  contain the thing the user asked about? If none does, refuse.
+- With status "unsupported", set unsupported_reason and notes, and leave files an empty array.
+- Without a schema listing you cannot know what was ingested, so do NOT refuse for missing data:
+  make a reasonable assumption about tables you cannot see in the provided repo paths and flag it
+  in notes. Capability refusals still apply.`
 
 // rillSkillsBudget caps how much vendored reference documentation rides in
 // the Rill system prompt. Whole documents are dropped, never truncated —
@@ -357,11 +449,13 @@ func composeRillSystem() string {
 }
 
 type rillDraftOutput struct {
-	Files []struct {
+	Status string `json:"status"`
+	Files  []struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	} `json:"files"`
-	Notes string `json:"notes"`
+	Notes             string `json:"notes"`
+	UnsupportedReason string `json:"unsupported_reason"`
 }
 
 // DraftRillDashboard calls the model and returns drafted Rill files. The
@@ -392,6 +486,14 @@ func (d *Drafter) DraftRillDashboard(ctx context.Context, prompt string, existin
 	var out rillDraftOutput
 	if err := json.Unmarshal(res.JSON, &out); err != nil {
 		return nil, fmt.Errorf("parse model output: %w", err)
+	}
+
+	refused, err := draftStatus(out.Status, out.UnsupportedReason, len(out.Files))
+	if err != nil {
+		return nil, err
+	}
+	if refused {
+		return &workspace.RillDraft{UnsupportedReason: out.UnsupportedReason, Notes: out.Notes}, nil
 	}
 
 	draft := &workspace.RillDraft{Notes: out.Notes}

@@ -66,10 +66,18 @@ message DraftTransformationResponse {
   transformation.v1.CreateTransformationRequest draft = 1;
   // Starter dbt files for the hosted repo (models/**.sql + schema.yml),
   // rendered read-only for review; the user commits them via the box repo
-  // editor or copy-paste.
+  // editor or copy-paste. Empty when unsupported_reason is set.
   repeated DraftFile files = 2;
   // Short human-readable explanation of the draft and any assumptions made.
+  // When unsupported_reason is set: what to do instead.
   string notes = 3;
+  // The model's explicit refusal: the request needs data the warehouse does
+  // not hold, or a dbt capability the platform cannot run (dbt reaches no
+  // database but the workspace's own warehouse; no python models, no
+  // snapshots). The client renders it as a standing warning and leaves the
+  // form untouched. Additive — empty (the proto3 default) means a normal
+  // draft, so older clients keep their existing behaviour.
+  string unsupported_reason = 4;
 }
 
 message DraftRillDashboardRequest {
@@ -81,9 +89,19 @@ message DraftRillDashboardRequest {
 
 message DraftRillDashboardResponse {
   // Drafted files (metrics/<name>.yaml, dashboards/<name>.yaml, optional
-  // models/<name>.sql), YAML-validated server-side.
+  // models/<name>.sql), YAML-validated server-side. Empty when
+  // unsupported_reason is set.
   repeated DraftFile files = 1;
+  // Explanation and assumptions. When unsupported_reason is set: what to do
+  // instead.
   string notes = 2;
+  // The model's explicit refusal: the request needs data the warehouse does
+  // not hold, or a Rill capability the platform cannot run (the only data
+  // source is the attached warehouse; no alerts, no scheduled delivery, no
+  // public or embedded dashboards). The client opens no editor buffers and
+  // renders it as a standing warning. Additive — empty (the proto3 default)
+  // means a normal draft.
+  string unsupported_reason = 3;
 }
 
 message DraftSqlRequest {

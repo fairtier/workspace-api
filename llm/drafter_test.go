@@ -102,7 +102,7 @@ func TestDrafter_DraftPipelineUnsupported(t *testing.T) {
 
 func TestDrafter_DraftTransformation(t *testing.T) {
 	caller := &fakeCaller{raw: `{
-		"name": "Revenue mart", "schedule": "", "dbt_selector": "tag:daily",
+		"status": "ok", "name": "Revenue mart", "schedule": "", "dbt_selector": "tag:daily",
 		"files": [
 			{"path": "models/marts/revenue.sql", "content": "SELECT 1"},
 			{"path": "models/marts/schema.yml", "content": "version: 2"}
@@ -129,6 +129,7 @@ func TestDrafter_DraftTransformation(t *testing.T) {
 
 func TestDrafter_DraftRillDashboard(t *testing.T) {
 	caller := &fakeCaller{raw: `{
+		"status": "ok",
 		"files": [{"path": "metrics/revenue.yaml", "content": "type: metrics_view"}],
 		"notes": "ok"
 	}`}
@@ -148,6 +149,147 @@ func TestDrafter_DraftRillDashboard(t *testing.T) {
 	}
 	if !strings.Contains(caller.got.Prompt, "marts.orders") {
 		t.Fatalf("schema context missing from prompt: %s", caller.got.Prompt)
+	}
+}
+
+func TestDrafter_DraftTransformationUnsupported(t *testing.T) {
+	caller := &fakeCaller{raw: `{
+		"status": "unsupported", "name": "", "schedule": "", "dbt_selector": "",
+		"files": [],
+		"notes": "Ingest Salesforce with a pipeline first.",
+		"unsupported_reason": "No ingested table holds Salesforce data; dbt only reads the warehouse."
+	}`}
+	d := NewDrafter(caller, nil)
+
+	draft, err := d.DraftTransformation(context.Background(), "churn by account from Salesforce", "Warehouse schema:\n- taxi.trips (fare DOUBLE)")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if draft.UnsupportedReason == "" {
+		t.Fatalf("refusal not mapped: %+v", draft)
+	}
+	if len(draft.Files) != 0 || draft.Name != "" {
+		t.Fatalf("refusal must carry no draft payload: %+v", draft)
+	}
+
+	// The schema must actually offer the refusal path — a closed forced-choice
+	// schema makes "no" unrepresentable, which is how a drafter ends up
+	// building on the nearest listed table and flagging it in notes.
+	assertRefusalSchema(t, caller.got.Schema)
+	if !strings.Contains(caller.got.System, "dbt-duckdb") {
+		t.Fatal("system prompt lost the dbt capability envelope")
+	}
+}
+
+func TestDrafter_DraftRillDashboardUnsupported(t *testing.T) {
+	caller := &fakeCaller{raw: `{
+		"status": "unsupported", "files": [],
+		"notes": "Rill on this workspace reads only the attached warehouse.",
+		"unsupported_reason": "The box has no ClickHouse connector and no credentials for one."
+	}`}
+	d := NewDrafter(caller, nil)
+
+	draft, err := d.DraftRillDashboard(context.Background(), "dashboard over our ClickHouse cluster", nil, "Warehouse schema:\n- marts.orders (amount DOUBLE)")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if draft.UnsupportedReason == "" {
+		t.Fatalf("refusal not mapped: %+v", draft)
+	}
+	if len(draft.Files) != 0 {
+		t.Fatalf("refusal must carry no files: %+v", draft)
+	}
+
+	assertRefusalSchema(t, caller.got.Schema)
+	if !strings.Contains(caller.got.System, "no external connectors") {
+		t.Fatal("system prompt lost the Rill capability envelope")
+	}
+}
+
+// assertRefusalSchema checks that a draft schema forces the model to choose
+// between drafting and refusing, and to give a reason when it refuses.
+func assertRefusalSchema(t *testing.T, schema map[string]any) {
+	t.Helper()
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("schema has no properties")
+	}
+	status, ok := props["status"].(map[string]any)
+	if !ok {
+		t.Fatal("schema lacks a status field")
+	}
+	enum, ok := status["enum"].([]string)
+	if !ok {
+		t.Fatalf("status has no enum: %v", status)
+	}
+	found := false
+	for _, v := range enum {
+		if v == "unsupported" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("status enum lacks the refusal value: %v", enum)
+	}
+	if _, ok := props["unsupported_reason"]; !ok {
+		t.Fatal("schema lacks unsupported_reason")
+	}
+	required, ok := schema["required"].([]string)
+	if !ok {
+		t.Fatal("schema has no required list")
+	}
+	for _, want := range []string{"status", "unsupported_reason"} {
+		reqFound := false
+		for _, v := range required {
+			if v == want {
+				reqFound = true
+			}
+		}
+		if !reqFound {
+			t.Fatalf("%s not required: %v", want, required)
+		}
+	}
+}
+
+func TestDrafter_DraftOffContractStatus(t *testing.T) {
+	t.Run("unknown status", func(t *testing.T) {
+		d := NewDrafter(&fakeCaller{raw: `{"status": "maybe", "files": [], "notes": ""}`}, nil)
+		if _, err := d.DraftRillDashboard(context.Background(), "p", nil, ""); err == nil ||
+			!strings.Contains(err.Error(), "parse model output") {
+			t.Fatalf("want parse error, got %v", err)
+		}
+	})
+
+	t.Run("refusal without a reason", func(t *testing.T) {
+		d := NewDrafter(&fakeCaller{raw: `{"status": "unsupported", "files": [], "notes": "no", "unsupported_reason": ""}`}, nil)
+		if _, err := d.DraftTransformation(context.Background(), "p", ""); err == nil ||
+			!strings.Contains(err.Error(), "parse model output") {
+			t.Fatalf("want parse error, got %v", err)
+		}
+	})
+
+	t.Run("ok without files", func(t *testing.T) {
+		d := NewDrafter(&fakeCaller{raw: `{"status": "ok", "files": [], "notes": "here you go"}`}, nil)
+		if _, err := d.DraftRillDashboard(context.Background(), "p", nil, ""); err == nil ||
+			!strings.Contains(err.Error(), "parse model output") {
+			t.Fatalf("want parse error, got %v", err)
+		}
+	})
+}
+
+func TestDraftPromptsRefuseRatherThanApproximate(t *testing.T) {
+	// The rule the grounded drafters exist to enforce: a subject no listed
+	// table holds is a refusal, not an invitation to build on the closest one.
+	for name, prompt := range map[string]string{
+		"transformation": transformationDraftSystemPrompt,
+		"rill":           rillDraftSystemPrompt,
+	} {
+		if strings.Contains(prompt, "build on the closest listed tables") {
+			t.Fatalf("%s prompt still tells the model to approximate", name)
+		}
+		if !strings.Contains(prompt, `"unsupported"`) {
+			t.Fatalf("%s prompt never mentions the refusal status", name)
+		}
 	}
 }
 

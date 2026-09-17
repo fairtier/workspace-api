@@ -3,7 +3,7 @@ module github.com/fairtier/workspace-api
 go 1.27.0
 
 require (
-	connectrpc.com/connect v1.20.0
+	connectrpc.com/connect v1.21.0
 	connectrpc.com/cors v0.1.0
 	connectrpc.com/grpchealth v1.5.0
 	connectrpc.com/grpcreflect v1.3.0
@@ -11,11 +11,11 @@ require (
 	filippo.io/age v1.3.2
 	github.com/MicahParks/jwkset v0.11.3
 	github.com/MicahParks/keyfunc/v3 v3.8.2
-	github.com/anthropics/anthropic-sdk-go v1.71.0
+	github.com/anthropics/anthropic-sdk-go v1.73.0
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/casdoor/casdoor-go-sdk v1.54.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.11.0
@@ -42,7 +42,7 @@ require (
 	atomicgo.dev/schedule v0.1.0 // indirect
 	cloud.google.com/go v0.123.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
-	github.com/andybalholm/brotli v1.2.2 // indirect
+	github.com/andybalholm/brotli v1.2.3 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/apache/iceberg-go v0.6.0 // indirect
 	github.com/apache/thrift v0.24.0 // indirect
@@ -103,8 +103,15 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	// Held at 1.7.x: avro 1.8.0 changed SchemaNode to an interface, which
-	// does not compile against apache/iceberg-go v0.6.0 (the latest).
-	// Unpin once iceberg-go ships a release built against avro 1.8.
+	// does not compile against apache/iceberg-go v0.6.0 (the latest), reached
+	// from go-lakekeeper via iceberg-go/catalog/rest.
+	//
+	// This also gates github.com/apache/arrow-go/v18 at 18.7.x: 18.8.0 requires
+	// avro 1.8.0, and a `require` here cannot hold a transitive minimum down
+	// (MVS takes the max), so bumping arrow re-breaks the iceberg-go build.
+	//
+	// Unpin both once iceberg-go ships a release built against avro 1.8.
+	// iceberg-go main already requires avro 1.8.0; it is only unreleased.
 	github.com/twmb/avro v1.7.2 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect

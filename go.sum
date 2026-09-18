@@ -76,8 +76,8 @@ github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d h1:licZJFw2RwpH
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d/go.mod h1:asat636LX7Bqt5lYEZ27JNDcqxfjdBQuJ/MM4CN/Lzo=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
-github.com/anthropics/anthropic-sdk-go v1.71.0 h1:DK9xG3s5t+xUIOp+R+1LIRjkU/wG57YyQO3630+gYOE=
-github.com/anthropics/anthropic-sdk-go v1.71.0/go.mod h1:x+lPk/cCl48uRegeP0hlYYBN1b7bEBTveInIMgLicnY=
+github.com/anthropics/anthropic-sdk-go v1.72.0 h1:T0qQWWfygiL24lqEQaffRXCvEeno3yiv/mFzUdY1E88=
+github.com/anthropics/anthropic-sdk-go v1.72.0/go.mod h1:x+lPk/cCl48uRegeP0hlYYBN1b7bEBTveInIMgLicnY=
 github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYWrPrQ=
 github.com/antlr4-go/antlr/v4 v4.13.1/go.mod h1:GKmUxMtwp6ZgGwZSva4eWPC5mS6vUAmOABFgjdkM7Nw=
 github.com/apache/arrow-go/v18 v18.7.0 h1:Vw/i+cJyebUofT7JlqFpe65LrmwxULn166jjwStM4HY=

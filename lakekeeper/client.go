@@ -1,9 +1,12 @@
 package lakekeeper
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -296,6 +299,39 @@ func (c *Client) GetWarehouseID(ctx context.Context, lakekeeperURL, token, wareh
 		}
 	}
 	return "", fmt.Errorf("warehouse %q not found", warehouseName)
+}
+
+// CreateNamespace creates a namespace in a warehouse. Idempotent — an existing
+// namespace (409) is success.
+// POST /catalog/v1/<warehouseID>/namespaces
+//
+// Raw HTTP like WaitForReady: this is the Iceberg REST catalog API, which the
+// go-lakekeeper SDK (management API only) does not cover. The warehouse ID is
+// Lakekeeper's catalog prefix.
+func (c *Client) CreateNamespace(ctx context.Context, lakekeeperURL, token, warehouseID, namespace string) error {
+	body, err := json.Marshal(map[string][]string{"namespace": {namespace}})
+	if err != nil {
+		return fmt.Errorf("create namespace: marshal: %w", err)
+	}
+	url := strings.TrimRight(lakekeeperURL, "/") + "/catalog/v1/" + warehouseID + "/namespaces"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create namespace: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("create namespace %q: %w", namespace, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusConflict {
+		return nil
+	}
+	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return fmt.Errorf("create namespace %q: HTTP %d: %s", namespace, resp.StatusCode, strings.TrimSpace(string(msg)))
 }
 
 // CreateUser registers a user in Lakekeeper.

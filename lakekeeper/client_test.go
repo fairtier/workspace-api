@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
@@ -809,4 +810,48 @@ func mapKeys(m map[string]json.RawMessage) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func TestCreateNamespace_Success(t *testing.T) {
+	fs := newFakeServer(t)
+	fs.handle("POST /catalog/v1/wh-1/namespaces", http.StatusOK, map[string]any{"namespace": []string{"default"}})
+
+	c := &Client{}
+	if err := c.CreateNamespace(context.Background(), fs.URL(), "test-token", "wh-1", "default"); err != nil {
+		t.Fatal(err)
+	}
+
+	call := fs.lastCall()
+	if got := call.Header.Get("Authorization"); got != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want bearer token", got)
+	}
+	assertJSONField(t, call.bodyMap(), "namespace", `["default"]`)
+}
+
+func TestCreateNamespace_AlreadyExists(t *testing.T) {
+	fs := newFakeServer(t)
+	fs.handle("POST /catalog/v1/wh-1/namespaces", http.StatusConflict, map[string]any{
+		"error": map[string]any{"message": "Namespace already exists", "type": "NamespaceAlreadyExists", "code": 409},
+	})
+
+	c := &Client{}
+	if err := c.CreateNamespace(context.Background(), fs.URL(), "test-token", "wh-1", "default"); err != nil {
+		t.Fatalf("expected nil error for 409, got: %v", err)
+	}
+}
+
+func TestCreateNamespace_Forbidden(t *testing.T) {
+	fs := newFakeServer(t)
+	fs.handle("POST /catalog/v1/wh-1/namespaces", http.StatusForbidden, map[string]any{
+		"error": map[string]any{"message": "forbidden", "type": "WarehouseActionForbidden", "code": 403},
+	})
+
+	c := &Client{}
+	err := c.CreateNamespace(context.Background(), fs.URL(), "test-token", "wh-1", "default")
+	if err == nil {
+		t.Fatal("expected an error for 403")
+	}
+	if !strings.Contains(err.Error(), "403") || !strings.Contains(err.Error(), "WarehouseActionForbidden") {
+		t.Errorf("error should carry status and body, got: %v", err)
+	}
 }

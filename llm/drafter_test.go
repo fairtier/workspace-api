@@ -176,7 +176,7 @@ func TestDrafter_DraftTransformationUnsupported(t *testing.T) {
 	// schema makes "no" unrepresentable, which is how a drafter ends up
 	// building on the nearest listed table and flagging it in notes.
 	assertRefusalSchema(t, caller.got.Schema)
-	if !strings.Contains(caller.got.System, "dbt-duckdb") {
+	if !strings.Contains(caller.got.System, "dbt-oss v2") {
 		t.Fatal("system prompt lost the dbt capability envelope")
 	}
 }

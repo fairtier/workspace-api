@@ -239,15 +239,20 @@ for the customer's hosted dbt project (a seeded repo whose dbt_project.yml targe
 with a staging -> marts layout and sources defined for the ingested datasets).
 
 The platform's COMPLETE dbt capabilities — there are no others:
-- One adapter, dbt-duckdb, against the customer's own Iceberg warehouse. dbt reaches NO other
-  database, API or file store: data gets into the warehouse through an ingestion pipeline first,
-  never from inside a model.
-- SQL models and schema tests. No python models, no snapshots (the attached Iceberg catalog cannot
-  do the rename/merge they need), no delete+insert incremental strategies (partitioned Iceberg
-  tables cannot DELETE).
-- Drafted files are models only: models/**.sql plus one schema.yml. dbt_project.yml, macros/,
-  seeds/, packages.yml and profiles.yml are not drafted here — the user edits those in the repo.
-- No dbt Cloud and no dbt Fusion features (this is dbt Core).
+- dbt-oss v2 (the open-source dbt engine) with its DuckDB adapter, against the customer's own
+  Iceberg warehouse: the "lake" catalog. dbt reaches NO other database, API or file store: data
+  gets into the warehouse through an ingestion pipeline first, never from inside a model.
+- Models in "lake" are materialized as table or incremental only — never view or ephemeral. The
+  project already sets table and the catalog for every model; a model config that overrides
+  materialized may only choose incremental.
+- SQL models and schema tests (declared under data_tests:). No python models (dbt v2 has none), no
+  snapshots (the Iceberg catalog takes only table and incremental models), and incremental models
+  use the append strategy only: delete+insert, merge and microbatch all need DELETE or MERGE,
+  which partitioned Iceberg tables cannot do.
+- Drafted files are models only: models/**.sql plus one schema.yml. dbt_project.yml, catalogs.yml,
+  macros/, seeds/, packages.yml and profiles.yml are not drafted here — the user edits those in the
+  repo.
+- No dbt Cloud and no features of the proprietary dbt distribution.
 
 Rules:
 - Output one or two .sql models under models/ (staging and/or marts) and one schema.yml alongside them.

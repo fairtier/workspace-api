@@ -6,7 +6,7 @@ require (
 	connectrpc.com/connect v1.21.0
 	connectrpc.com/cors v0.1.0
 	connectrpc.com/grpchealth v1.5.0
-	connectrpc.com/grpcreflect v1.3.0
+	connectrpc.com/grpcreflect v1.3.1
 	connectrpc.com/otelconnect v0.9.0
 	filippo.io/age v1.3.2
 	github.com/MicahParks/jwkset v0.11.3

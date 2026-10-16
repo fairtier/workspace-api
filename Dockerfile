@@ -1,13 +1,14 @@
 ############################
 # STEP 0 build arguments
 ############################
-# Go 1.27.0 — the current stable release. It supersedes the 1.26.x stdlib
-# advisory pin this ARG used to carry (GO-2026-5037 crypto/x509 and
-# GO-2026-5039 net/textproto are both included). Matches the `go 1.27.0` in
-# go.mod — move the two together (CI resolves its toolchain from go.mod, this
-# pin is the only hand-maintained copy; Dependabot's docker ecosystem watches
-# it).
-ARG GO_VERSION=1.27.0
+# Go 1.27.2 — the current stable patch release, carrying the stdlib fixes for
+# GO-2026-6599..6617 (net/http, http2, crypto/tls, html/template,
+# net/textproto) that govulncheck flags on 1.27.0. Matches the
+# `toolchain go1.27.2` in go.mod — move the two together (CI resolves its
+# toolchain from go.mod, this pin is the only hand-maintained copy;
+# Dependabot's docker ecosystem watches it). The `go 1.27.0` directive stays
+# the minimum, so library consumers are not forced onto a patch release.
+ARG GO_VERSION=1.27.2
 ARG BASE_VARIANT=trixie
 
 ############################

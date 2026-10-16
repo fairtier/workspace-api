@@ -55,7 +55,9 @@ jobs:
           # gofumpt formatter, and a linter bump can add formatting rules that
           # turn an unrelated PR red. Keep in step with the monorepo's
           # golangci-version input in .github/workflows/pr-checks.yml.
-          version: v2.13.2
+          # v2.15.0 is the floor for the go1.27.2 toolchain: v2.13.2 cannot
+          # read its stdlib export data and fails every package on typecheck.
+          version: v2.15.0
           args: --timeout=5m
 
   test:

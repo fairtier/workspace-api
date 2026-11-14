@@ -194,7 +194,14 @@ func checkResponseStatus(resp *http.Response, method, path string) error {
 		return workspace.ErrRepoFileChanged
 	}
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	return fmt.Errorf("gitea %s %s: status %d: %s", method, path, resp.StatusCode, bytes.TrimSpace(snippet))
+	err := fmt.Errorf("gitea %s %s: status %d: %s", method, path, resp.StatusCode, bytes.TrimSpace(snippet))
+	// Reading a missing file is the caller's mistake, not a server fault.
+	// Only the contents read is mapped: a 404 elsewhere (a missing repo, a
+	// write) stays an opaque error.
+	if resp.StatusCode == http.StatusNotFound && method == http.MethodGet && strings.Contains(path, "/contents/") {
+		return fmt.Errorf("%w: %w", workspace.ErrRepoFileNotFound, err)
+	}
+	return err
 }
 
 type treeResponse struct {

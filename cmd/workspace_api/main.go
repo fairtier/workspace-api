@@ -336,6 +336,7 @@ func run() error {
 	pipelineServer := &server.PipelineServer{Service: pipelineSvc, FileDrop: fileDropSvc, SourceTests: sourceTestSvc}
 	boxRepoServer := &server.BoxRepoServer{Service: boxRepoSvc}
 	notificationServer := &server.NotificationServer{Service: notificationSvc}
+	workflowServer := &server.WorkflowServer{Service: workflowSvc}
 
 	// The MCP endpoint (off unless MCP_ENABLED=true): a person's own agent
 	// calls the same handlers as the Console, authenticated by an access
@@ -345,6 +346,7 @@ func run() error {
 			Query:           queryServer,
 			Pipelines:       pipelineServer,
 			Transformations: transformationServer,
+			Workflows:       workflowServer,
 			Repos:           boxRepoServer,
 			Notifications:   notificationServer,
 		}, corsAllowedOrigins())
@@ -357,7 +359,7 @@ func run() error {
 		Snapshots:       &server.SnapshotServer{Workspaces: resolver, Snapshots: boxCreds, HTTPClient: http.DefaultClient},
 		Pipelines:       pipelineServer,
 		Transformations: transformationServer,
-		Workflows:       &server.WorkflowServer{Service: workflowSvc},
+		Workflows:       workflowServer,
 		PipelineAssist:  pipelineAssistServer,
 		Assist:          assistServer,
 		BoxRepos:        boxRepoServer,

@@ -26,6 +26,8 @@ type tool struct {
 // toolset is every tool, in the order tools/list reports them.
 func toolset() []tool {
 	return []tool{
+		// The overview an agent starts from.
+		readTool("workspace_status", "What is broken or stale", workspaceStatusDesc, workspaceStatus),
 		// The lakehouse.
 		readTool("list_tables", "List tables", listTablesDesc, listTables),
 		readTool("describe_table", "Describe a table", describeTableDesc, describeTable),
@@ -38,6 +40,13 @@ func toolset() []tool {
 		readTool("list_transformations", "List transformations", listTransformationsDesc, listTransformations),
 		readTool("get_transformation", "Get a transformation and its recent runs", getTransformationDesc, getTransformation),
 		writeTool("trigger_transformation", "Run a transformation now", triggerTransformationDesc, effects{destructive: true}, triggerTransformation),
+		// Orchestration.
+		readTool("list_workflows", "List workflows", listWorkflowsDesc, listWorkflows),
+		readTool("get_workflow", "Get a workflow and its recent runs", getWorkflowDesc, getWorkflow),
+		readTool("list_workflow_runs", "List a workflow's runs", listWorkflowRunsDesc, listWorkflowRuns),
+		writeTool("trigger_workflow", "Run a workflow now", triggerWorkflowDesc, effects{destructive: true, openWorld: true}, triggerWorkflow),
+		writeTool("create_workflow", "Create a workflow", createWorkflowDesc, effects{}, createWorkflow),
+		writeTool("update_workflow", "Change a workflow", updateWorkflowDesc, effects{destructive: true, idempotent: true}, updateWorkflow),
 		// The workspace's git repositories.
 		readTool("list_repo_files", "List repository files", listRepoFilesDesc, listRepoFiles),
 		readTool("read_repo_file", "Read a repository file", readRepoFileDesc, readRepoFile),

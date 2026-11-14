@@ -294,9 +294,13 @@ real outcome.
   already ran rather than running it twice; across ticks the server does not
   arbitrate.
 - **Stuck-run sweep is liveness-by-report.** A worker that dies inside a
-  long step is only noticed once that step outlasts the worker's limits
-  (about 19h by default); the worker's own start-up stale-run finalisation
-  could close it sooner. Conversely, a "step running" report that is lost
+  long step is only noticed by this sweep once that step outlasts the
+  worker's limits (about 19h by default). The reference worker closes it
+  sooner when it can: where its `WORKSPACE_DB_URL` is this API's database,
+  at startup it reports every workflow run still `running` as `failed`
+  through `ReportWorkflowRun` (running step `failed`, the rest `skipped`),
+  so the usual notification fires once and the sweep, which only looks at
+  `running` runs, does not fail it again. Conversely, a "step running" report that is lost
   and not retried within the idle grace makes a live run look idle and it
   is swept, then corrected by the worker's next report.
 - **No metrics** beyond the RPC-level ones; workflow runs are not counted in

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/MicahParks/keyfunc/v3"
@@ -187,22 +188,60 @@ func (a UserAuth) userIDFromToken(ctx context.Context, token string) (UserID, er
 	return userID, err
 }
 
+// Identity is a verified sign-in token's caller, as Authenticate returns it.
+type Identity struct {
+	UserID  UserID
+	Profile TokenProfile
+	// ExpiresAt is the token's exp claim (always present: parsing requires
+	// it).
+	ExpiresAt time.Time
+}
+
+// Authenticate verifies a bare bearer token (no "Bearer " prefix) under
+// exactly the policy the auth interceptor applies, for an endpoint outside
+// ConnectRPC that authenticates on its own (the MCP endpoint). Service-account
+// subjects are rejected here as everywhere else.
+func (a UserAuth) Authenticate(ctx context.Context, token string) (Identity, error) {
+	parsed, userID, err := a.verifyToken(ctx, token)
+	if err != nil {
+		return Identity{}, err
+	}
+	exp, err := parsed.Claims.GetExpirationTime()
+	if err != nil || exp == nil {
+		return Identity{}, errors.New("invalid token")
+	}
+	return Identity{
+		UserID:    userID,
+		Profile:   tokenProfile(string(userID), parsed.Claims),
+		ExpiresAt: exp.Time,
+	}, nil
+}
+
 // parseToken verifies a bearer token and returns the caller together with the
 // profile claims it carries.
 func (a UserAuth) parseToken(ctx context.Context, token string) (UserID, TokenProfile, error) {
+	parsed, userID, err := a.verifyToken(ctx, token)
+	if err != nil {
+		return "", TokenProfile{}, err
+	}
+	return userID, tokenProfile(string(userID), parsed.Claims), nil
+}
+
+// verifyToken is the one place a sign-in token is verified.
+func (a UserAuth) verifyToken(ctx context.Context, token string) (*jwt.Token, UserID, error) {
 	parsed, err := jwt.Parse(token, a.JWKS.KeyfuncCtx(ctx), a.parserOptions()...)
 	if err != nil {
-		return "", TokenProfile{}, errors.New("invalid token")
+		return nil, "", errors.New("invalid token")
 	}
 
 	sub, err := parsed.Claims.GetSubject()
 	if err != nil || sub == "" {
-		return "", TokenProfile{}, errors.New("missing subject")
+		return nil, "", errors.New("missing subject")
 	}
 	if UserID(sub).IsServiceAccount() {
-		return "", TokenProfile{}, errors.New("service-account token is not a user identity")
+		return nil, "", errors.New("service-account token is not a user identity")
 	}
-	return UserID(sub), tokenProfile(sub, parsed.Claims), nil
+	return parsed, UserID(sub), nil
 }
 
 // tokenProfile reads the optional profile claims out of a verified token.

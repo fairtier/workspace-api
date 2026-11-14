@@ -751,3 +751,32 @@ func TestAuthInterceptorSetsTokenProfile(t *testing.T) {
 		t.Errorf("TokenProfileFromContext() = %+v, want %+v", got, want)
 	}
 }
+
+func TestUserAuthAuthenticate(t *testing.T) {
+	jwks, sign := testJWKS(t)
+	auth := UserAuth{JWKS: jwks, Issuer: "https://auth.example.test"}
+	exp := time.Now().Add(time.Hour).Truncate(time.Second)
+
+	id, err := auth.Authenticate(context.Background(), sign(jwt.MapClaims{
+		"sub": "customer-acme/alice", "iss": "https://auth.example.test", "exp": exp.Unix(),
+		"preferred_username": "alice", "email": "alice@example.test",
+	}))
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if id.UserID != "customer-acme/alice" || id.Profile.Email != "alice@example.test" || !id.ExpiresAt.Equal(exp) {
+		t.Errorf("identity = %+v", id)
+	}
+
+	for name, token := range map[string]string{
+		"garbage":         "not-a-jwt",
+		"wrong issuer":    sign(jwt.MapClaims{"sub": "u", "iss": "https://evil.example.test", "exp": exp.Unix()}),
+		"expired":         sign(jwt.MapClaims{"sub": "u", "iss": "https://auth.example.test", "exp": time.Now().Add(-time.Minute).Unix()}),
+		"no exp":          sign(jwt.MapClaims{"sub": "u", "iss": "https://auth.example.test"}),
+		"service account": sign(jwt.MapClaims{"sub": "admin/dlt-worker", "iss": "https://auth.example.test", "exp": exp.Unix()}),
+	} {
+		if _, err := auth.Authenticate(context.Background(), token); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

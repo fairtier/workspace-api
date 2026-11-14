@@ -10,6 +10,7 @@ import (
 	pipelinev1 "github.com/fairtier/workspace-api/proto/pipeline/v1"
 	transformationv1 "github.com/fairtier/workspace-api/proto/transformation/v1"
 	workflowv1 "github.com/fairtier/workspace-api/proto/workflow/v1"
+	"github.com/fairtier/workspace-api/workspace"
 )
 
 const workspaceStatusDesc = `Answer "what is broken or stale right now?" in one call: every pipeline, transformation and workflow with whether it is enabled, its schedule (empty = manual only), its last run's status and time, and — when that run failed — its error message (shortened). attention lists what most likely needs a look: failed last runs, and enabled schedules that have never run. Compare last_run_at with now and the schedule to spot stale data (a run stuck in "pending" for minutes means the worker is not picking work up). Start here, then drill in with get_pipeline / get_transformation / get_workflow.`
@@ -72,7 +73,10 @@ type statusBuilder struct {
 func (st *statusBuilder) add(items []statusItem, kind string, it statusItem, lastError func() string) []statusItem {
 	if it.LastRunStatus == runFailed && st.budget > 0 {
 		st.budget--
-		it.LastError = truncate(redactString(lastError()), statusErrorLen)
+		// Redact before cutting, so a cut cannot split a credential from
+		// the "@" that identifies it; the first line is the message, the
+		// rest is usually a traceback.
+		it.LastError = workspace.FirstLine(redactString(lastError()), statusErrorLen)
 	}
 	switch {
 	case it.LastRunStatus == runFailed:

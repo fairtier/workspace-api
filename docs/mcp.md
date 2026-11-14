@@ -27,7 +27,7 @@ A workspace, as the tools describe it to the agent:
 
 | Tool | Scope | What it does |
 | --- | --- | --- |
-| `workspace_status` | read | One-call overview: every pipeline, transformation and workflow with enabled, schedule, last run status/time and the failed run's error (300 chars), plus an `attention` list (failed last runs; enabled schedules that never ran) and the server's `now`. |
+| `workspace_status` | read | One-call overview: every pipeline, transformation and workflow with enabled, schedule, last run status/time and the first line of the failed run's error (≤ 300 chars, redacted), plus an `attention` list (failed last runs; enabled schedules that never ran) and the server's `now`. |
 | `list_tables` | read | Every table, as namespace + name. |
 | `describe_table` | read | One table's columns and types. |
 | `run_query` | read | One read-only SQL statement; at most 1000 rows / ~256 KB. See [the SQL guard](#the-sql-guard). |
@@ -35,7 +35,7 @@ A workspace, as the tools describe it to the agent:
 | `get_pipeline` | read | One pipeline's definition (source config with secrets redacted) and recent runs with errors. |
 | `list_transformations` | read | Transformations with schedule, trigger and last run. |
 | `get_transformation` | read | One transformation and its recent runs: commit, model/test counts, errors. |
-| `list_workflows` | read | Workflows with their steps, schedule, enabled flag and last run. |
+| `list_workflows` | read | Workflows with their steps, schedule, enabled flag and last run — when it failed, which step and the first line of its error. |
 | `get_workflow` | read | One workflow and its 10 most recent runs, each with step runs (status, error, the pipeline/transformation run produced). |
 | `list_workflow_runs` | read | A workflow's older runs, paginated (`page_size` ≤ 100, `page_token`). |
 | `list_repo_files` | read | Files in `transformations` or `rill`. |

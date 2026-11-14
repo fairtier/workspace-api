@@ -83,6 +83,10 @@ type RepoCommit struct {
 // changed outside the Console (e.g. in the app's own UI). Refresh and retry.
 var ErrRepoFileChanged = errors.New("the file changed outside the Console; refresh and try again")
 
+// ErrRepoFileNotFound means the requested file (or the ref it was asked at)
+// does not exist in the repository.
+var ErrRepoFileNotFound = errors.New("file not found in the repository")
+
 // CommitAuthor is the git author identity of a Console-originated box-repo
 // commit: the acting user. The committer stays a fixed platform identity
 // (gitea.platformCommitter), so history reads "authored by <user>,

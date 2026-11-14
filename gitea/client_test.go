@@ -242,3 +242,24 @@ func TestClient_statusErrorIsNotBoxUnreachable(t *testing.T) {
 		t.Fatalf("a 500 status must not be classified unreachable: %v", err)
 	}
 }
+
+// A missing file is NotFound to the caller, not an internal error.
+func TestClient_GetContentsMissingFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"GetContentsOrList"}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, _, err := testClient(srv).GetContents(context.Background(), "rill", "models/nope.sql")
+	if !errors.Is(err, workspace.ErrRepoFileNotFound) {
+		t.Fatalf("err = %v, want ErrRepoFileNotFound", err)
+	}
+	if errors.Is(err, workspace.ErrBoxUnreachable) {
+		t.Fatal("a 404 was classified as an unreachable box")
+	}
+	// A 404 on a write is not reinterpreted.
+	_, err = testClient(srv).PutContents(context.Background(), "rill", "models/nope.sql", "x", "abc", "m", nil)
+	if err == nil || errors.Is(err, workspace.ErrRepoFileNotFound) {
+		t.Fatalf("PUT 404: %v", err)
+	}
+}

@@ -40,6 +40,7 @@ var domainErrorCodes = []struct {
 	{workspace.ErrInvalidPageToken, connect.CodeInvalidArgument},
 	{workspace.ErrWorkspaceNotFound, connect.CodeNotFound},
 	{workspace.ErrBoxRepoUnavailable, connect.CodeFailedPrecondition},
+	{workspace.ErrRepoFileNotFound, connect.CodeNotFound},
 	{workspace.ErrBoxUnreachable, connect.CodeUnavailable},
 	{workspace.ErrBoxCredentialNotFound, connect.CodeFailedPrecondition},
 	{workspace.ErrPipelineVersionMismatch, connect.CodeFailedPrecondition},

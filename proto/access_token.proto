@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package access_token.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/access_token/v1;accesstokenv1";
+
+// AccessTokenService manages workspace access tokens: long-lived, revocable
+// bearer credentials a person mints for a non-interactive client of their own
+// (today: an MCP client such as a coding agent connecting to /mcp).
+//
+// A token acts as the person who minted it, within the scopes it carries. It
+// is accepted ONLY by the /mcp endpoint — never by this API's ConnectRPC
+// services, this one included. Every RPC here therefore requires an ordinary
+// interactive sign-in token, so a leaked access token can neither mint a
+// successor nor revoke the owner's other tokens.
+//
+// All RPCs are tenant-scoped from the caller's sign-in token; there is no slug
+// parameter. List and Revoke see only the caller's own tokens.
+service AccessTokenService {
+  // CreateAccessToken mints a token. The plaintext secret is returned exactly
+  // once, in this response; only its hash is stored, so it cannot be shown
+  // again — a lost token is revoked and replaced, not recovered.
+  rpc CreateAccessToken(CreateAccessTokenRequest) returns (CreateAccessTokenResponse) {}
+
+  // ListAccessTokens returns the caller's tokens, newest first, revoked and
+  // expired ones included (their state is in the fields). Never returns a
+  // secret or a hash.
+  rpc ListAccessTokens(ListAccessTokensRequest) returns (ListAccessTokensResponse) {}
+
+  // RevokeAccessToken revokes one of the caller's tokens. Takes effect on the
+  // token's next use. Revoking an already-revoked token succeeds.
+  rpc RevokeAccessToken(RevokeAccessTokenRequest) returns (RevokeAccessTokenResponse) {}
+}
+
+message CreateAccessTokenRequest {
+  // A label for the person's own benefit ("laptop claude code"). Required,
+  // at most 100 characters.
+  string name = 1;
+  // Scopes to grant: "workspace:read" and/or "workspace:write". Required (at
+  // least one). "workspace:write" implies "workspace:read".
+  repeated string scopes = 2;
+  // Lifetime in days. 0 means the default (90); the maximum is 365.
+  int32 expires_in_days = 3;
+}
+
+message CreateAccessTokenResponse {
+  // The stored token's metadata.
+  AccessToken token = 1;
+  // The plaintext bearer secret ("ftw_" + 64 hex characters). Shown once:
+  // it is not stored and no RPC returns it again.
+  string secret = 2;
+}
+
+message ListAccessTokensRequest {}
+
+message ListAccessTokensResponse {
+  repeated AccessToken tokens = 1;
+}
+
+message RevokeAccessTokenRequest {
+  // The token's id (AccessToken.id), not its secret.
+  string id = 1;
+}
+
+message RevokeAccessTokenResponse {}
+
+// AccessToken is a token's metadata. It never carries the secret.
+message AccessToken {
+  string id = 1;
+  string name = 2;
+  // The first characters of the secret ("ftw_1a2b3c4d"), enough to tell
+  // tokens apart in a list and to match one found in a config file. Not
+  // usable as a credential.
+  string prefix = 3;
+  repeated string scopes = 4;
+  // RFC 3339 timestamps. last_used_at is empty when never used and is
+  // updated at most about once a minute; revoked_at is empty unless revoked.
+  string created_at = 5;
+  string expires_at = 6;
+  string last_used_at = 7;
+  string revoked_at = 8;
+}

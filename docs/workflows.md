@@ -29,11 +29,26 @@ Console.
 Rules enforced on create/update: name required; 1–20 steps; each step's kind
 is `pipeline` or `transformation` and its `ref_id` a UUID of that kind that
 exists **in the same workspace** (a missing and a foreign target are
-indistinguishable); no target twice; the schedule is empty, an `@macro`
-(`@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly`/`@annually`,
-`@midnight`) or a five-field cron expression of values, ranges, lists, steps
-and month/day names. That is a subset of what the worker's `croniter` accepts
-— pipelines and transformations get no server-side cron check at all.
+indistinguishable); no target twice; the schedule is empty or a five-field
+cron expression (UTC) of values, ranges, lists, steps and month/day names.
+`@daily`-style shortcuts are **refused** (the error names the five-field
+equivalent): the worker's `croniter` would accept them, but the Console's
+cron editor rejects them for every schedule — pipelines and transformations
+included — and could not display one. Pipelines and transformations get no
+server-side cron check at all.
+
+Violations come back as `InvalidArgument` with one `FieldViolation` whose
+`field` is the offending input: `name`, `steps` (none, or more than 20),
+`steps[i].kind`, `steps[i].ref_id`, `schedule`, `description`.
+
+`CreateWorkflow` creates the workflow enabled unless the request sets the
+optional `enabled` to false. `SetWorkflowEnabled{id, enabled}` flips the flag
+without resending the definition (the Console toggle; MCP `update_workflow`
+uses it when only `enabled` is given). `ListWorkflows` / `GetWorkflow` carry,
+when the latest run failed, `last_run_error` (first line, at most 200
+characters, the failed step's error before the run's) and
+`last_failed_step_position` / `last_failed_step_name` — so a list row can say
+which step failed without a call of its own.
 
 **Deleting a referenced pipeline or transformation removes the step** (FK
 `ON DELETE CASCADE`) rather than being refused. Deletions also arrive from
@@ -41,7 +56,10 @@ unattended paths — a definition file removed from the repository and adopted,
 the demo teardown — where a refusal would wedge the sweep. It matches what
 `trigger_after_pipeline_id` does (`SET NULL`). Run history is unaffected:
 step runs keep their own snapshot. A workflow left with no steps is not served
-to the worker, and `TriggerWorkflow` refuses it (`FailedPrecondition`).
+to the worker, and `TriggerWorkflow` refuses it (`FailedPrecondition`). A run
+queued *before* the last step disappeared is failed the next time configs are
+served ("not run: every step of this workflow was removed …"), with the usual
+notification, rather than staying `pending` forever.
 
 Authorization mirrors `TransformationService` method for method: user RPCs
 need an authenticated caller and act only on their workspace (another
@@ -50,11 +68,17 @@ port only, with a tenant-bound service token.
 
 ## Worker contract
 
-Every poll tick, alongside `GetPipelineConfigs` / `GetTransformationConfigs`:
+The worker is sequential. Every poll tick it handles pipelines, then
+workflows, then transformations:
 
 1. `GetWorkflowConfigs{customer_slug}`. Each item carries the steps (position,
    kind, `ref_id`, current name, `ref_enabled`), `schedule`, `enabled`,
    `trigger_now` + `pending_run_id`, and `last_run_at` / `last_run_status`.
+   **A workflow whose latest run is still `running` is left out** (not even a
+   queued Run-now is offered), so a second run can never start beside it;
+   it comes back once that run is reported finished or is failed as stuck.
+   Withholding the item, rather than flagging it, needs no worker logic: a
+   worker cannot start what it is not given.
 2. **Is it due?** `trigger_now` → due, even when the workflow is disabled (the
    pipeline rule: disabling stops the schedule, not a run a person asked
    for). Otherwise, not `enabled` or empty `schedule` → not due. Otherwise
@@ -70,8 +94,13 @@ Every poll tick, alongside `GetPipelineConfigs` / `GetTransformationConfigs`:
    acknowledgement.
 5. **For each step in position order**:
    - Look the target up by `ref_id` in the configs the worker already has (or
-     its definition checkout). If it is missing or `ref_enabled` is false,
-     the step fails without running ("pipeline is disabled" / "not found").
+     its definition checkout). If it is missing or disabled, the step fails
+     without running ("pipeline is disabled" / "not found"). For a pipeline,
+     the definition file's `enabled` wins over the database-derived
+     `ref_enabled`, as for every other pipeline field in files mode.
+   - A target that already ran **this tick** (as a standalone run, or as a
+     step of an earlier workflow) is not run again: the step reuses that run's
+     id and status.
    - Report the step `running` (optional, but it makes the Console live).
    - Run it exactly as a standalone run of that pipeline/transformation —
      same isolation, same local-first recording, same `ReportPipelineRun` /
@@ -91,7 +120,24 @@ overwrites status, `completed_at` and `error_message`, keeps the stored
 a run id that already belongs to another workflow is refused (`NotFound`).
 Send the full step list every time; positions not sent are left as they were.
 The in-app "workflow failed" notification fires once, on the transition into
-`failed`.
+`failed`; its body names the failed step and the first line of its error.
+
+Error codes of `ReportWorkflowRun`, for the worker's retry decision:
+
+| Code | Meaning | Retry? |
+| --- | --- | --- |
+| `InvalidArgument` | Malformed report (UUID, status, timestamp, position, step kind); a `FieldViolation` names it. | No — the same report fails the same way. |
+| `NotFound` | Workflow deleted (mid-run) or another tenant's, or `run_id` belongs to another workflow. | No. |
+| `Unauthenticated`, `PermissionDenied` | Token or wiring problem. | Not until an operator fixes it. |
+| anything else (`Unavailable`, `DeadlineExceeded`, `Internal`, `Unknown`, transport errors) | Transient. | Yes, the same report. |
+
+**Stuck runs.** A worker killed mid-workflow leaves its run `running`. The API
+sweeps every `WORKFLOW_RUN_STUCK_SWEEP_INTERVAL` (default 5m) and fails runs
+`running` for longer than `WORKFLOW_RUN_STUCK_TIMEOUT` (default 8h — the
+worker's pipeline run timeout defaults to 6h, and steps run one after
+another): the run and its running step become `failed`, steps that never
+started `skipped`, and the failure notification fires once. A worker report
+arriving afterwards still upserts normally.
 
 ## PoC shortcuts and known gaps
 
@@ -105,14 +151,23 @@ The in-app "workflow failed" notification fires once, on the transition into
   `schedule` (and a transformation its `trigger_after_pipeline_id`), so it
   can run both on its own and as part of the workflow. The intended setup is
   to clear the step targets' own schedules (leave them enabled — a disabled
-  target fails its step). The worker should additionally not start a step
-  whose target is already running in the same tick; the server does not
+  target fails its step). Within one tick the worker reuses a target that
+  already ran rather than running it twice; across ticks the server does not
   arbitrate.
-- **No stuck-run sweep.** A worker that dies mid-workflow leaves the run
-  `running` until it is reported again. The worker's start-up stale-run
-  finalisation should cover `workflow_runs` and `workflow_step_runs` the way
-  it covers the other run tables; the central pipeline sweep does not.
+- **Stuck-run sweep is time-based only.** A run is failed 8h after it
+  started, however soon the worker died; the worker's own start-up stale-run
+  finalisation could close it sooner.
 - **No metrics** beyond the RPC-level ones; workflow runs are not counted in
   the `workspace.` metric family yet.
 - The step **name** in the definition is resolved live from the target; the
   step run keeps the name the worker reported.
+
+## Follow-ups
+
+- **Optimistic concurrency** on `UpdateWorkflow` (an etag / `updated_at`
+  precondition); today two editors are last-writer-wins.
+- **Cancel** a pending or running run.
+- **`GetPipelineRun` / `GetTransformationRun`**, so a step run's
+  `pipeline_run_id` / `transformation_run_id` can deep-link to the exact run.
+- **Step target schedule info on `GetWorkflow`**, so the Console can warn
+  about the double-run setup above.

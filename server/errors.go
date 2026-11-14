@@ -47,6 +47,7 @@ var domainErrorCodes = []struct {
 	{workspace.ErrDemoNotLoaded, connect.CodeNotFound},
 	{workspace.ErrSourceTestNotFound, connect.CodeNotFound},
 	{workspace.ErrSourceTestUnsupported, connect.CodeFailedPrecondition},
+	{workspace.ErrAccessTokenNotFound, connect.CodeNotFound},
 }
 
 func domainError(err error) error {

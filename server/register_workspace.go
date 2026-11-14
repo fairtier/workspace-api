@@ -9,6 +9,7 @@ import (
 
 	"github.com/fairtier/workspace-api/core"
 	"github.com/fairtier/workspace-api/oauthgoogle"
+	"github.com/fairtier/workspace-api/proto/access_token/v1/accesstokenv1connect"
 	"github.com/fairtier/workspace-api/proto/assist/v1/assistv1connect"
 	"github.com/fairtier/workspace-api/proto/boxcredential/v1/boxcredentialv1connect"
 	"github.com/fairtier/workspace-api/proto/boxrepo/v1/boxrepov1connect"
@@ -63,6 +64,10 @@ type WorkspacePlaneServers struct {
 	// nil does not mount the service. Like Pipelines and Transformations it
 	// carries worker RPCs, so it must be a public-mux instance.
 	Workflows *WorkflowServer
+	// AccessTokens lets a person mint, list and revoke workspace access
+	// tokens for the MCP endpoint. Optional: nil does not mount the service
+	// (a deployment that does not serve /mcp has no use for the tokens).
+	AccessTokens *AccessTokenServer
 }
 
 // RegisterWorkspacePlane mounts the workspace plane's Connect services on the
@@ -98,6 +103,9 @@ func RegisterWorkspacePlane(mux *http.ServeMux, s WorkspacePlaneServers, opts co
 	}
 	if s.Workflows != nil {
 		mux.Handle(workflowv1connect.NewWorkflowServiceHandler(s.Workflows, opts))
+	}
+	if s.AccessTokens != nil {
+		mux.Handle(accesstokenv1connect.NewAccessTokenServiceHandler(s.AccessTokens, opts))
 	}
 }
 

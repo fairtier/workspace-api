@@ -44,6 +44,7 @@ import (
 	"github.com/fairtier/workspace-api/gitea"
 	"github.com/fairtier/workspace-api/lakekeeper"
 	"github.com/fairtier/workspace-api/llm"
+	"github.com/fairtier/workspace-api/mcpserver"
 	"github.com/fairtier/workspace-api/oauthgoogle"
 	"github.com/fairtier/workspace-api/objstore"
 	"github.com/fairtier/workspace-api/postgres"
@@ -332,20 +333,36 @@ func run() error {
 	assistServer.Service.PipelineRuns = pipelineSvc
 	assistServer.Service.TransformationRuns = transformationSvc
 
+	pipelineServer := &server.PipelineServer{Service: pipelineSvc, FileDrop: fileDropSvc, SourceTests: sourceTestSvc}
+	boxRepoServer := &server.BoxRepoServer{Service: boxRepoSvc}
+	notificationServer := &server.NotificationServer{Service: notificationSvc}
+
+	// The MCP endpoint (off unless MCP_ENABLED=true): a person's own agent
+	// calls the same handlers as the Console, authenticated by an access
+	// token or a sign-in token.
+	accessTokenServer, mountMCP := buildMCP(loadMCPConfig(os.Getenv, ws), logger, ws, resolver, repo, userAuth,
+		mcpserver.Backends{
+			Query:           queryServer,
+			Pipelines:       pipelineServer,
+			Transformations: transformationServer,
+			Repos:           boxRepoServer,
+			Notifications:   notificationServer,
+		}, corsAllowedOrigins())
+
 	mux := http.NewServeMux()
 	server.RegisterWorkspacePlane(mux, server.WorkspacePlaneServers{
 		Health:          &server.HealthServer{DB: db, Logger: logger},
 		LakekeeperUsers: &server.LakekeeperUserServer{Service: lakekeeperUserSvc},
 		Warehouses:      &server.WarehouseServer{Service: warehouseSvc},
 		Snapshots:       &server.SnapshotServer{Workspaces: resolver, Snapshots: boxCreds, HTTPClient: http.DefaultClient},
-		Pipelines:       &server.PipelineServer{Service: pipelineSvc, FileDrop: fileDropSvc, SourceTests: sourceTestSvc},
+		Pipelines:       pipelineServer,
 		Transformations: transformationServer,
 		Workflows:       &server.WorkflowServer{Service: workflowSvc},
 		PipelineAssist:  pipelineAssistServer,
 		Assist:          assistServer,
-		BoxRepos:        &server.BoxRepoServer{Service: boxRepoSvc},
+		BoxRepos:        boxRepoServer,
 		Demo:            demoServer,
-		Notifications:   &server.NotificationServer{Service: notificationSvc},
+		Notifications:   notificationServer,
 		Query:           queryServer,
 		// OAuth carries the deployment-wide half (redirect URL + state key);
 		// nil when the envs are unset, and GetOAuthClient then reports
@@ -363,7 +380,9 @@ func run() error {
 			Mirror: pipelineMirror,
 			Logger: logger,
 		},
+		AccessTokens: accessTokenServer,
 	}, authOpts)
+	mountMCP(mux)
 	// With googleOAuth nil the OAuth pair below answers 501 before touching
 	// resolver/grants, so passing them unconditionally is safe either way.
 	server.RegisterWorkspacePlainHTTP(mux, logger, userAuth, db, resolver, repo, repo, fileDropSvc, googleOAuth, firstCORSOrigin())

@@ -45,6 +45,9 @@ const (
 	// WorkflowServiceUpdateWorkflowProcedure is the fully-qualified name of the WorkflowService's
 	// UpdateWorkflow RPC.
 	WorkflowServiceUpdateWorkflowProcedure = "/workflow.v1.WorkflowService/UpdateWorkflow"
+	// WorkflowServiceSetWorkflowEnabledProcedure is the fully-qualified name of the WorkflowService's
+	// SetWorkflowEnabled RPC.
+	WorkflowServiceSetWorkflowEnabledProcedure = "/workflow.v1.WorkflowService/SetWorkflowEnabled"
 	// WorkflowServiceDeleteWorkflowProcedure is the fully-qualified name of the WorkflowService's
 	// DeleteWorkflow RPC.
 	WorkflowServiceDeleteWorkflowProcedure = "/workflow.v1.WorkflowService/DeleteWorkflow"
@@ -64,7 +67,8 @@ const (
 
 // WorkflowServiceClient is a client for the workflow.v1.WorkflowService service.
 type WorkflowServiceClient interface {
-	// CreateWorkflow defines a new workflow. It is enabled on creation.
+	// CreateWorkflow defines a new workflow. It is enabled on creation unless
+	// the request sets enabled to false.
 	CreateWorkflow(context.Context, *connect.Request[v1.CreateWorkflowRequest]) (*connect.Response[v1.CreateWorkflowResponse], error)
 	// ListWorkflows returns all workflows of the caller's workspace, each with
 	// its steps and the status of its most recent run.
@@ -74,6 +78,11 @@ type WorkflowServiceClient interface {
 	GetWorkflow(context.Context, *connect.Request[v1.GetWorkflowRequest]) (*connect.Response[v1.GetWorkflowResponse], error)
 	// UpdateWorkflow replaces a workflow's definition, steps included.
 	UpdateWorkflow(context.Context, *connect.Request[v1.UpdateWorkflowRequest]) (*connect.Response[v1.UpdateWorkflowResponse], error)
+	// SetWorkflowEnabled turns a workflow's schedule on or off without
+	// resending its definition. Same authorization as UpdateWorkflow. A
+	// disabled workflow keeps its definition and history, and a manual
+	// TriggerWorkflow still runs it.
+	SetWorkflowEnabled(context.Context, *connect.Request[v1.SetWorkflowEnabledRequest]) (*connect.Response[v1.SetWorkflowEnabledResponse], error)
 	// DeleteWorkflow permanently removes a workflow and its run history. The
 	// pipelines and transformations it references are not touched.
 	DeleteWorkflow(context.Context, *connect.Request[v1.DeleteWorkflowRequest]) (*connect.Response[v1.DeleteWorkflowResponse], error)
@@ -85,11 +94,27 @@ type WorkflowServiceClient interface {
 	ListWorkflowRuns(context.Context, *connect.Request[v1.ListWorkflowRunsRequest]) (*connect.Response[v1.ListWorkflowRunsResponse], error)
 	// GetWorkflowConfigs returns the workflows the worker should act on: every
 	// enabled workflow, plus a disabled one that has a pending (manually
-	// triggered) run. Workflows without steps are omitted.
+	// triggered) run. Omitted: workflows without steps (a pending run of one is
+	// failed instead, since nothing can ever run it), and workflows whose
+	// latest run is still "running" — the worker must not start a second run
+	// alongside it; the workflow reappears once that run is reported finished
+	// or is failed as stuck (a periodic server sweep fails runs "running" for
+	// longer than WORKFLOW_RUN_STUCK_TIMEOUT, 8 hours by default).
 	GetWorkflowConfigs(context.Context, *connect.Request[v1.GetWorkflowConfigsRequest]) (*connect.Response[v1.GetWorkflowConfigsResponse], error)
 	// ReportWorkflowRun records a workflow run's progress. It is an idempotent
 	// upsert on run_id, step runs included, so the worker reports after every
 	// step and may safely repeat a report.
+	//
+	// Errors a worker must NOT retry (the same report will fail the same way):
+	//   InvalidArgument   — malformed report (bad UUID, status, timestamp,
+	//                       position or step kind); FieldViolations name it.
+	//   NotFound          — the workflow does not exist (deleted mid-run) or
+	//                       belongs to another tenant, or run_id already
+	//                       belongs to another workflow.
+	// Configuration errors, not fixed by retrying the report until an operator
+	// acts: Unauthenticated, PermissionDenied.
+	// Anything else (Unavailable, DeadlineExceeded, Internal, Unknown, a
+	// transport failure) is transient: retry the same report.
 	ReportWorkflowRun(context.Context, *connect.Request[v1.ReportWorkflowRunRequest]) (*connect.Response[v1.ReportWorkflowRunResponse], error)
 }
 
@@ -126,6 +151,12 @@ func NewWorkflowServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			httpClient,
 			baseURL+WorkflowServiceUpdateWorkflowProcedure,
 			connect.WithSchema(workflowServiceMethods.ByName("UpdateWorkflow")),
+			connect.WithClientOptions(opts...),
+		),
+		setWorkflowEnabled: connect.NewClient[v1.SetWorkflowEnabledRequest, v1.SetWorkflowEnabledResponse](
+			httpClient,
+			baseURL+WorkflowServiceSetWorkflowEnabledProcedure,
+			connect.WithSchema(workflowServiceMethods.ByName("SetWorkflowEnabled")),
 			connect.WithClientOptions(opts...),
 		),
 		deleteWorkflow: connect.NewClient[v1.DeleteWorkflowRequest, v1.DeleteWorkflowResponse](
@@ -167,6 +198,7 @@ type workflowServiceClient struct {
 	listWorkflows      *connect.Client[v1.ListWorkflowsRequest, v1.ListWorkflowsResponse]
 	getWorkflow        *connect.Client[v1.GetWorkflowRequest, v1.GetWorkflowResponse]
 	updateWorkflow     *connect.Client[v1.UpdateWorkflowRequest, v1.UpdateWorkflowResponse]
+	setWorkflowEnabled *connect.Client[v1.SetWorkflowEnabledRequest, v1.SetWorkflowEnabledResponse]
 	deleteWorkflow     *connect.Client[v1.DeleteWorkflowRequest, v1.DeleteWorkflowResponse]
 	triggerWorkflow    *connect.Client[v1.TriggerWorkflowRequest, v1.TriggerWorkflowResponse]
 	listWorkflowRuns   *connect.Client[v1.ListWorkflowRunsRequest, v1.ListWorkflowRunsResponse]
@@ -192,6 +224,11 @@ func (c *workflowServiceClient) GetWorkflow(ctx context.Context, req *connect.Re
 // UpdateWorkflow calls workflow.v1.WorkflowService.UpdateWorkflow.
 func (c *workflowServiceClient) UpdateWorkflow(ctx context.Context, req *connect.Request[v1.UpdateWorkflowRequest]) (*connect.Response[v1.UpdateWorkflowResponse], error) {
 	return c.updateWorkflow.CallUnary(ctx, req)
+}
+
+// SetWorkflowEnabled calls workflow.v1.WorkflowService.SetWorkflowEnabled.
+func (c *workflowServiceClient) SetWorkflowEnabled(ctx context.Context, req *connect.Request[v1.SetWorkflowEnabledRequest]) (*connect.Response[v1.SetWorkflowEnabledResponse], error) {
+	return c.setWorkflowEnabled.CallUnary(ctx, req)
 }
 
 // DeleteWorkflow calls workflow.v1.WorkflowService.DeleteWorkflow.
@@ -221,7 +258,8 @@ func (c *workflowServiceClient) ReportWorkflowRun(ctx context.Context, req *conn
 
 // WorkflowServiceHandler is an implementation of the workflow.v1.WorkflowService service.
 type WorkflowServiceHandler interface {
-	// CreateWorkflow defines a new workflow. It is enabled on creation.
+	// CreateWorkflow defines a new workflow. It is enabled on creation unless
+	// the request sets enabled to false.
 	CreateWorkflow(context.Context, *connect.Request[v1.CreateWorkflowRequest]) (*connect.Response[v1.CreateWorkflowResponse], error)
 	// ListWorkflows returns all workflows of the caller's workspace, each with
 	// its steps and the status of its most recent run.
@@ -231,6 +269,11 @@ type WorkflowServiceHandler interface {
 	GetWorkflow(context.Context, *connect.Request[v1.GetWorkflowRequest]) (*connect.Response[v1.GetWorkflowResponse], error)
 	// UpdateWorkflow replaces a workflow's definition, steps included.
 	UpdateWorkflow(context.Context, *connect.Request[v1.UpdateWorkflowRequest]) (*connect.Response[v1.UpdateWorkflowResponse], error)
+	// SetWorkflowEnabled turns a workflow's schedule on or off without
+	// resending its definition. Same authorization as UpdateWorkflow. A
+	// disabled workflow keeps its definition and history, and a manual
+	// TriggerWorkflow still runs it.
+	SetWorkflowEnabled(context.Context, *connect.Request[v1.SetWorkflowEnabledRequest]) (*connect.Response[v1.SetWorkflowEnabledResponse], error)
 	// DeleteWorkflow permanently removes a workflow and its run history. The
 	// pipelines and transformations it references are not touched.
 	DeleteWorkflow(context.Context, *connect.Request[v1.DeleteWorkflowRequest]) (*connect.Response[v1.DeleteWorkflowResponse], error)
@@ -242,11 +285,27 @@ type WorkflowServiceHandler interface {
 	ListWorkflowRuns(context.Context, *connect.Request[v1.ListWorkflowRunsRequest]) (*connect.Response[v1.ListWorkflowRunsResponse], error)
 	// GetWorkflowConfigs returns the workflows the worker should act on: every
 	// enabled workflow, plus a disabled one that has a pending (manually
-	// triggered) run. Workflows without steps are omitted.
+	// triggered) run. Omitted: workflows without steps (a pending run of one is
+	// failed instead, since nothing can ever run it), and workflows whose
+	// latest run is still "running" — the worker must not start a second run
+	// alongside it; the workflow reappears once that run is reported finished
+	// or is failed as stuck (a periodic server sweep fails runs "running" for
+	// longer than WORKFLOW_RUN_STUCK_TIMEOUT, 8 hours by default).
 	GetWorkflowConfigs(context.Context, *connect.Request[v1.GetWorkflowConfigsRequest]) (*connect.Response[v1.GetWorkflowConfigsResponse], error)
 	// ReportWorkflowRun records a workflow run's progress. It is an idempotent
 	// upsert on run_id, step runs included, so the worker reports after every
 	// step and may safely repeat a report.
+	//
+	// Errors a worker must NOT retry (the same report will fail the same way):
+	//   InvalidArgument   — malformed report (bad UUID, status, timestamp,
+	//                       position or step kind); FieldViolations name it.
+	//   NotFound          — the workflow does not exist (deleted mid-run) or
+	//                       belongs to another tenant, or run_id already
+	//                       belongs to another workflow.
+	// Configuration errors, not fixed by retrying the report until an operator
+	// acts: Unauthenticated, PermissionDenied.
+	// Anything else (Unavailable, DeadlineExceeded, Internal, Unknown, a
+	// transport failure) is transient: retry the same report.
 	ReportWorkflowRun(context.Context, *connect.Request[v1.ReportWorkflowRunRequest]) (*connect.Response[v1.ReportWorkflowRunResponse], error)
 }
 
@@ -279,6 +338,12 @@ func NewWorkflowServiceHandler(svc WorkflowServiceHandler, opts ...connect.Handl
 		WorkflowServiceUpdateWorkflowProcedure,
 		svc.UpdateWorkflow,
 		connect.WithSchema(workflowServiceMethods.ByName("UpdateWorkflow")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workflowServiceSetWorkflowEnabledHandler := connect.NewUnaryHandler(
+		WorkflowServiceSetWorkflowEnabledProcedure,
+		svc.SetWorkflowEnabled,
+		connect.WithSchema(workflowServiceMethods.ByName("SetWorkflowEnabled")),
 		connect.WithHandlerOptions(opts...),
 	)
 	workflowServiceDeleteWorkflowHandler := connect.NewUnaryHandler(
@@ -321,6 +386,8 @@ func NewWorkflowServiceHandler(svc WorkflowServiceHandler, opts ...connect.Handl
 			workflowServiceGetWorkflowHandler.ServeHTTP(w, r)
 		case WorkflowServiceUpdateWorkflowProcedure:
 			workflowServiceUpdateWorkflowHandler.ServeHTTP(w, r)
+		case WorkflowServiceSetWorkflowEnabledProcedure:
+			workflowServiceSetWorkflowEnabledHandler.ServeHTTP(w, r)
 		case WorkflowServiceDeleteWorkflowProcedure:
 			workflowServiceDeleteWorkflowHandler.ServeHTTP(w, r)
 		case WorkflowServiceTriggerWorkflowProcedure:
@@ -354,6 +421,10 @@ func (UnimplementedWorkflowServiceHandler) GetWorkflow(context.Context, *connect
 
 func (UnimplementedWorkflowServiceHandler) UpdateWorkflow(context.Context, *connect.Request[v1.UpdateWorkflowRequest]) (*connect.Response[v1.UpdateWorkflowResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("workflow.v1.WorkflowService.UpdateWorkflow is not implemented"))
+}
+
+func (UnimplementedWorkflowServiceHandler) SetWorkflowEnabled(context.Context, *connect.Request[v1.SetWorkflowEnabledRequest]) (*connect.Response[v1.SetWorkflowEnabledResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("workflow.v1.WorkflowService.SetWorkflowEnabled is not implemented"))
 }
 
 func (UnimplementedWorkflowServiceHandler) DeleteWorkflow(context.Context, *connect.Request[v1.DeleteWorkflowRequest]) (*connect.Response[v1.DeleteWorkflowResponse], error) {

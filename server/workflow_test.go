@@ -8,6 +8,8 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/fairtier/workspace-api/core"
+	pipelinev1 "github.com/fairtier/workspace-api/proto/pipeline/v1"
 	workflowv1 "github.com/fairtier/workspace-api/proto/workflow/v1"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -104,5 +106,92 @@ func TestWorkflowInvalidMapsToFieldViolation(t *testing.T) {
 	var cerr *connect.Error
 	if !errors.As(err, &cerr) || len(cerr.Details()) != 1 {
 		t.Fatalf("want one ValidationErrors detail, got %v", err)
+	}
+}
+
+// The Console reads FieldViolations by field name: an empty name and too many
+// steps must name "name" and "steps" through the real handler.
+func TestCreateWorkflowValidationFieldViolations(t *testing.T) {
+	s := &WorkflowServer{Service: &workspace.WorkflowService{
+		Workspaces: &workspace.StaticResolver{Workspace: workspace.Workspace{Slug: "acme", CasdoorOrg: "customer-acme"}},
+	}}
+	ctx := core.ContextWithUserID(context.Background(), "customer-acme/alice")
+	tooMany := make([]*workflowv1.WorkflowStep, workspace.MaxWorkflowSteps+1)
+	for i := range tooMany {
+		tooMany[i] = &workflowv1.WorkflowStep{Kind: "pipeline", RefId: "11111111-1111-4111-8111-111111111111"}
+	}
+	for want, req := range map[string]*workflowv1.CreateWorkflowRequest{
+		"name":  {Name: "", Steps: tooMany[:1]},
+		"steps": {Name: "x", Steps: tooMany},
+	} {
+		_, err := s.CreateWorkflow(ctx, connect.NewRequest(req))
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Fatalf("%s: code = %v (%v)", want, connect.CodeOf(err), err)
+		}
+		var cerr *connect.Error
+		if !errors.As(err, &cerr) || len(cerr.Details()) != 1 {
+			t.Fatalf("%s: details missing: %v", want, err)
+		}
+		v, derr := cerr.Details()[0].Value()
+		ve, ok := v.(*pipelinev1.ValidationErrors)
+		if derr != nil || !ok || len(ve.Violations) != 1 || ve.Violations[0].Field != want {
+			t.Errorf("%s: violation = %v (%v)", want, v, derr)
+		}
+	}
+}
+
+// createStore keeps what CreateWorkflow stored; every other method panics
+// (the embedded nil interface), so the test notices an unexpected call.
+type createStore struct {
+	workspace.WorkflowRepository
+	stored *workspace.Workflow
+}
+
+func (c *createStore) CreateWorkflow(_ context.Context, w *workspace.Workflow) error {
+	w.ID = "00000000-0000-4000-8000-000000000001"
+	cp := *w
+	c.stored = &cp
+	return nil
+}
+
+func (c *createStore) GetWorkflow(context.Context, workspace.WorkflowID) (*workspace.Workflow, error) {
+	cp := *c.stored
+	return &cp, nil
+}
+
+type acmePipelines struct{}
+
+func (acmePipelines) GetPipeline(_ context.Context, id workspace.PipelineID) (*workspace.Pipeline, error) {
+	return &workspace.Pipeline{ID: id, CustomerSlug: "acme"}, nil
+}
+
+// enabled is optional on create: absent keeps the old "created enabled",
+// false creates the workflow paused.
+func TestCreateWorkflowEnabledPresence(t *testing.T) {
+	ctx := core.ContextWithUserID(context.Background(), "customer-acme/alice")
+	paused := false
+	for name, tc := range map[string]struct {
+		enabled *bool
+		want    bool
+	}{
+		"absent": {nil, true},
+		"false":  {&paused, false},
+	} {
+		store := &createStore{}
+		s := &WorkflowServer{Service: &workspace.WorkflowService{
+			Workspaces: &workspace.StaticResolver{Workspace: workspace.Workspace{Slug: "acme", CasdoorOrg: "customer-acme"}},
+			Workflows:  store,
+			Pipelines:  acmePipelines{},
+		}}
+		resp, err := s.CreateWorkflow(ctx, connect.NewRequest(&workflowv1.CreateWorkflowRequest{
+			Name: "nightly", Enabled: tc.enabled,
+			Steps: []*workflowv1.WorkflowStep{{Kind: "pipeline", RefId: "11111111-1111-4111-8111-111111111111"}},
+		}))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if store.stored.Enabled != tc.want || resp.Msg.Workflow.Enabled != tc.want {
+			t.Errorf("%s: stored enabled = %v, response %v, want %v", name, store.stored.Enabled, resp.Msg.Workflow.Enabled, tc.want)
+		}
 	}
 }

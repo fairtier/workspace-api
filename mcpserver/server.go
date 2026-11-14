@@ -74,6 +74,7 @@ type WorkflowBackend interface {
 	TriggerWorkflow(context.Context, *connect.Request[workflowv1.TriggerWorkflowRequest]) (*connect.Response[workflowv1.TriggerWorkflowResponse], error)
 	CreateWorkflow(context.Context, *connect.Request[workflowv1.CreateWorkflowRequest]) (*connect.Response[workflowv1.CreateWorkflowResponse], error)
 	UpdateWorkflow(context.Context, *connect.Request[workflowv1.UpdateWorkflowRequest]) (*connect.Response[workflowv1.UpdateWorkflowResponse], error)
+	SetWorkflowEnabled(context.Context, *connect.Request[workflowv1.SetWorkflowEnabledRequest]) (*connect.Response[workflowv1.SetWorkflowEnabledResponse], error)
 }
 
 type NotificationBackend interface {

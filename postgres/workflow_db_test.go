@@ -65,7 +65,7 @@ func (fx workflowDBFixture) createWorkflow(t *testing.T, name string, steps ...w
 		steps[i].Position = i
 	}
 	now := time.Now()
-	w := &workspace.Workflow{CustomerSlug: fx.slug, Name: name, Schedule: "@daily", Enabled: true, Steps: steps, CreatedAt: now, UpdatedAt: now}
+	w := &workspace.Workflow{CustomerSlug: fx.slug, Name: name, Schedule: "0 0 * * *", Enabled: true, Steps: steps, CreatedAt: now, UpdatedAt: now}
 	if err := fx.repo.CreateWorkflow(context.Background(), w); err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
@@ -254,5 +254,65 @@ func TestWorkflowStore_RunPagination(t *testing.T) {
 	last, err := fx.repo.ListWorkflowsByCustomer(ctx, fx.slug)
 	if err != nil || len(last) != 1 || last[0].LastRunStatus != "success" || last[0].LastRunAt == nil {
 		t.Fatalf("list last run = %+v, %v", last, err)
+	}
+}
+
+func TestWorkflowStore_FailureSummarySetEnabledAndStuckRuns(t *testing.T) {
+	fx := newWorkflowDBFixture(t)
+	ctx := context.Background()
+	w := fx.createWorkflow(t, "nightly",
+		workspace.NewWorkflowStep(workspace.StepKindPipeline, string(fx.pipe)),
+		workspace.NewWorkflowStep(workspace.StepKindTransformation, string(fx.tr)))
+
+	old := time.Now().Add(-9 * time.Hour)
+	failedID := uuid.NewString()
+	if _, err := fx.repo.UpsertWorkflowRun(ctx, &workspace.WorkflowRun{
+		ID: failedID, WorkflowID: w.ID, Status: workspace.RunStatusFailed, StartedAt: &old, ErrorMessage: "run error",
+		StepRuns: []workspace.WorkflowStepRun{
+			{Position: 0, Kind: workspace.StepKindPipeline, RefID: string(fx.pipe), Name: "orders", Status: workspace.RunStatusSuccess},
+			{Position: 1, Kind: workspace.StepKindTransformation, RefID: string(fx.tr), Name: "marts", Status: workspace.RunStatusFailed, ErrorMessage: "dbt failed\nmore"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := fx.repo.ListWorkflowsByCustomer(ctx, fx.slug)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+	got := list[0]
+	if got.LastRunError != "dbt failed\nmore" || got.LastFailedStepPosition == nil || *got.LastFailedStepPosition != 1 || got.LastFailedStepName != "marts" {
+		t.Fatalf("summary = %q %v %q", got.LastRunError, got.LastFailedStepPosition, got.LastFailedStepName)
+	}
+	// The worker query carries no summary but still scans.
+	if _, err := fx.repo.GetEnabledWorkflows(ctx, fx.slug); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := fx.repo.SetWorkflowEnabled(ctx, w.ID, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := fx.repo.GetWorkflow(ctx, w.ID); after.Enabled || len(after.Steps) != 2 {
+		t.Fatalf("after SetWorkflowEnabled: %+v", after)
+	}
+	if err := fx.repo.SetWorkflowEnabled(ctx, workspace.WorkflowID(uuid.NewString()), true, time.Now()); !errors.Is(err, workspace.ErrWorkflowNotFound) {
+		t.Fatalf("missing workflow: %v", err)
+	}
+
+	stuckID := uuid.NewString()
+	fresh := time.Now()
+	for id, started := range map[string]*time.Time{stuckID: &old, uuid.NewString(): &fresh} {
+		if _, err := fx.repo.UpsertWorkflowRun(ctx, &workspace.WorkflowRun{
+			ID: id, WorkflowID: w.ID, Status: workspace.RunStatusRunning, StartedAt: started,
+			StepRuns: []workspace.WorkflowStepRun{{Position: 0, Kind: workspace.StepKindPipeline, RefID: string(fx.pipe), Name: "orders", Status: workspace.RunStatusRunning}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stuck, err := fx.repo.ListStuckWorkflowRuns(ctx, fx.slug, 8*time.Hour)
+	if err != nil || len(stuck) != 1 || stuck[0].ID != stuckID || len(stuck[0].StepRuns) != 1 {
+		t.Fatalf("stuck = %+v, %v", stuck, err)
+	}
+	if other, _ := fx.repo.ListStuckWorkflowRuns(ctx, "someone-else", time.Minute); len(other) != 0 {
+		t.Fatalf("another workspace sees %d stuck runs", len(other))
 	}
 }

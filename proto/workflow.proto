@@ -17,7 +17,7 @@ option go_package = "github.com/fairtier/workspace-api/proto/workflow/v1;workflo
 //
 // User-facing RPCs (require JWT auth, available on public port):
 //   CreateWorkflow, ListWorkflows, GetWorkflow, UpdateWorkflow,
-//   DeleteWorkflow, TriggerWorkflow, ListWorkflowRuns
+//   SetWorkflowEnabled, DeleteWorkflow, TriggerWorkflow, ListWorkflowRuns
 //
 // Worker-facing RPCs (served on the authenticated internal port, not the
 // public one; tenant-bound service tokens):
@@ -27,7 +27,8 @@ option go_package = "github.com/fairtier/workspace-api/proto/workflow/v1;workflo
 service WorkflowService {
   // --- User-facing ---
 
-  // CreateWorkflow defines a new workflow. It is enabled on creation.
+  // CreateWorkflow defines a new workflow. It is enabled on creation unless
+  // the request sets enabled to false.
   rpc CreateWorkflow(CreateWorkflowRequest) returns (CreateWorkflowResponse) {}
 
   // ListWorkflows returns all workflows of the caller's workspace, each with
@@ -40,6 +41,12 @@ service WorkflowService {
 
   // UpdateWorkflow replaces a workflow's definition, steps included.
   rpc UpdateWorkflow(UpdateWorkflowRequest) returns (UpdateWorkflowResponse) {}
+
+  // SetWorkflowEnabled turns a workflow's schedule on or off without
+  // resending its definition. Same authorization as UpdateWorkflow. A
+  // disabled workflow keeps its definition and history, and a manual
+  // TriggerWorkflow still runs it.
+  rpc SetWorkflowEnabled(SetWorkflowEnabledRequest) returns (SetWorkflowEnabledResponse) {}
 
   // DeleteWorkflow permanently removes a workflow and its run history. The
   // pipelines and transformations it references are not touched.
@@ -57,12 +64,28 @@ service WorkflowService {
 
   // GetWorkflowConfigs returns the workflows the worker should act on: every
   // enabled workflow, plus a disabled one that has a pending (manually
-  // triggered) run. Workflows without steps are omitted.
+  // triggered) run. Omitted: workflows without steps (a pending run of one is
+  // failed instead, since nothing can ever run it), and workflows whose
+  // latest run is still "running" — the worker must not start a second run
+  // alongside it; the workflow reappears once that run is reported finished
+  // or is failed as stuck (a periodic server sweep fails runs "running" for
+  // longer than WORKFLOW_RUN_STUCK_TIMEOUT, 8 hours by default).
   rpc GetWorkflowConfigs(GetWorkflowConfigsRequest) returns (GetWorkflowConfigsResponse) {}
 
   // ReportWorkflowRun records a workflow run's progress. It is an idempotent
   // upsert on run_id, step runs included, so the worker reports after every
   // step and may safely repeat a report.
+  //
+  // Errors a worker must NOT retry (the same report will fail the same way):
+  //   InvalidArgument   — malformed report (bad UUID, status, timestamp,
+  //                       position or step kind); FieldViolations name it.
+  //   NotFound          — the workflow does not exist (deleted mid-run) or
+  //                       belongs to another tenant, or run_id already
+  //                       belongs to another workflow.
+  // Configuration errors, not fixed by retrying the report until an operator
+  // acts: Unauthenticated, PermissionDenied.
+  // Anything else (Unavailable, DeadlineExceeded, Internal, Unknown, a
+  // transport failure) is transient: retry the same report.
   rpc ReportWorkflowRun(ReportWorkflowRunRequest) returns (ReportWorkflowRunResponse) {}
 }
 
@@ -92,8 +115,8 @@ message Workflow {
   // Human-readable name, unique within the workspace.
   string name = 3;
   string description = 4;
-  // Cron expression (five fields, or a macro such as "@daily"), or empty for
-  // manual runs only.
+  // Five-field cron expression (UTC), or empty for manual runs only. @macros
+  // such as "@daily" are rejected, as the Console rejects them.
   string schedule = 5;
   bool enabled = 6;
   // Steps in run order.
@@ -107,6 +130,15 @@ message Workflow {
   // Status of the most recent run ("pending", "running", "success",
   // "failed"), empty if never run.
   string last_run_status = 11;
+  // When the most recent run failed: the first line of its error (the
+  // failed step's error, else the run's), at most 200 characters. Empty
+  // otherwise.
+  string last_run_error = 12;
+  // When the most recent run failed at a step: that step's zero-based
+  // position and name (snapshot at run time). Unset otherwise — position 0
+  // is a real step, hence the presence.
+  optional int32 last_failed_step_position = 13;
+  string last_failed_step_name = 14;
 }
 
 // WorkflowStepRun records what one step did within one workflow run. It is a
@@ -163,6 +195,9 @@ message CreateWorkflowRequest {
   // Steps in run order: 1 to 20, each pipeline/transformation at most once.
   // Only kind and ref_id are read.
   repeated WorkflowStep steps = 4;
+  // Whether the schedule is on. Absent means true (the behaviour before this
+  // field existed); set false to create a workflow paused.
+  optional bool enabled = 5;
 }
 
 message CreateWorkflowResponse {
@@ -196,6 +231,15 @@ message UpdateWorkflowRequest {
 }
 
 message UpdateWorkflowResponse {
+  Workflow workflow = 1;
+}
+
+message SetWorkflowEnabledRequest {
+  string id = 1;
+  bool enabled = 2;
+}
+
+message SetWorkflowEnabledResponse {
   Workflow workflow = 1;
 }
 

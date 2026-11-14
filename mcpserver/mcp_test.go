@@ -228,7 +228,7 @@ func TestMCP_WorkflowHappyPath(t *testing.T) {
 	s := env.connect(t, writePAT)
 
 	res := call(t, s, "create_workflow", map[string]any{
-		"name": "daily", "schedule": "@daily",
+		"name": "daily", "schedule": "0 0 * * *",
 		"steps": []any{map[string]any{"kind": "pipeline", "ref_id": "p1"}, map[string]any{"kind": "transformation", "ref_id": "t1"}},
 	})
 	if res.IsError {
@@ -239,13 +239,21 @@ func TestMCP_WorkflowHappyPath(t *testing.T) {
 		t.Fatalf("created = %+v", created)
 	}
 
-	// Disabling keeps every other field: a read-modify-write.
+	// Only the flag: SetWorkflowEnabled, no full rewrite.
 	res = call(t, s, "update_workflow", map[string]any{"id": "w2", "enabled": false})
+	if res.IsError || structured[workflowOut](t, res).Workflow.Enabled {
+		t.Fatalf("update_workflow: %s", text(res))
+	}
+	if !env.fake.called("SetWorkflowEnabled") || env.fake.called("UpdateWorkflow") {
+		t.Error("enabled-only update did not use SetWorkflowEnabled")
+	}
+	// Anything else is a read-modify-write that keeps the omitted fields.
+	res = call(t, s, "update_workflow", map[string]any{"id": "w2", "description": "nightly load"})
 	if res.IsError {
 		t.Fatalf("update_workflow: %s", text(res))
 	}
 	upd := env.fake.updates[len(env.fake.updates)-1]
-	if upd.Enabled || upd.Name != "daily" || upd.Schedule != "@daily" || len(upd.Steps) != 2 {
+	if upd.Enabled || upd.Name != "daily" || upd.Description != "nightly load" || upd.Schedule != "0 0 * * *" || len(upd.Steps) != 2 {
 		t.Errorf("update request = %+v", upd)
 	}
 	// An explicit "" clears the schedule; steps replace the list.

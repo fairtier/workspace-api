@@ -29,7 +29,7 @@ Queues a run of one workflow now, outside its schedule (also when the workflow i
 
 const createWorkflowDesc = workflowModel + `
 
-Creates a workflow, enabled. Steps are given in run order (1 to 20, no pipeline or transformation twice). schedule is a five-field cron expression or a macro such as @daily; omit it for manual runs only.`
+Creates a workflow, enabled unless enabled is false. Steps are given in run order (1 to 20, no pipeline or transformation twice). schedule is a five-field cron expression in UTC such as "0 2 * * *" (@daily-style shortcuts are refused); omit it for manual runs only.`
 
 const updateWorkflowDesc = workflowModel + `
 
@@ -55,6 +55,10 @@ type workflowSummary struct {
 	Steps         []workflowStep `json:"steps"`
 	LastRunStatus string         `json:"last_run_status,omitempty"`
 	LastRunAt     string         `json:"last_run_at,omitempty"`
+	LastRunError  string         `json:"last_run_error,omitempty"`
+	// 1-based, as a person counts steps; 0 = no failed step.
+	LastFailedStep     int    `json:"last_failed_step,omitempty"`
+	LastFailedStepName string `json:"last_failed_step_name,omitempty"`
 }
 
 type workflowStepRun struct {
@@ -112,15 +116,16 @@ type workflowRunOut struct {
 type createWorkflowIn struct {
 	Name        string           `json:"name" jsonschema:"unique within the workspace"`
 	Description string           `json:"description,omitempty" jsonschema:"what the workflow is for"`
-	Schedule    string           `json:"schedule,omitempty" jsonschema:"cron expression (five fields) or a macro such as @daily; omit for manual runs only"`
+	Schedule    string           `json:"schedule,omitempty" jsonschema:"five-field cron expression in UTC (e.g. 0 2 * * *); omit for manual runs only"`
 	Steps       []workflowStepIn `json:"steps" jsonschema:"the steps in run order"`
+	Enabled     *bool            `json:"enabled,omitempty" jsonschema:"false creates it paused (no scheduled runs); default true"`
 }
 
 type updateWorkflowIn struct {
 	ID          string            `json:"id" jsonschema:"the workflow's id, as list_workflows reports it"`
 	Name        *string           `json:"name,omitempty" jsonschema:"new name; omit to keep"`
 	Description *string           `json:"description,omitempty" jsonschema:"new description; omit to keep"`
-	Schedule    *string           `json:"schedule,omitempty" jsonschema:"new cron expression or macro; \"\" for manual runs only; omit to keep"`
+	Schedule    *string           `json:"schedule,omitempty" jsonschema:"new five-field cron expression (UTC); \"\" for manual runs only; omit to keep"`
 	Enabled     *bool             `json:"enabled,omitempty" jsonschema:"false stops scheduled runs; omit to keep"`
 	Steps       *[]workflowStepIn `json:"steps,omitempty" jsonschema:"the complete new step list in run order; omit to keep"`
 }
@@ -132,6 +137,10 @@ func workflowSummaryOf(w *workflowv1.Workflow) workflowSummary {
 	out := workflowSummary{
 		ID: w.Id, Name: w.Name, Description: w.Description, Schedule: w.Schedule, Enabled: w.Enabled,
 		Steps: make([]workflowStep, 0, len(w.Steps)), LastRunStatus: w.LastRunStatus, LastRunAt: w.LastRunAt,
+		LastRunError: redactString(w.LastRunError), LastFailedStepName: w.LastFailedStepName,
+	}
+	if w.LastFailedStepPosition != nil {
+		out.LastFailedStep = int(*w.LastFailedStepPosition) + 1
 	}
 	for _, s := range w.Steps {
 		out.Steps = append(out.Steps, workflowStep{Kind: s.Kind, RefID: s.RefId, Name: s.Name})
@@ -214,12 +223,40 @@ func triggerWorkflow(ctx context.Context, b Backends, in idIn) (workflowRunOut, 
 
 func createWorkflow(ctx context.Context, b Backends, in createWorkflowIn) (workflowOut, error) {
 	resp, err := b.Workflows.CreateWorkflow(ctx, connect.NewRequest(&workflowv1.CreateWorkflowRequest{
-		Name: in.Name, Description: in.Description, Schedule: in.Schedule, Steps: stepsToPB(in.Steps),
+		Name: in.Name, Description: in.Description, Schedule: in.Schedule, Steps: stepsToPB(in.Steps), Enabled: in.Enabled,
 	}))
 	if err != nil {
 		return workflowOut{}, err
 	}
 	return workflowOut{Workflow: workflowSummaryOf(resp.Msg.Workflow)}, nil
+}
+
+// onlyEnabled reports whether the call changes nothing but the flag.
+func (in updateWorkflowIn) onlyEnabled() bool {
+	return in.Enabled != nil && in.Name == nil && in.Description == nil && in.Schedule == nil && in.Steps == nil
+}
+
+// merge applies the fields the agent passed onto the current definition.
+func (in updateWorkflowIn) merge(w *workflowv1.Workflow) *workflowv1.UpdateWorkflowRequest {
+	req := &workflowv1.UpdateWorkflowRequest{
+		Id:          in.ID,
+		Name:        valueOr(in.Name, w.Name),
+		Description: valueOr(in.Description, w.Description),
+		Schedule:    valueOr(in.Schedule, w.Schedule),
+		Enabled:     valueOr(in.Enabled, w.Enabled),
+		Steps:       w.Steps,
+	}
+	if in.Steps != nil {
+		req.Steps = stepsToPB(*in.Steps)
+	}
+	return req
+}
+
+func valueOr[T any](p *T, fallback T) T {
+	if p != nil {
+		return *p
+	}
+	return fallback
 }
 
 // updateWorkflow is a read-modify-write: UpdateWorkflow replaces the whole
@@ -230,6 +267,14 @@ func updateWorkflow(ctx context.Context, b Backends, in updateWorkflowIn) (workf
 	if in.ID == "" {
 		return workflowOut{}, errors.New("id is required")
 	}
+	// Only the flag: no read-modify-write, so no lost update either.
+	if in.onlyEnabled() {
+		resp, err := b.Workflows.SetWorkflowEnabled(ctx, connect.NewRequest(&workflowv1.SetWorkflowEnabledRequest{Id: in.ID, Enabled: *in.Enabled}))
+		if err != nil {
+			return workflowOut{}, err
+		}
+		return workflowOut{Workflow: workflowSummaryOf(resp.Msg.Workflow)}, nil
+	}
 	cur, err := b.Workflows.GetWorkflow(ctx, connect.NewRequest(&workflowv1.GetWorkflowRequest{Id: in.ID}))
 	if err != nil {
 		return workflowOut{}, err
@@ -238,25 +283,7 @@ func updateWorkflow(ctx context.Context, b Backends, in updateWorkflowIn) (workf
 	if w == nil {
 		return workflowOut{}, errors.New("workflow not found")
 	}
-	req := &workflowv1.UpdateWorkflowRequest{
-		Id: in.ID, Name: w.Name, Description: w.Description, Schedule: w.Schedule, Enabled: w.Enabled, Steps: w.Steps,
-	}
-	if in.Name != nil {
-		req.Name = *in.Name
-	}
-	if in.Description != nil {
-		req.Description = *in.Description
-	}
-	if in.Schedule != nil {
-		req.Schedule = *in.Schedule
-	}
-	if in.Enabled != nil {
-		req.Enabled = *in.Enabled
-	}
-	if in.Steps != nil {
-		req.Steps = stepsToPB(*in.Steps)
-	}
-	resp, err := b.Workflows.UpdateWorkflow(ctx, connect.NewRequest(req))
+	resp, err := b.Workflows.UpdateWorkflow(ctx, connect.NewRequest(in.merge(w)))
 	if err != nil {
 		return workflowOut{}, err
 	}

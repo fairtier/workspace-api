@@ -171,10 +171,12 @@ func validateStepRunReport(field string, sr WorkflowStepRun) error {
 
 // --- Cron ---
 
-// cronMacros are the shorthand schedules the worker's croniter accepts.
-var cronMacros = map[string]bool{
-	"@yearly": true, "@annually": true, "@monthly": true, "@weekly": true,
-	"@daily": true, "@midnight": true, "@hourly": true,
+// cronMacros are shorthand schedules the worker's croniter would accept but
+// the Console's cron editor rejects (it cannot display them), so they are
+// refused here too, with the five-field equivalent as the fix.
+var cronMacros = map[string]string{
+	"@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *", "@weekly": "0 0 * * 0",
+	"@daily": "0 0 * * *", "@midnight": "0 0 * * *", "@hourly": "0 * * * *",
 }
 
 // cronField describes one of the five standard fields.
@@ -193,18 +195,24 @@ var cronFields = []cronField{
 	{name: "day of week", min: 0, max: 7, names: []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}},
 }
 
-// ValidateCronSchedule accepts an empty schedule (manual only), one of the
-// @macros, or a standard five-field cron expression whose fields are "*",
-// values, ranges, lists and steps ("*/15", "1-5", "mon,wed,fri"). That is a
-// deliberate subset of what the worker's croniter parses — enough to catch a
-// typo at save time instead of at the first silent non-run.
+// ValidateCronSchedule accepts an empty schedule (manual only) or a standard
+// five-field cron expression whose fields are "*", values, ranges, lists and
+// steps ("*/15", "1-5", "mon,wed,fri"). That is a deliberate subset of what
+// the worker's croniter parses, matching what the Console's cron editor
+// accepts — @macros such as "@daily" are refused like there.
 func ValidateCronSchedule(schedule string) error {
-	if schedule == "" || cronMacros[strings.ToLower(schedule)] {
+	if schedule == "" {
 		return nil
+	}
+	if strings.HasPrefix(schedule, "@") {
+		if eq, ok := cronMacros[strings.ToLower(schedule)]; ok {
+			return fmt.Errorf("%s shortcuts are not supported; use %q instead", schedule, eq)
+		}
+		return fmt.Errorf("%s shortcuts are not supported; use a five-field cron expression", schedule)
 	}
 	parts := strings.Fields(schedule)
 	if len(parts) != len(cronFields) {
-		return fmt.Errorf("schedule must be a five-field cron expression or a macro such as @daily, got %d fields", len(parts))
+		return fmt.Errorf("schedule must be a five-field cron expression, got %d fields", len(parts))
 	}
 	for i, part := range parts {
 		for item := range strings.SplitSeq(part, ",") {

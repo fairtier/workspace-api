@@ -325,8 +325,12 @@ func (r *Repository) UpdatePipelineRun(ctx context.Context, run *workspace.Pipel
 // reporting it started (which sets started_at) and reporting a terminal result;
 // a worker killed mid-load never reports terminal, so the row — and the
 // Console's last_run_status badge — sticks on "running" forever. Staleness is
-// measured from started_at, falling back to created_at for the rare row whose
-// started_at was never stamped. The cutoff is computed in Go so the interval
+// measured from the later of started_at and created_at (GREATEST skips a NULL,
+// so a row whose started_at was never stamped falls back to created_at). Not
+// started_at alone: the dlt-worker stamps every pipeline of one poll tick with
+// the tick's start and runs them one after another, so a pipeline queued
+// behind a long one carries a started_at hours older than its own work — but
+// the row it inserts when it really begins gets a fresh created_at. The cutoff is computed in Go so the interval
 // never has to round-trip through the driver as a Postgres interval literal.
 // A non-empty customerSlug scopes the sweep to that workspace's pipelines
 // (pipeline_runs carries no slug of its own, so the scope goes through the
@@ -342,7 +346,7 @@ func (r *Repository) FailStuckRunningRuns(ctx context.Context, customerSlug stri
 		   FROM pipelines p
 		  WHERE p.id = r.pipeline_id
 		    AND r.status = 'running'
-		    AND COALESCE(r.started_at, r.created_at) < $1
+		    AND GREATEST(r.started_at, r.created_at) < $1
 		    AND ($2 = '' OR p.customer_slug = $2)`,
 		cutoff, customerSlug,
 	)

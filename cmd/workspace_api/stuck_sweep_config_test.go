@@ -59,3 +59,37 @@ func TestStuckRunTimeoutFromWorkerEnv(t *testing.T) {
 		})
 	}
 }
+
+// The workflow sweep's running-step rule uses the same derived timeout, its
+// own override can only lengthen it, and the idle grace includes one sweep
+// interval.
+func TestWorkflowStuckPolicyFromWorkerEnv(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	tests := []struct {
+		name string
+		env  map[string]string
+		want time.Duration
+	}{
+		{name: "worker defaults", want: workspace.DefaultStuckRunTimeout},
+		{name: "the old 8h override is raised", env: map[string]string{"WORKFLOW_RUN_STUCK_TIMEOUT": "8h"}, want: workspace.DefaultStuckRunTimeout},
+		{name: "a longer override is kept", env: map[string]string{"WORKFLOW_RUN_STUCK_TIMEOUT": "48h"}, want: 48 * time.Hour},
+		{name: "unbounded worker: running-step rule off", env: map[string]string{"PIPELINE_SUBPROCESS": "false"}, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, name := range []string{
+				"PIPELINE_RUN_TIMEOUT_SECONDS", "PIPELINE_MAX_RETRIES", "PIPELINE_RETRY_BASE_DELAY",
+				"PIPELINE_SUBPROCESS", "WORKFLOW_RUN_STUCK_TIMEOUT",
+			} {
+				t.Setenv(name, tt.env[name])
+			}
+			p := workflowStuckPolicy(logger, 5*time.Minute)
+			if p.StepTimeout != tt.want {
+				t.Errorf("StepTimeout = %s, want %s", p.StepTimeout, tt.want)
+			}
+			if p.IdleGrace != workspace.DefaultWorkflowIdleGrace+5*time.Minute {
+				t.Errorf("IdleGrace = %s", p.IdleGrace)
+			}
+		})
+	}
+}

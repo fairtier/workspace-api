@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/fairtier/workspace-api/core"
@@ -76,8 +75,9 @@ type Workflow struct {
 	LastRunStatus string
 
 	// Transient failure summary of the most recent run (List/Get only), set
-	// when it failed: the first line of the failed step's error (else the
-	// run's), and the failed step's position and name when one failed.
+	// when it failed: the one-line summary (ErrorSummary) of the failed
+	// step's error (else the run's), and the failed step's position and
+	// name when one failed.
 	LastRunError           string
 	LastFailedStepPosition *int
 	LastFailedStepName     string
@@ -105,7 +105,7 @@ func (w *Workflow) SetLastRun(run *WorkflowRun) {
 		w.LastFailedStepPosition, w.LastFailedStepName = &pos, sr.Name
 		msg = cmp.Or(sr.ErrorMessage, msg)
 	}
-	w.LastRunError = FirstLine(msg, maxLastRunErrorLen)
+	w.LastRunError = ErrorSummary(msg, maxLastRunErrorLen)
 }
 
 // failedStep returns the first failed step run, or nil.
@@ -116,20 +116,6 @@ func (r *WorkflowRun) failedStep() *WorkflowStepRun {
 		}
 	}
 	return nil
-}
-
-// FirstLine returns the first non-empty line of s, trimmed and cut to at most
-// n runes (marked with "…").
-func FirstLine(s string, n int) string {
-	for line := range strings.SplitSeq(s, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			if r := []rune(line); len(r) > n {
-				return string(r[:n-1]) + "…"
-			}
-			return line
-		}
-	}
-	return ""
 }
 
 // WorkflowStep is one entry in a workflow's step list. Exactly one of
@@ -379,7 +365,7 @@ func (s *WorkflowService) ListWorkflows(ctx context.Context, callerID core.UserI
 		return nil, fmt.Errorf("list workflows: %w", err)
 	}
 	for i := range workflows {
-		workflows[i].LastRunError = FirstLine(workflows[i].LastRunError, maxLastRunErrorLen)
+		workflows[i].LastRunError = ErrorSummary(workflows[i].LastRunError, maxLastRunErrorLen)
 	}
 	return workflows, nil
 }
@@ -790,12 +776,12 @@ func workflowFailureBody(run *WorkflowRun) string {
 			continue
 		}
 		body := fmt.Sprintf("Step %d (%s %q) failed.", sr.Position+1, sr.Kind, sr.Name)
-		if msg := FirstLine(cmp.Or(sr.ErrorMessage, run.ErrorMessage), maxLastRunErrorLen); msg != "" {
+		if msg := ErrorSummary(cmp.Or(sr.ErrorMessage, run.ErrorMessage), maxLastRunErrorLen); msg != "" {
 			body += " " + msg
 		}
 		return body
 	}
-	return FirstLine(run.ErrorMessage, maxLastRunErrorLen)
+	return ErrorSummary(run.ErrorMessage, maxLastRunErrorLen)
 }
 
 // Workflow error sentinels.

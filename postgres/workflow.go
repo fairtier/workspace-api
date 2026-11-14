@@ -118,7 +118,7 @@ func (r *Repository) GetWorkflow(ctx context.Context, id workspace.WorkflowID) (
 func (r *Repository) ListWorkflowsByCustomer(ctx context.Context, customerSlug string) ([]workspace.Workflow, error) {
 	// The most recent run of any status, as ListTransformationsByCustomer,
 	// and — when it failed — its first failed step (the service trims the
-	// error to its first line).
+	// error to one summary line, workspace.ErrorSummary).
 	return r.queryWorkflows(ctx,
 		`SELECT w.id, w.customer_slug, w.name, w.description, w.schedule, w.enabled, w.created_at, w.updated_at,
 		        '' AS pending_run_id, lr.last_run_at, lr.last_run_status,

@@ -237,7 +237,7 @@ func (f *fakeWorkspace) GetWorkflow(ctx context.Context, req *connect.Request[wo
 		RecentRuns: []*workflowv1.WorkflowRun{{
 			Id: "wr1", WorkflowId: "w1", Status: "failed", Trigger: "schedule", ErrorMessage: "step 0 failed",
 			StepRuns: []*workflowv1.WorkflowStepRun{
-				{Position: 0, Kind: "pipeline", RefId: "p1", Name: "orders", Status: "failed", PipelineRunId: "r1", ErrorMessage: "connect postgresql://app:s3cret@db.example.test/x: refused"},
+				{Position: 0, Kind: "pipeline", RefId: "p1", Name: "orders", Status: "failed", PipelineRunId: "r1", ErrorMessage: dltStepError},
 				{Position: 1, Kind: "transformation", RefId: "t1", Name: "marts", Status: "skipped"},
 			},
 		}},
@@ -338,3 +338,9 @@ func testJWKS(t *testing.T) (keyfunc.Keyfunc, func(claims jwt.MapClaims) string)
 		return s
 	}
 }
+
+// dltStepError is shaped like dlt's failure text: a preamble that names no
+// cause, then the cause (here quoting a credential) a few lines down.
+const dltStepError = "Pipeline execution failed at `step=extract` when processing package with `load_id=1.2` with exception:\n\n" +
+	"<class 'dlt.extract.exceptions.ResourceExtractionError'>\n" +
+	"connect postgresql://app:s3cret@db.example.test/x: refused"

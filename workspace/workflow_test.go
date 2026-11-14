@@ -674,21 +674,34 @@ func TestWorkflowService_ListRunsPagination(t *testing.T) {
 	}
 }
 
-func TestFirstLine(t *testing.T) {
-	for in, want := range map[string]string{
-		"":                       "",
-		"boom":                   "boom",
-		"\n  boom  \nTraceback…": "boom",
-		strings.Repeat("é", 205): strings.Repeat("é", 199) + "…",
-	} {
-		if got := workspace.FirstLine(in, 200); got != want {
-			t.Errorf("FirstLine(%q) = %q, want %q", in, got, want)
-		}
+// A dlt failure starts with a preamble that names no cause; the list row
+// and the notification carry the cause instead.
+func TestWorkflowService_FailureSummaryNamesTheDltCause(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme))
+	ctx := context.Background()
+	failed := stepRun(0, "pipeline", pipeAcme, "failed")
+	failed.Name, failed.ErrorMessage = "orders", dltStepFailed
+	if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+		ID: runA, WorkflowID: w.ID, Status: "failed", ErrorMessage: "step 1 (pipeline 'orders') failed: " + dltStepFailed,
+		StepRuns: []workspace.WorkflowStepRun{failed},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := fx.svc.GetWorkflow(ctx, "user-acme", w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.LastRunError, "400 Client Error") {
+		t.Errorf("last_run_error = %q, want the cause", got.LastRunError)
+	}
+	if body := fx.notes.notes[0].Body; !strings.HasPrefix(body, `Step 1 (pipeline "orders") failed. In processing pipe`) || !strings.Contains(body, "400 Client Error") {
+		t.Errorf("notification body = %q", body)
 	}
 }
 
-// The list/get failure summary names the failed step and the first line of
-// its error, so a list row needs no call of its own.
+// The list/get failure summary names the failed step and the summary line
+// of its error, so a list row needs no call of its own.
 func TestWorkflowService_GetCarriesFailureSummary(t *testing.T) {
 	fx := newWorkflowFixture()
 	w := fx.create(t, "nightly", pipeStep(pipeAcme), trStep(trAcme))
@@ -709,7 +722,7 @@ func TestWorkflowService_GetCarriesFailureSummary(t *testing.T) {
 		*got.LastFailedStepPosition != 1 || got.LastFailedStepName != "marts" {
 		t.Fatalf("summary = %q %q %v %q", got.LastRunStatus, got.LastRunError, got.LastFailedStepPosition, got.LastFailedStepName)
 	}
-	// D: the notification names the step and carries only the first line.
+	// D: the notification names the step and carries only the summary line.
 	if body := fx.notes.notes[0].Body; body != `Step 2 (transformation "marts") failed. dbt failed` {
 		t.Errorf("notification body = %q", body)
 	}

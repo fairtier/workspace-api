@@ -32,6 +32,7 @@ var domainErrorCodes = []struct {
 	{workspace.ErrTransformationNotFound, connect.CodeNotFound},
 	{workspace.ErrTransformationAlreadyExists, connect.CodeAlreadyExists},
 	{workspace.ErrTransformationRunNotFound, connect.CodeNotFound},
+	{workspace.ErrTransformationDisabled, connect.CodeFailedPrecondition},
 	{workspace.ErrWorkflowNotFound, connect.CodeNotFound},
 	{workspace.ErrWorkflowAlreadyExists, connect.CodeAlreadyExists},
 	{workspace.ErrWorkflowRunNotFound, connect.CodeNotFound},

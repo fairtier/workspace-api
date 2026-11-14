@@ -74,7 +74,10 @@ type TransformationServiceClient interface {
 	// DeleteTransformation permanently removes a transformation and its run
 	// history. The git repo itself is never touched.
 	DeleteTransformation(context.Context, *connect.Request[v1.DeleteTransformationRequest]) (*connect.Response[v1.DeleteTransformationResponse], error)
-	// TriggerTransformation manually starts a run outside the schedule.
+	// TriggerTransformation manually starts a run outside the schedule. A run
+	// already waiting to be picked up is returned instead of queueing a second
+	// one. A disabled transformation is refused (FailedPrecondition): disabled
+	// means it never runs, so the run would never be picked up.
 	TriggerTransformation(context.Context, *connect.Request[v1.TriggerTransformationRequest]) (*connect.Response[v1.TriggerTransformationResponse], error)
 	// GetTransformationConfigs returns all enabled transformations for a
 	// customer, including the git deploy token. Called by the dlt-worker poll
@@ -215,7 +218,10 @@ type TransformationServiceHandler interface {
 	// DeleteTransformation permanently removes a transformation and its run
 	// history. The git repo itself is never touched.
 	DeleteTransformation(context.Context, *connect.Request[v1.DeleteTransformationRequest]) (*connect.Response[v1.DeleteTransformationResponse], error)
-	// TriggerTransformation manually starts a run outside the schedule.
+	// TriggerTransformation manually starts a run outside the schedule. A run
+	// already waiting to be picked up is returned instead of queueing a second
+	// one. A disabled transformation is refused (FailedPrecondition): disabled
+	// means it never runs, so the run would never be picked up.
 	TriggerTransformation(context.Context, *connect.Request[v1.TriggerTransformationRequest]) (*connect.Response[v1.TriggerTransformationResponse], error)
 	// GetTransformationConfigs returns all enabled transformations for a
 	// customer, including the git deploy token. Called by the dlt-worker poll

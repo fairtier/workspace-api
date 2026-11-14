@@ -24,9 +24,13 @@ var (
 	ErrTransformationNotFound      = errors.New("transformation not found")
 	ErrTransformationAlreadyExists = errors.New("transformation already exists")
 	ErrTransformationRunNotFound   = errors.New("transformation run not found")
-	ErrDraftNotConfigured          = errors.New("AI pipeline drafting is not configured on this server")
-	ErrDraftRateLimited            = errors.New("too many drafting requests; please wait and try again")
-	ErrOAuthGrantNotFound          = errors.New("oauth grant not found, already used, or expired")
+	// ErrTransformationDisabled refuses a manual run of a disabled
+	// transformation: the worker never runs one (disabled means never — by
+	// schedule, chain or trigger), so a queued run would stay pending forever.
+	ErrTransformationDisabled = errors.New("transformation is disabled; enable it to run it")
+	ErrDraftNotConfigured     = errors.New("AI pipeline drafting is not configured on this server")
+	ErrDraftRateLimited       = errors.New("too many drafting requests; please wait and try again")
+	ErrOAuthGrantNotFound     = errors.New("oauth grant not found, already used, or expired")
 
 	// ErrOAuthClientNotFound means this customer has not connected an OAuth
 	// application for the provider yet. It is a precondition, not a failure:

@@ -23,6 +23,14 @@ type mockTransformationRepo struct {
 	createTransformationRunFn       func(ctx context.Context, run *workspace.TransformationRun) error
 	updateTransformationRunFn       func(ctx context.Context, run *workspace.TransformationRun) error
 	listRecentTransformationRunsFn  func(ctx context.Context, id workspace.TransformationID, limit int) ([]workspace.TransformationRun, error)
+	getPendingTransformationRunFn   func(ctx context.Context, id workspace.TransformationID) (*workspace.TransformationRun, error)
+}
+
+func (m *mockTransformationRepo) GetPendingTransformationRun(ctx context.Context, id workspace.TransformationID) (*workspace.TransformationRun, error) {
+	if m.getPendingTransformationRunFn == nil {
+		return nil, nil
+	}
+	return m.getPendingTransformationRunFn(ctx, id)
 }
 
 func (m *mockTransformationRepo) CreateTransformation(ctx context.Context, t *workspace.Transformation) error {
@@ -333,3 +341,62 @@ func TestTransformationService_ReportTransformationRun(t *testing.T) {
 type notifierFunc func(ctx context.Context, n workspace.Notification) error
 
 func (f notifierFunc) Notify(ctx context.Context, n workspace.Notification) error { return f(ctx, n) }
+
+func TestTransformationService_TriggerTransformation(t *testing.T) {
+	newSvc := func(tr *workspace.Transformation, pending *workspace.TransformationRun, created *[]*workspace.TransformationRun) *workspace.TransformationService {
+		return &workspace.TransformationService{
+			Workspaces: acmeCustomerReader(),
+			Transformations: &mockTransformationRepo{
+				getTransformationFn: func(context.Context, workspace.TransformationID) (*workspace.Transformation, error) {
+					return tr, nil
+				},
+				getPendingTransformationRunFn: func(context.Context, workspace.TransformationID) (*workspace.TransformationRun, error) {
+					return pending, nil
+				},
+				createTransformationRunFn: func(_ context.Context, run *workspace.TransformationRun) error {
+					run.ID = "new"
+					*created = append(*created, run)
+					return nil
+				},
+			},
+		}
+	}
+
+	t.Run("queues a pending run", func(t *testing.T) {
+		var created []*workspace.TransformationRun
+		svc := newSvc(&workspace.Transformation{ID: "t1", CustomerSlug: "acme", Enabled: true}, nil, &created)
+		run, err := svc.TriggerTransformation(context.Background(), "u", "t1")
+		if err != nil || run.Status != "pending" || len(created) != 1 {
+			t.Fatalf("run %+v, err %v, created %d", run, err, len(created))
+		}
+	})
+
+	t.Run("a pending run satisfies the trigger", func(t *testing.T) {
+		var created []*workspace.TransformationRun
+		pending := &workspace.TransformationRun{ID: "old", Status: "pending"}
+		svc := newSvc(&workspace.Transformation{ID: "t1", CustomerSlug: "acme", Enabled: true}, pending, &created)
+		run, err := svc.TriggerTransformation(context.Background(), "u", "t1")
+		if err != nil || run.ID != "old" || len(created) != 0 {
+			t.Fatalf("run %+v, err %v, created %d", run, err, len(created))
+		}
+	})
+
+	t.Run("a disabled transformation is refused, not queued forever", func(t *testing.T) {
+		var created []*workspace.TransformationRun
+		svc := newSvc(&workspace.Transformation{ID: "t1", CustomerSlug: "acme", Enabled: false}, nil, &created)
+		if _, err := svc.TriggerTransformation(context.Background(), "u", "t1"); !errors.Is(err, workspace.ErrTransformationDisabled) {
+			t.Fatalf("err = %v, want ErrTransformationDisabled", err)
+		}
+		if len(created) != 0 {
+			t.Fatal("a run was queued")
+		}
+	})
+
+	t.Run("another workspace's transformation is not found", func(t *testing.T) {
+		var created []*workspace.TransformationRun
+		svc := newSvc(&workspace.Transformation{ID: "t1", CustomerSlug: "other", Enabled: true}, nil, &created)
+		if _, err := svc.TriggerTransformation(context.Background(), "u", "t1"); !errors.Is(err, workspace.ErrTransformationNotFound) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}

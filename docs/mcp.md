@@ -27,10 +27,10 @@ A workspace, as the tools describe it to the agent:
 
 | Tool | Scope | What it does |
 | --- | --- | --- |
-| `workspace_status` | read | One-call overview: every pipeline, transformation and workflow with enabled, schedule, last run status/time and the first line of the failed run's error (≤ 300 chars, redacted), plus an `attention` list (failed last runs; enabled schedules that never ran) and the server's `now`. |
+| `workspace_status` | read | One-call overview: every pipeline, transformation and workflow with enabled, schedule, last run status/time and the first line of the failed run's error (≤ 300 chars, redacted), plus an `attention` list (failed last runs; enabled schedules that never ran), the server's `now`, and `agent_sql`: what keeps `run_query` read-only right now (`engine`, `guard_only`, `refused` or `unknown`; see [read-only SQL](#read-only-sql)). |
 | `list_tables` | read | Every table, as namespace + name. |
 | `describe_table` | read | One table's columns and types. |
-| `run_query` | read | One read-only SQL statement; at most 1000 rows / ~256 KB. See [the SQL guard](#the-sql-guard). |
+| `run_query` | read | One read-only SQL statement; at most 1000 rows / ~256 KB. See [read-only SQL](#read-only-sql). |
 | `list_pipelines` | read | Pipelines with schedule, enabled flag and last run. |
 | `get_pipeline` | read | One pipeline's definition (source config with secrets redacted) and recent runs with errors. |
 | `list_transformations` | read | Transformations with schedule, trigger and last run. |
@@ -72,6 +72,8 @@ not evaluate cron: an agent judges staleness from `last_run_at`, `schedule` and
 | --- | --- |
 | `MCP_ENABLED` | `true` serves `/mcp`, its OAuth protected-resource metadata, and `access_token.v1.AccessTokenService`. Anything else (the default) serves none of them. |
 | `WORKSPACE_API_URL` | This API's public base URL. The MCP resource identifier is `<url>/mcp`. Defaults to `https://api.<WORKSPACE_CUSTOMER_DOMAIN>`. |
+| `WORKSPACE_DUCKFLIGHT_READONLY_AUTH_TOKEN` | Optional. A DuckFlight token listed in DuckFlight's `AUTH_READONLY_TOKENS`; agent SQL is sent with it. Without it, agent SQL uses `WORKSPACE_DUCKFLIGHT_AUTH_TOKEN` restricted by the read-only request header. See [read-only SQL](#read-only-sql). |
+| `MCP_REQUIRE_READONLY_ENGINE` | `true` refuses agent SQL when DuckFlight cannot give it a read-only session, instead of falling back to the lexical guard alone. Default off during the proof of concept; **set it to `true` in production once a DuckFlight with read-only sessions is deployed.** |
 
 The endpoint lives on the public port (`:8080`) at `/mcp`, beside the ConnectRPC
 services, so whatever already publishes the API publishes it too. It needs no
@@ -81,6 +83,34 @@ its own identity provider.
 Also used, unchanged: `WORKSPACE_CASDOOR_ISSUER` is advertised as the
 authorization server, and `CORS_ALLOWED_ORIGINS` is the allowlist for browser
 `Origin`s.
+
+While it is enabled, the unauthenticated bootstrap document
+(`/.well-known/fairtier-workspace`) says so: `capabilities.mcp` is `true` and
+`mcp_url` is the endpoint. Disabled, `capabilities.mcp` is `false` and there is
+no `mcp_url`; a box older than this field sends neither.
+
+### With a read-only DuckFlight
+
+Agent SQL is engine-enforced only against a DuckFlight that has read-only
+sessions (see [read-only SQL](#read-only-sql)). Two ways to wire it with the
+DuckFlight Helm chart:
+
+- **Read-only credential (recommended).** Add a second token to the Secret
+  the chart reads (`auth.existingSecret`) under the key
+  `auth-readonly-tokens` — one random value, nothing else in that key — and
+  give the same value to this API as `WORKSPACE_DUCKFLIGHT_READONLY_AUTH_TOKEN`
+  (a `secretKeyRef` to that key, `optional: true`). Setting the key turns
+  DuckFlight's read-only instance on; no chart value is needed. Size it with
+  `readOnly.memoryLimit` / `readOnly.poolSize` and narrow
+  `readOnly.allowedDirectories` to the warehouse bucket.
+- **Header only.** Set the chart's `readOnly.enabled: true` (DuckFlight's
+  `READ_ONLY_SESSIONS=true`) and nothing here: agent SQL then uses the
+  existing read-write token with the read-only header. No new secret, but
+  the credential this API holds can still do everything.
+
+Then set `MCP_REQUIRE_READONLY_ENGINE=true`, and check the startup log for
+"MCP agent SQL is engine-enforced read-only" (or `workspace_status` →
+`agent_sql.enforced_by: "engine"`).
 
 ## Access tokens
 
@@ -198,25 +228,79 @@ client side: keep write tools behind confirmation (most MCP clients ask before
 calling a tool, and the write tools are annotated as destructive),
 and use a read-only token for exploratory work.
 
-**The SQL guard is defence in depth, not a boundary.** <a id="the-sql-guard"></a>
-`run_query` checks the statement lexically before it reaches the engine: one
-statement, starting with `SELECT`/`WITH`/`FROM`/`VALUES`/`TABLE`/`DESCRIBE`/`SHOW`/`SUMMARIZE`/`EXPLAIN`;
+**Read-only SQL: two layers.** <a id="read-only-sql"></a><a id="the-sql-guard"></a>
+`run_query`, `list_tables` and `describe_table` reach the query engine
+(DuckFlight). What keeps that SQL read-only depends on the DuckFlight deployed,
+and `workspace_status` (`agent_sql`) and the startup log say which applies.
+
+*Layer 1, always: the lexical guard in this server.* Before anything reaches
+the engine, `run_query` checks the statement lexically: one statement,
+starting with `SELECT`/`WITH`/`FROM`/`VALUES`/`TABLE`/`DESCRIBE`/`SHOW`/`SUMMARIZE`/`EXPLAIN`;
 no write or state keyword anywhere (`INSERT`, `COPY`, `ATTACH`, `SET`, `LOAD`, …
 — which also catches `WITH … INSERT` and `EXPLAIN ANALYZE DELETE`); no file, URL
 or secret readers (`read_*`, `*_scan`, `glob`, `query`, `getenv`,
 `current_setting`, `duckdb_secrets`, …); no file path in a table position
 (`FROM 'x.csv'`). It is conservative — a column named like a keyword must be
 double-quoted — but it works on tokens, not on DuckDB's grammar, and something
-it does not know about can get through.
+it does not know about can get through. It stays first in every mode.
 
-That matters because the engine does not restrict itself. The query engine
-(DuckFlight) runs DuckDB with external access enabled, holds object-storage and
-catalog credentials in the session, and attaches the Iceberg catalog
-read-write. A statement that slipped past the guard could write tables, read
-local files (including the engine process's environment), or reach the network.
-The Console's SQL editor has the same reach today; MCP adds an agent that can be
-prompt-injected into using it. The proper fix is a read-only engine session for
-this caller — see the follow-ups.
+*Layer 2, when DuckFlight has read-only sessions: the engine.* Agent SQL then
+runs on DuckFlight's separate read-only DuckDB instance: the lake attached
+`READ_ONLY`, `enable_external_access = false`, `allowed_directories` limited
+to the warehouse, `lock_configuration = true`, and every statement checked
+by DuckDB's own parser against a SELECT-only allowlist. A statement that slips
+past the lexical guard cannot write a table, read a local file or the
+process environment, reach the network, load an extension or change a
+setting there; the engine refuses it (`permission_denied`, with DuckFlight's
+reason, returned to the agent as the tool error). What a read-only session can
+still do is read every table — the same as the person's Console — and
+consume resources up to DuckFlight's limits; see DuckFlight's README,
+"Read-only sessions" and "Security".
+
+The three modes, per statement:
+
+| `agent_sql` | When | What runs |
+| --- | --- | --- |
+| `engine` (`engine_read_only_credential`) | `WORKSPACE_DUCKFLIGHT_READONLY_AUTH_TOKEN` is set and DuckFlight lists it in `AUTH_READONLY_TOKENS`. | The read-only token (plus the header). Recommended: the credential itself is read-only, so a bug in this server cannot ask for more. |
+| `engine` (`engine_read_only_header`) | No read-only token; DuckFlight has read-only sessions enabled (`AUTH_READONLY_TOKENS`, `AUTH_READONLY_USERS` or `READ_ONLY_SESSIONS=true`). | The read-write token with `x-duckflight-read-only: true`, with which a read-write caller restricts itself. |
+| `guard_only` | DuckFlight cannot give a read-only session, and `MCP_REQUIRE_READONLY_ENGINE` is not `true`. | Today's behaviour: the read-write token, no header, the lexical guard as the only layer. |
+| `refused` | Same, with `MCP_REQUIRE_READONLY_ENGINE=true`. | Nothing: the tools answer `failed_precondition` naming the setting. |
+
+*How "DuckFlight can give a read-only session" is decided.* The header alone
+proves nothing: a DuckFlight without read-only sessions ignores request
+metadata it does not know and would run a header-marked statement
+**read-write**, silently. So every agent statement is preceded, on the same
+connection, by a Flight SQL `GetSqlInfo` for `SqlInfoFlightSqlServerReadOnly`
+made with the read-only credential/header, and the statement is sent only if
+that answers `true`:
+
+| DuckFlight | `GetSqlInfo` ServerReadOnly for the read-only caller | The statement | Result |
+| --- | --- | --- | --- |
+| With read-only sessions, instance enabled | `true` | runs on the read-only instance | `engine` |
+| With read-only sessions, instance not enabled | `true` (it describes the session asked for) | refused, `FailedPrecondition` — never run read-write | no read-only session |
+| Without read-only sessions (older) | `false` (header ignored) | not sent | no read-only session |
+| Any, read-only token unknown to it | `Unauthenticated` | not sent | no read-only session |
+
+"No read-only session" then means the fallback or the refusal above. The
+fallback runs the statement once more, the old way; it is logged as a warning
+**once** per downgrade ("…falls back to read-write behind the lexical guard
+only…") and remembered for five minutes, so the engine is not asked on every
+statement; after that the next statement tries the read-only session again,
+and a recovery is logged too. An engine that is merely unreachable is not a
+downgrade. At startup (with `MCP_ENABLED=true`) the same check runs once in
+the background — `GetSqlInfo` plus a constant `SELECT 1` as the read-only
+caller — and logs either "MCP agent SQL is engine-enforced read-only" or
+"MCP agent SQL is NOT engine-enforced read-only" with the reason.
+
+**Recommended production setting:** DuckFlight with read-only sessions and a
+dedicated read-only token (`WORKSPACE_DUCKFLIGHT_READONLY_AUTH_TOKEN`), and
+`MCP_REQUIRE_READONLY_ENGINE=true`, so a DuckFlight rollback or a
+configuration slip turns agent SQL off instead of quietly widening it. The
+default stays `false` only while the proof of concept runs against
+DuckFlights that predate read-only sessions.
+
+The Console's SQL editor is **not** affected: `QueryService.ExecuteQuery`
+keeps the read-write path (see the follow-ups).
 
 **What is held back.** Credentials never leave the server: pipeline credentials
 are not returned by any tool, pipeline source configuration is shown with
@@ -236,9 +320,17 @@ characters per error message).
   themselves (dynamic client registration or client ID metadata documents).
   That needs the workspace's Casdoor to support one of those, and `/mcp` to
   accept its access tokens with an audience bound to the resource.
-- **A read-only DuckFlight session** for `run_query`: a separate credential or
-  session with external access disabled, the catalog attached read-only and
-  configuration locked, so the SQL guard stops being the only line.
+- **A read-only toggle for the Console's SQL editor.** *(Proposed; not
+  implemented.)* `QueryService.ExecuteQuery` still runs read-write, because
+  the editor is also where people run DDL today. The same mechanism would give
+  it a per-request choice: a `read_only` field on `ExecuteQueryRequest`
+  (default `false` at first) that routes the statement through the
+  `ReadOnlySessions` path the MCP tools use — header or read-only token,
+  verified by `GetSqlInfo`, refused rather than downgraded when the engine
+  cannot honour it, since a person who asked for read-only should not get
+  read-write. The editor would default to read-only and need an explicit
+  switch for writes; later the default could flip on the server side.
+  Needs a proto change, so a tagged release before the Console can use it.
 - **Proxying Rill's own MCP server**, so dashboard metrics are queryable through
   the same endpoint and token.
 - **An audit log** of tool calls (who, which token, which tool, when), beyond the

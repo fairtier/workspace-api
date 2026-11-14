@@ -92,6 +92,7 @@ for co-located workers and should not be published.
 | `WORKSPACE_OIDC_CLIENT_ID`, `WORKSPACE_OIDC_CLIENT_SECRET` | | Client credentials used to manage catalog service accounts. |
 | `WORKSPACE_LAKEKEEPER_URL`, `WORKSPACE_LAKEKEEPER_WAREHOUSE` | | Iceberg REST catalog endpoint and warehouse name. |
 | `WORKSPACE_DUCKFLIGHT_URL`, `WORKSPACE_DUCKFLIGHT_AUTH_TOKEN` | | Flight SQL endpoint backing the query service. |
+| `WORKSPACE_DUCKFLIGHT_READONLY_AUTH_TOKEN` | | Optional DuckFlight token listed in DuckFlight's `AUTH_READONLY_TOKENS`. SQL written by an agent through MCP runs with it, in DuckFlight's locked-down read-only session; without it that SQL uses the token above plus the read-only request header. The Console's SQL editor never uses it. See [docs/mcp.md](./docs/mcp.md#read-only-sql). |
 | `WORKSPACE_RILL_URL`, `WORKSPACE_CUBE_URL` | | Browser-facing UI URLs of the Rill / Cube apps, published to the Console via the bootstrap document while the app is enabled. Default to `https://rill.<domain>` / `https://cube.<domain>`. |
 | `WORKSPACE_S3_*` | | Object storage for uploads and snapshots: `ENDPOINT`, `REGION`, `BUCKET`, `KEY_PREFIX`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`. |
 | `CREDENTIAL_ENCRYPTION_KEY` | | Base64 32-byte key used to encrypt stored source credentials at rest. Set it in any real deployment. Every process sharing the database must be given the same one. |
@@ -103,6 +104,7 @@ for co-located workers and should not be published.
 | `INTERNAL_PORT` | | Port for the worker-facing API. Defaults to `8081`. |
 | `MCP_ENABLED` | | `true` serves the MCP endpoint at `/mcp` and the access-token API it authenticates with. Off by default — read the threat model in [docs/mcp.md](./docs/mcp.md) first. |
 | `WORKSPACE_API_URL` | | This API's public base URL, from which the MCP resource identifier (`<url>/mcp`) is derived. Defaults to `https://api.<WORKSPACE_CUSTOMER_DOMAIN>`. |
+| `MCP_REQUIRE_READONLY_ENGINE` | | `true` refuses agent (MCP) SQL when DuckFlight cannot give it a read-only session, instead of falling back to the lexical guard alone (logged as a warning). Off by default during the proof of concept; recommended `true` in production once DuckFlight with read-only sessions is deployed. |
 | `CORS_ALLOWED_ORIGINS` | | Comma-separated browser origins allowed to call the API (your Console's origin). Unset disables cross-origin browser access entirely. |
 | `FILEDROP_MAX_BYTES` | | Upload size ceiling for file drop. |
 | `WORKSPACE_IMPORT_FROM_REPO` | | On by default: definitions already in the repositories are loaded into an empty database on the first sweep, keeping their ids. Set it to `off` to start with whatever the database holds instead. |

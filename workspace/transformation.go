@@ -89,6 +89,9 @@ type TransformationRepository interface {
 	CreateTransformationRun(ctx context.Context, run *TransformationRun) error
 	UpdateTransformationRun(ctx context.Context, run *TransformationRun) error
 	ListRecentTransformationRuns(ctx context.Context, id TransformationID, limit int) ([]TransformationRun, error)
+	// GetPendingTransformationRun returns the oldest queued run, or (nil,
+	// nil) when none is queued. Keeps manual triggers idempotent.
+	GetPendingTransformationRun(ctx context.Context, id TransformationID) (*TransformationRun, error)
 }
 
 // PipelineReader is the narrow pipeline lookup the transformation service
@@ -327,6 +330,20 @@ func (s *TransformationService) TriggerTransformation(ctx context.Context, calle
 	}
 	if existing.CustomerSlug != ws.Slug {
 		return nil, ErrTransformationNotFound
+	}
+	// Unlike a pipeline, a disabled transformation is never served to the
+	// worker (GetEnabledTransformations, and the worker's _should_run, agree
+	// that disabled means never), so a run queued for it would wait forever.
+	if !existing.Enabled {
+		return nil, ErrTransformationDisabled
+	}
+
+	// Idempotency, as for pipelines and workflows: a run already waiting to
+	// be picked up satisfies the trigger.
+	if pending, err := s.Transformations.GetPendingTransformationRun(ctx, id); err != nil {
+		return nil, fmt.Errorf("get pending transformation run: %w", err)
+	} else if pending != nil {
+		return pending, nil
 	}
 
 	run := &TransformationRun{

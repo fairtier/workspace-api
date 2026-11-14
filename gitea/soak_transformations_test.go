@@ -105,6 +105,10 @@ func (s *soakTransformationStore) UpdateTransformationRun(context.Context, *work
 	return nil
 }
 
+func (s *soakTransformationStore) GetPendingTransformationRun(context.Context, workspace.TransformationID) (*workspace.TransformationRun, error) {
+	return nil, nil
+}
+
 func (s *soakTransformationStore) ListRecentTransformationRuns(context.Context, workspace.TransformationID, int) ([]workspace.TransformationRun, error) {
 	return nil, nil
 }

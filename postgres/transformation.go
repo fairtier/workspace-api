@@ -276,6 +276,35 @@ func (r *Repository) ListRecentTransformationRuns(ctx context.Context, id worksp
 	return runs, rows.Err()
 }
 
+// GetPendingTransformationRun returns the oldest run still in "pending", or
+// (nil, nil) when none is queued.
+func (r *Repository) GetPendingTransformationRun(ctx context.Context, id workspace.TransformationID) (*workspace.TransformationRun, error) {
+	var run workspace.TransformationRun
+	var startedAt, completedAt sql.NullTime
+	var modelResults []byte
+	err := r.DB.QueryRowContext(ctx,
+		`SELECT id, transformation_id, status, started_at, completed_at, commit_sha, models_total, models_failed, tests_total, tests_failed, model_results, error_message, created_at
+		 FROM transformation_runs WHERE transformation_id = $1 AND status = 'pending' ORDER BY created_at ASC LIMIT 1`,
+		id,
+	).Scan(&run.ID, &run.TransformationID, &run.Status, &startedAt, &completedAt,
+		&run.CommitSHA, &run.ModelsTotal, &run.ModelsFailed, &run.TestsTotal, &run.TestsFailed,
+		&modelResults, &run.ErrorMessage, &run.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("postgres: get pending transformation run: %w", err)
+	}
+	if startedAt.Valid {
+		run.StartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		run.CompletedAt = &completedAt.Time
+	}
+	run.ModelResults = modelResults
+	return &run, nil
+}
+
 // nullUUID maps an empty string to SQL NULL so it can be inserted into a
 // nullable UUID column.
 func nullUUID(s string) any {

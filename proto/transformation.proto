@@ -43,7 +43,10 @@ service TransformationService {
   // history. The git repo itself is never touched.
   rpc DeleteTransformation(DeleteTransformationRequest) returns (DeleteTransformationResponse) {}
 
-  // TriggerTransformation manually starts a run outside the schedule.
+  // TriggerTransformation manually starts a run outside the schedule. A run
+  // already waiting to be picked up is returned instead of queueing a second
+  // one. A disabled transformation is refused (FailedPrecondition): disabled
+  // means it never runs, so the run would never be picked up.
   rpc TriggerTransformation(TriggerTransformationRequest) returns (TriggerTransformationResponse) {}
 
   // --- Worker-facing (internal only) ---

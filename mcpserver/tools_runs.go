@@ -19,7 +19,7 @@ const listTransformationsDesc = `List the workspace's transformations: dbt proje
 
 const getTransformationDesc = `Get one transformation by id and its most recent runs: status, the git commit each run built from, model and test counts (total / failed), and error messages. Use this to diagnose a failing dbt run; read the models with read_repo_file in the "transformations" repo.`
 
-const triggerTransformationDesc = `Queue a run of one transformation now (dbt build of its selector at the repository's current commit). Runs asynchronously: this returns the queued run immediately; poll get_transformation to follow it. Rebuilds the models' tables.`
+const triggerTransformationDesc = `Queue a run of one transformation now (dbt build of its selector at the repository's current commit). Runs asynchronously: this returns the queued run immediately; poll get_transformation to follow it. A run already waiting to start is returned instead of queueing another; a disabled transformation is refused (enable it first). Rebuilds the models' tables.`
 
 type idIn struct {
 	ID string `json:"id" jsonschema:"the id, as the list tool reports it"`

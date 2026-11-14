@@ -197,6 +197,24 @@ rolling back after step 2 leaves *all* of them unreadable. Nothing is lost
 either way — the key still opens them — but the old binary cannot parse the
 envelope.
 
+### Rolling back across a migration
+
+Startup migrates the database up, and a binary refuses to start on a
+database migrated past the newest migration it embeds: golang-migrate cannot
+find the recorded version among its files and the service exits with
+`no migration found for version N`. Rolling back to an older release
+therefore means running the newer releases' **down** migrations first, newest
+first, with the newer release's `postgres/migrations/` directory (for
+example with the golang-migrate CLI: `migrate -path postgres/migrations
+-database "$PG_DSN" down <count>`), then starting the older binary.
+
+Down migrations drop what the up migrations added, data included. From a
+release without workflows the steps are `000008` (workflow file render
+bookkeeping), `000007` (workspace access tokens: every `ftw_…` token stops
+working) and `000006` (workflows, their runs and step runs: the run history
+is gone; the definitions survive as `workflows/*.yaml` in the repository and
+are adopted again after rolling forward). Take a database backup first.
+
 ## Development
 
 ```bash

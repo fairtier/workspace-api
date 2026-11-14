@@ -497,10 +497,14 @@ func startBackgroundSweeps(ctx context.Context, logger *slog.Logger, s backgroun
 	}
 	go sweeper.Run(ctx, loadDurationEnv("PIPELINE_ADOPT_SWEEP_INTERVAL", 10*time.Minute))
 
+	timeout := stuckRunTimeout(logger)
+	if timeout == 0 {
+		return
+	}
 	stuckSweeper := &workspace.StuckRunSweeper{
 		Store:   s.Repo,
 		Slug:    s.Slug,
-		Timeout: loadDurationEnv("PIPELINE_RUN_STUCK_TIMEOUT", 0),
+		Timeout: timeout,
 		Logger:  logger,
 	}
 	go stuckSweeper.Run(ctx, loadDurationEnv("PIPELINE_RUN_STUCK_SWEEP_INTERVAL", 5*time.Minute))
@@ -512,6 +516,52 @@ func startBackgroundSweeps(ctx context.Context, logger *slog.Logger, s backgroun
 		Logger:  logger,
 	}
 	go workflowSweeper.Run(ctx, loadDurationEnv("WORKFLOW_RUN_STUCK_SWEEP_INTERVAL", 5*time.Minute))
+}
+
+// stuckRunTimeout resolves the stuck-run sweep's timeout; 0 means do not run
+// the sweep. The sweep fails rows the pipeline worker writes, so its timeout
+// is derived from the worker's own run limits, read under the worker's own
+// variable names (and defaults) so that one setting configures both sides.
+// PIPELINE_RUN_STUCK_TIMEOUT can lengthen it, never shorten it below what the
+// worker may legitimately take — see workspace.StuckRunTimeoutFor.
+func stuckRunTimeout(logger *slog.Logger) time.Duration {
+	limits := workerRunLimits(logger)
+	timeout, warning := workspace.StuckRunTimeoutFor(limits, loadDurationEnv("PIPELINE_RUN_STUCK_TIMEOUT", 0))
+	if warning != "" {
+		logger.Warn(warning, "attempt_timeout", limits.AttemptTimeout,
+			"max_retries", limits.MaxRetries, "retry_base_delay", limits.RetryBaseDelay)
+	}
+	return timeout
+}
+
+// workerRunLimits reads the pipeline worker's run limits from the same
+// variables the worker reads, falling back to the worker's defaults.
+func workerRunLimits(logger *slog.Logger) workspace.WorkerRunLimits {
+	l := workspace.DefaultWorkerRunLimits()
+	l.AttemptTimeout = time.Duration(loadIntEnv(logger, "PIPELINE_RUN_TIMEOUT_SECONDS", int(l.AttemptTimeout/time.Second))) * time.Second
+	l.MaxRetries = loadIntEnv(logger, "PIPELINE_MAX_RETRIES", l.MaxRetries)
+	l.RetryBaseDelay = time.Duration(loadIntEnv(logger, "PIPELINE_RETRY_BASE_DELAY", int(l.RetryBaseDelay/time.Second))) * time.Second
+	// The worker enforces its wall-clock limit only on a run isolated in a
+	// subprocess; an in-process run cannot be interrupted, so it has none.
+	switch strings.ToLower(os.Getenv("PIPELINE_SUBPROCESS")) {
+	case "0", "false", "no":
+		l.AttemptTimeout = 0
+	}
+	return l
+}
+
+// loadIntEnv reads an integer env var, warning and falling back on a bad value.
+func loadIntEnv(logger *slog.Logger, name string, fallback int) int {
+	v := os.Getenv(name)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		logger.Warn("invalid integer env, using fallback", "name", name, "value", v, "fallback", fallback)
+		return fallback
+	}
+	return n
 }
 
 // loadStaticWorkspace builds the single workspace this deployment serves from

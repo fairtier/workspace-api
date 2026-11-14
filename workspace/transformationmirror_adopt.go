@@ -196,7 +196,7 @@ func (m *TransformationMirror) refuseAdoption(ctx context.Context, t *Transforma
 		Type:         "info",
 		Title:        "Transformation file edit could not be applied",
 		Body:         fmt.Sprintf("%s was edited outside the Console, but %s. The Console keeps its current configuration; fix the file or save the transformation in the Console to overwrite it.", filePath, reason),
-		Link:         "transformations",
+		Link:         transformationLink(t.ID),
 	}
 	if err := m.Notifications.Notify(ctx, n); err != nil && m.Logger != nil {
 		m.Logger.WarnContext(ctx, "notify refused transformation adoption", "transformation", t.ID, "err", err)
@@ -213,7 +213,7 @@ func (m *TransformationMirror) notifyAdopted(ctx context.Context, customerSlug, 
 		Type:         "info",
 		Title:        "Transformation updated from your repo",
 		Body:         fmt.Sprintf("%s was edited outside the Console; the change has been applied to the transformation.", filePath),
-		Link:         "transformations",
+		Link:         "/transformations",
 	}
 	if err := m.Notifications.Notify(ctx, n); err != nil && m.Logger != nil {
 		m.Logger.WarnContext(ctx, "notify adopted transformation", "customer", customerSlug, "err", err)

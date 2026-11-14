@@ -334,6 +334,11 @@ func TestTransformationService_ReportTransformationRun(t *testing.T) {
 		if notified.Body != "boom" {
 			t.Errorf("Body = %q, want %q", notified.Body, "boom")
 		}
+		// A path with the deep-link query, like a pipeline's
+		// "/pipelines?pipeline=<id>" — not a bare route name.
+		if want := "/transformations?transformation=" + string(acmeTransformation.ID); notified.Link != want {
+			t.Errorf("Link = %q, want %q", notified.Link, want)
+		}
 	})
 }
 

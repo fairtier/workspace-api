@@ -278,7 +278,7 @@ func (m *TransformationMirror) notifyDefinitionDrift(ctx context.Context, custom
 		Type:         "info",
 		Title:        "Transformation file changed outside the Console",
 		Body:         fmt.Sprintf("%s in your workspace repo was edited outside the Console; the Console version has been reapplied. The overwritten change remains in the file's git history.", filePath),
-		Link:         "transformations",
+		Link:         "/transformations",
 	}
 	if err := m.Notifications.Notify(ctx, n); err != nil && m.Logger != nil {
 		m.Logger.WarnContext(ctx, "notify transformation drift", "customer", customerSlug, "err", err)

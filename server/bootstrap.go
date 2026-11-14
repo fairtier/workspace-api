@@ -55,6 +55,10 @@ type WorkspaceBootstrap struct {
 	RillURL             string `json:"rill_url,omitempty"`
 	CubeURL             string `json:"cube_url,omitempty"`
 	DuckFlightURL       string `json:"duckflight_url"`
+	// MCPURL is the MCP endpoint (<API URL>/mcp) a person's own agent
+	// connects to; present only while capabilities.mcp is true. Same class as
+	// the other URLs: this API's own public address plus a fixed path.
+	MCPURL string `json:"mcp_url,omitempty"`
 
 	Capabilities WorkspaceCapabilities `json:"capabilities"`
 }
@@ -106,6 +110,18 @@ type WorkspaceCapabilities struct {
 	// someone saves a client pair would be stale for the life of the process.
 	// The Console reads that half from OAuthClientService.GetOAuthClient.
 	GoogleOAuth bool `json:"google_oauth"`
+
+	// MCP reports that this deployment serves the MCP endpoint and the
+	// access-token API it authenticates with (MCP_ENABLED). A wiring fact
+	// like FileDrop, set with AdvertiseMCP. A Console reading an older box
+	// that omits it has to find out another way (calling the token API).
+	MCP bool `json:"mcp"`
+}
+
+// AdvertiseMCP marks the MCP endpoint as served at endpointURL.
+func (d *WorkspaceBootstrap) AdvertiseMCP(endpointURL string) {
+	d.Capabilities.MCP = true
+	d.MCPURL = endpointURL
 }
 
 // BootstrapFromWorkspace selects the public subset of a workspace.

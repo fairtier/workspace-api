@@ -184,3 +184,38 @@ func TestBootstrapHandlerServesJSONUnauthenticated(t *testing.T) {
 		}
 	}
 }
+
+// MCP is advertised only once the wiring says so, and then with its URL; a
+// document without it keeps the field false and the URL out, so a Console
+// can tell "not enabled" from an older box that never sends the field.
+func TestBootstrapAdvertisesMCP(t *testing.T) {
+	doc := BootstrapFromWorkspace(&workspace.Workspace{Slug: "acme"}, "console", false, false)
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Capabilities.MCP || strings.Contains(string(encoded), "mcp_url") {
+		t.Errorf("MCP advertised while not enabled: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"mcp":false`) {
+		t.Errorf("capabilities.mcp missing, want an explicit false: %s", encoded)
+	}
+
+	doc.AdvertiseMCP("https://api.customer-acme.example.com/mcp")
+	var got struct {
+		MCPURL       string `json:"mcp_url"`
+		Capabilities struct {
+			MCP bool `json:"mcp"`
+		} `json:"capabilities"`
+	}
+	encoded, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Capabilities.MCP || got.MCPURL != "https://api.customer-acme.example.com/mcp" {
+		t.Errorf("enabled MCP not advertised: %s", encoded)
+	}
+}

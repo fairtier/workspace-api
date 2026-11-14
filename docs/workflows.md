@@ -132,12 +132,32 @@ Error codes of `ReportWorkflowRun`, for the worker's retry decision:
 | anything else (`Unavailable`, `DeadlineExceeded`, `Internal`, `Unknown`, transport errors) | Transient. | Yes, the same report. |
 
 **Stuck runs.** A worker killed mid-workflow leaves its run `running`. The API
-sweeps every `WORKFLOW_RUN_STUCK_SWEEP_INTERVAL` (default 5m) and fails runs
-`running` for longer than `WORKFLOW_RUN_STUCK_TIMEOUT` (default 8h — the
-worker's pipeline run timeout defaults to 6h, and steps run one after
-another): the run and its running step become `failed`, steps that never
-started `skipped`, and the failure notification fires once. A worker report
-arriving afterwards still upserts normally.
+sweeps every `WORKFLOW_RUN_STUCK_SWEEP_INTERVAL` (default 5m) and judges each
+`running` run by its **steps**, not by its age — a healthy workflow of many
+long steps can run for days, and the worker reports every transition (the
+run when it starts, each step as `running` with `started_at` when it begins,
+and again when it ends):
+
+- **A step `running` for too long.** The step's own age is compared with the
+  longest run the worker allows one pipeline: every attempt to
+  `PIPELINE_RUN_TIMEOUT_SECONDS`, `PIPELINE_MAX_RETRIES` retries with the
+  doubling `PIPELINE_RETRY_BASE_DELAY` backoff, plus an hour's grace — the
+  same derivation as the pipeline stuck-run sweep, read under the worker's
+  own variable names (19h01m30s with the worker's defaults).
+  `WORKFLOW_RUN_STUCK_TIMEOUT` can lengthen it, never shorten it (a shorter
+  value is raised, with a warning). A worker with no time limit
+  (`PIPELINE_RUN_TIMEOUT_SECONDS=0`, or `PIPELINE_SUBPROCESS` off) turns this
+  rule off: no age then proves a step dead.
+- **No step running and nothing reported.** The worker moves straight from
+  one step to the next, so a run with no step `running` whose last
+  transition (the run's start, or any step's start or end) is older than
+  15 minutes plus one sweep interval is dead.
+
+A swept run and its running step become `failed`, steps that never started
+`skipped`, and the failure notification fires once. A worker report arriving
+afterwards still upserts normally (status, completion time and error are
+overwritten), so a run swept by mistake that then finishes ends up with its
+real outcome.
 
 ## PoC shortcuts and known gaps
 
@@ -154,9 +174,12 @@ arriving afterwards still upserts normally.
   target fails its step). Within one tick the worker reuses a target that
   already ran rather than running it twice; across ticks the server does not
   arbitrate.
-- **Stuck-run sweep is time-based only.** A run is failed 8h after it
-  started, however soon the worker died; the worker's own start-up stale-run
-  finalisation could close it sooner.
+- **Stuck-run sweep is liveness-by-report.** A worker that dies inside a
+  long step is only noticed once that step outlasts the worker's limits
+  (about 19h by default); the worker's own start-up stale-run finalisation
+  could close it sooner. Conversely, a "step running" report that is lost
+  and not retried within the idle grace makes a live run look idle and it
+  is swept, then corrected by the worker's next report.
 - **No metrics** beyond the RPC-level ones; workflow runs are not counted in
   the `workspace.` metric family yet.
 - The step **name** in the definition is resolved live from the target; the

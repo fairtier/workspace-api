@@ -387,17 +387,18 @@ func (r *Repository) ListWorkflowRuns(ctx context.Context, id workspace.Workflow
 	return runs, r.attachStepRuns(ctx, runs)
 }
 
-// ListStuckWorkflowRuns returns the workspace's runs "running" since before
-// olderThan ago, with their step runs.
-func (r *Repository) ListStuckWorkflowRuns(ctx context.Context, customerSlug string, olderThan time.Duration) ([]workspace.WorkflowRun, error) {
+// ListRunningWorkflowRuns returns the workspace's "running" runs with their
+// step runs. Which of them are dead is the sweep's call
+// (workspace.WorkflowStuckPolicy): it depends on the steps, not on the run's
+// age.
+func (r *Repository) ListRunningWorkflowRuns(ctx context.Context, customerSlug string) ([]workspace.WorkflowRun, error) {
 	runs, err := r.queryWorkflowRuns(ctx,
 		`SELECT r.id, r.workflow_id, r.status, r.trigger, r.started_at, r.completed_at, r.error_message, r.created_at
 		 FROM workflow_runs r
 		 JOIN workflows w ON w.id = r.workflow_id
 		 WHERE w.customer_slug = $1 AND r.status = 'running'
-		   AND COALESCE(r.started_at, r.created_at) < now() - make_interval(secs => $2)
 		 ORDER BY r.created_at`,
-		customerSlug, olderThan.Seconds())
+		customerSlug)
 	if err != nil || len(runs) == 0 {
 		return runs, err
 	}

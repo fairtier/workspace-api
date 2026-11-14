@@ -497,6 +497,18 @@ func startBackgroundSweeps(ctx context.Context, logger *slog.Logger, s backgroun
 	}
 	go sweeper.Run(ctx, loadDurationEnv("PIPELINE_ADOPT_SWEEP_INTERVAL", 10*time.Minute))
 
+	// The workflow sweep judges runs by their step transitions, so it runs
+	// even when the pipeline sweep is off; only its running-step rule
+	// follows the worker's limits.
+	workflowInterval := loadDurationEnv("WORKFLOW_RUN_STUCK_SWEEP_INTERVAL", 5*time.Minute)
+	workflowSweeper := &workspace.WorkflowStuckRunSweeper{
+		Service: s.Workflows,
+		Slug:    s.Slug,
+		Policy:  workflowStuckPolicy(logger, workflowInterval),
+		Logger:  logger,
+	}
+	go workflowSweeper.Run(ctx, workflowInterval)
+
 	timeout := stuckRunTimeout(logger)
 	if timeout == 0 {
 		return
@@ -508,14 +520,23 @@ func startBackgroundSweeps(ctx context.Context, logger *slog.Logger, s backgroun
 		Logger:  logger,
 	}
 	go stuckSweeper.Run(ctx, loadDurationEnv("PIPELINE_RUN_STUCK_SWEEP_INTERVAL", 5*time.Minute))
+}
 
-	workflowSweeper := &workspace.WorkflowStuckRunSweeper{
-		Service: s.Workflows,
-		Slug:    s.Slug,
-		Timeout: loadDurationEnv("WORKFLOW_RUN_STUCK_TIMEOUT", 0),
-		Logger:  logger,
+// workflowStuckPolicy resolves the workflow sweep's policy. A step is a
+// pipeline or transformation run the worker executes under the same limits
+// as on its own, so a running step gets the pipeline sweep's derived timeout;
+// WORKFLOW_RUN_STUCK_TIMEOUT can lengthen it, never shorten it (as
+// PIPELINE_RUN_STUCK_TIMEOUT does), and a worker without a time limit turns
+// the running-step rule off. A run with no running step may sit idle for
+// DefaultWorkflowIdleGrace plus one sweep interval.
+func workflowStuckPolicy(logger *slog.Logger, interval time.Duration) workspace.WorkflowStuckPolicy {
+	limits := workerRunLimits(logger)
+	timeout, warning := workspace.StuckRunTimeoutFor(limits, loadDurationEnv("WORKFLOW_RUN_STUCK_TIMEOUT", 0))
+	if warning != "" {
+		logger.Warn("workflow stuck-run sweep: "+warning, "attempt_timeout", limits.AttemptTimeout,
+			"max_retries", limits.MaxRetries, "retry_base_delay", limits.RetryBaseDelay)
 	}
-	go workflowSweeper.Run(ctx, loadDurationEnv("WORKFLOW_RUN_STUCK_SWEEP_INTERVAL", 5*time.Minute))
+	return workspace.WorkflowStuckPolicy{StepTimeout: timeout, IdleGrace: workspace.DefaultWorkflowIdleGrace + interval}
 }
 
 // stuckRunTimeout resolves the stuck-run sweep's timeout; 0 means do not run

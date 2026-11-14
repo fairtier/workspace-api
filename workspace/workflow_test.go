@@ -104,22 +104,16 @@ func (f *fakeWorkflowStore) SetWorkflowEnabled(_ context.Context, id workspace.W
 	return nil
 }
 
-func (f *fakeWorkflowStore) ListStuckWorkflowRuns(_ context.Context, slug string, older time.Duration) ([]workspace.WorkflowRun, error) {
+func (f *fakeWorkflowStore) ListRunningWorkflowRuns(_ context.Context, slug string) ([]workspace.WorkflowRun, error) {
 	var out []workspace.WorkflowRun
 	for _, r := range f.runs {
 		w, ok := f.workflows[r.WorkflowID]
 		if !ok || w.CustomerSlug != slug || r.Status != workspace.RunStatusRunning {
 			continue
 		}
-		since := r.CreatedAt
-		if r.StartedAt != nil {
-			since = *r.StartedAt
-		}
-		if time.Since(since) > older {
-			cp := *r
-			cp.StepRuns = append([]workspace.WorkflowStepRun(nil), r.StepRuns...)
-			out = append(out, cp)
-		}
+		cp := *r
+		cp.StepRuns = append([]workspace.WorkflowStepRun(nil), r.StepRuns...)
+		out = append(out, cp)
 	}
 	return out, nil
 }
@@ -824,12 +818,12 @@ func TestWorkflowService_SweepStuckRuns(t *testing.T) {
 	report(freshID, time.Now().Add(-time.Hour))
 
 	for range 2 { // a second sweep finds nothing and notifies nothing
-		if _, err := fx.svc.SweepStuckRuns(ctx, "acme", 0); err != nil {
+		if _, err := fx.svc.SweepStuckRuns(ctx, "acme", workspace.WorkflowStuckPolicy{StepTimeout: 8 * time.Hour}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	got := fx.store.runs[stuckID]
-	if got.Status != "failed" || got.CompletedAt == nil || !strings.Contains(got.ErrorMessage, "no report from the worker") {
+	if got.Status != "failed" || got.CompletedAt == nil || !strings.Contains(got.ErrorMessage, "step 2 has been running") {
 		t.Fatalf("stuck run = %+v", got)
 	}
 	want := []string{"success", "failed", "skipped"}
@@ -842,13 +836,109 @@ func TestWorkflowService_SweepStuckRuns(t *testing.T) {
 		}
 	}
 	if fx.store.runs[freshID].Status != "running" {
-		t.Error("a run inside the timeout was failed")
+		t.Error("a run whose step is inside the timeout was failed")
 	}
 	if len(fx.notes.notes) != 1 {
 		t.Fatalf("notifications = %d, want exactly 1", len(fx.notes.notes))
 	}
 	// Another workspace's sweep leaves acme's runs alone.
-	if n, _ := fx.svc.SweepStuckRuns(ctx, "evil", time.Minute); n != 0 {
+	if n, _ := fx.svc.SweepStuckRuns(ctx, "evil", workspace.WorkflowStuckPolicy{StepTimeout: time.Minute, IdleGrace: time.Minute}); n != 0 {
 		t.Fatalf("evil sweep failed %d acme runs", n)
+	}
+}
+
+// timedStep is a step run with its transition times, as the worker reports
+// them: started when it began, completed when it ended.
+func timedStep(pos int, kind workspace.WorkflowStepKind, ref, status string, started, completed *time.Time) workspace.WorkflowStepRun {
+	sr := stepRun(pos, kind, ref, status)
+	sr.StartedAt, sr.CompletedAt = started, completed
+	return sr
+}
+
+func ago(d time.Duration) *time.Time {
+	t := time.Now().Add(-d)
+	return &t
+}
+
+// A long workflow is alive as long as its current step is within what the
+// worker allows one step: a second step loading for 10 hours is not stuck.
+func TestWorkflowSweep_LongRunningStepIsNotStuck(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme), pipeStep(pipe2), trStep(trAcme))
+	ctx := context.Background()
+	if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+		ID: runA, WorkflowID: w.ID, Status: "running", StartedAt: ago(12 * time.Hour),
+		StepRuns: []workspace.WorkflowStepRun{
+			timedStep(0, "pipeline", pipeAcme, "success", ago(12*time.Hour), ago(10*time.Hour)),
+			timedStep(1, "pipeline", pipe2, "running", ago(10*time.Hour), nil),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.svc.SweepStuckRuns(ctx, "acme", workflowStuckPolicy()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.store.runs[runA].Status; got != "running" {
+		t.Fatalf("a workflow whose step is still within the worker's limit was swept: %s", got)
+	}
+	if len(fx.notes.notes) != 0 {
+		t.Errorf("notifications = %d, want none", len(fx.notes.notes))
+	}
+}
+
+// Between steps the worker moves straight on and reports the next one as
+// running; a run with no running step and no transition for an hour is dead.
+func TestWorkflowSweep_IdleRunIsStuck(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme), pipeStep(pipe2), trStep(trAcme))
+	ctx := context.Background()
+	if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+		ID: runA, WorkflowID: w.ID, Status: "running", StartedAt: ago(90 * time.Minute),
+		StepRuns: []workspace.WorkflowStepRun{
+			timedStep(0, "pipeline", pipeAcme, "success", ago(90*time.Minute), ago(time.Hour)),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := fx.svc.SweepStuckRuns(ctx, "acme", workflowStuckPolicy()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := fx.store.runs[runA]
+	if got.Status != "failed" || !strings.Contains(got.ErrorMessage, "no report from the worker") {
+		t.Fatalf("idle run = %+v", got)
+	}
+	want := []string{"success", "skipped", "skipped"}
+	for i, sr := range got.StepRuns {
+		if sr.Status != want[i] {
+			t.Errorf("step %d status = %q, want %q", i, sr.Status, want[i])
+		}
+	}
+	if len(fx.notes.notes) != 1 {
+		t.Errorf("notifications = %d, want exactly 1", len(fx.notes.notes))
+	}
+}
+
+// workflowStuckPolicy is the policy with the default worker's limits: the
+// step timeout the pipeline sweep derives, and the default idle grace.
+func workflowStuckPolicy() workspace.WorkflowStuckPolicy {
+	return workspace.WorkflowStuckPolicy{StepTimeout: workspace.DefaultStuckRunTimeout, IdleGrace: workspace.DefaultWorkflowIdleGrace + 5*time.Minute}
+}
+
+// A worker with no time limit leaves no age that proves a step dead: with
+// StepTimeout 0 a running step is never swept, while the idle rule stays.
+func TestWorkflowSweep_UnboundedWorkerNeverSweepsARunningStep(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme), trStep(trAcme))
+	ctx := context.Background()
+	if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+		ID: runA, WorkflowID: w.ID, Status: "running", StartedAt: ago(100 * time.Hour),
+		StepRuns: []workspace.WorkflowStepRun{timedStep(0, "pipeline", pipeAcme, "running", ago(100*time.Hour), nil)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := fx.svc.SweepStuckRuns(ctx, "acme", workspace.WorkflowStuckPolicy{}); err != nil || n != 0 {
+		t.Fatalf("swept %d (%v), want none", n, err)
 	}
 }

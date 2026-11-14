@@ -234,10 +234,9 @@ type WorkflowRepository interface {
 	// ListWorkflowRuns returns up to limit runs newest first, strictly older
 	// than after when it is non-nil, with their step runs.
 	ListWorkflowRuns(ctx context.Context, id WorkflowID, limit int, after *WorkflowRunCursor) ([]WorkflowRun, error)
-	// ListStuckWorkflowRuns returns the workspace's runs that have been
-	// "running" since before olderThan ago (started_at, else created_at),
-	// with their step runs.
-	ListStuckWorkflowRuns(ctx context.Context, customerSlug string, olderThan time.Duration) ([]WorkflowRun, error)
+	// ListRunningWorkflowRuns returns the workspace's runs whose status is
+	// "running", with their step runs, for the stuck-run sweep to judge.
+	ListRunningWorkflowRuns(ctx context.Context, customerSlug string) ([]WorkflowRun, error)
 }
 
 // TransformationReader is the narrow transformation lookup the workflow
@@ -527,36 +526,62 @@ func (s *WorkflowService) recordFailure(ctx context.Context, w *Workflow, run *W
 	return nil
 }
 
-// DefaultWorkflowStuckRunTimeout is how long a workflow run may stay
-// "running" without a report before SweepStuckRuns fails it. Generous: a
-// workflow runs its steps one after another, and a single pipeline run may
-// take up to the worker's 6-hour default timeout.
-const DefaultWorkflowStuckRunTimeout = 8 * time.Hour
+// WorkflowStuckPolicy decides when a "running" workflow run is dead.
+//
+// A workflow run is not one long job but a sequence of steps, and the worker
+// reports every transition: the run when it starts, each step as "running"
+// (with started_at) when it begins and again when it ends. So the age of the
+// run says nothing — a healthy workflow of 20 long pipeline steps can run for
+// days — while the age of its current step and of its last transition do:
+//
+//   - a step "running" for longer than StepTimeout is past anything the
+//     worker allows one step (StuckRunTimeoutFor, the pipeline sweep's own
+//     derivation from the worker's limits); 0 turns this rule off, as a
+//     worker without a time limit leaves no age that proves a step dead;
+//   - a run with no step "running" whose last transition (run start, or any
+//     step's start/end) is older than IdleGrace is dead: the worker moves
+//     from one step straight to the next.
+type WorkflowStuckPolicy struct {
+	StepTimeout time.Duration
+	// IdleGrace; 0 = DefaultWorkflowIdleGrace.
+	IdleGrace time.Duration
+}
 
-// errStuck is the error recorded on a run failed by the stuck-run sweep.
-const errStuck = "no report from the worker for %s: the run was marked failed (the worker probably restarted or was killed mid-run)"
+// DefaultWorkflowIdleGrace is how long a running workflow run may go with no
+// step running and no transition reported. The worker moves straight from
+// one step to the next, so this only has to cover a lost report being
+// retried and a slow poll; callers add their sweep interval on top.
+const DefaultWorkflowIdleGrace = 15 * time.Minute
 
-// SweepStuckRuns fails the workspace's workflow runs that have been
-// "running" for longer than olderThan (0 = DefaultWorkflowStuckRunTimeout):
-// the run and its running step become failed, steps that never started
-// become skipped, and the usual failure notification fires once. It returns
-// how many runs it failed.
-func (s *WorkflowService) SweepStuckRuns(ctx context.Context, customerSlug string, olderThan time.Duration) (int, error) {
-	if olderThan <= 0 {
-		olderThan = DefaultWorkflowStuckRunTimeout
-	}
-	runs, err := s.Workflows.ListStuckWorkflowRuns(ctx, customerSlug, olderThan)
+// errStuckStep and errStuckIdle are the errors recorded on a run failed by
+// the stuck-run sweep.
+const (
+	errStuckStep = "no report from the worker: step %d has been running for %s, longer than the worker allows one step (%s); the run was marked failed (the worker probably restarted or was killed mid-run)"
+	errStuckIdle = "no report from the worker for %s since its last step transition, with no step running: the run was marked failed (the worker probably restarted or was killed mid-run)"
+)
+
+// SweepStuckRuns fails the workspace's "running" workflow runs that policy
+// finds dead: the run and its running step become failed, steps that never
+// started become skipped, and the usual failure notification fires once. It
+// returns how many runs it failed.
+func (s *WorkflowService) SweepStuckRuns(ctx context.Context, customerSlug string, policy WorkflowStuckPolicy) (int, error) {
+	runs, err := s.Workflows.ListRunningWorkflowRuns(ctx, customerSlug)
 	if err != nil {
-		return 0, fmt.Errorf("list stuck workflow runs: %w", err)
+		return 0, fmt.Errorf("list running workflow runs: %w", err)
 	}
 	failed := 0
+	now := time.Now()
 	for i := range runs {
 		run := &runs[i]
+		msg, stuck := policy.stuck(run, now)
+		if !stuck {
+			continue
+		}
 		w, err := s.Workflows.GetWorkflow(ctx, run.WorkflowID)
 		if err != nil {
 			return failed, fmt.Errorf("get workflow: %w", err)
 		}
-		failStuckRun(run, w, olderThan, time.Now())
+		failStuckRun(run, w, msg, now)
 		if err := s.recordFailure(ctx, w, run); err != nil {
 			return failed, fmt.Errorf("fail stuck workflow run: %w", err)
 		}
@@ -565,11 +590,60 @@ func (s *WorkflowService) SweepStuckRuns(ctx context.Context, customerSlug strin
 	return failed, nil
 }
 
+// stuck reports whether run is dead at now, and the error to record.
+func (p WorkflowStuckPolicy) stuck(run *WorkflowRun, now time.Time) (string, bool) {
+	last := run.CreatedAt
+	if run.StartedAt != nil {
+		last = laterOf(last, *run.StartedAt)
+	}
+	for _, sr := range run.StepRuns {
+		if sr.Status == RunStatusRunning {
+			return p.stuckStep(sr, last, now)
+		}
+		if sr.StartedAt != nil {
+			last = laterOf(last, *sr.StartedAt)
+		}
+		if sr.CompletedAt != nil {
+			last = laterOf(last, *sr.CompletedAt)
+		}
+	}
+	grace := p.IdleGrace
+	if grace <= 0 {
+		grace = DefaultWorkflowIdleGrace
+	}
+	if idle := now.Sub(last); idle > grace {
+		return fmt.Sprintf(errStuckIdle, idle.Round(time.Minute)), true
+	}
+	return "", false
+}
+
+// stuckStep judges a run by its running step, timed from its own start (the
+// run's last transition before it, if the worker sent none).
+func (p WorkflowStuckPolicy) stuckStep(sr WorkflowStepRun, fallback, now time.Time) (string, bool) {
+	if p.StepTimeout <= 0 {
+		return "", false
+	}
+	since := fallback
+	if sr.StartedAt != nil {
+		since = *sr.StartedAt
+	}
+	if age := now.Sub(since); age > p.StepTimeout {
+		return fmt.Sprintf(errStuckStep, sr.Position+1, age.Round(time.Minute), p.StepTimeout), true
+	}
+	return "", false
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
 // failStuckRun turns a stuck run into its failed form: a running (or
 // pending) step fails, and every step the workflow defines that has no
 // step run yet is recorded as skipped.
-func failStuckRun(run *WorkflowRun, w *Workflow, olderThan time.Duration, now time.Time) {
-	msg := fmt.Sprintf(errStuck, olderThan)
+func failStuckRun(run *WorkflowRun, w *Workflow, msg string, now time.Time) {
 	run.Status, run.CompletedAt, run.ErrorMessage = RunStatusFailed, &now, msg
 	seen := map[int]bool{}
 	for i := range run.StepRuns {

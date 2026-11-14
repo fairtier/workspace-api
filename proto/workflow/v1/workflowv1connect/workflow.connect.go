@@ -98,8 +98,9 @@ type WorkflowServiceClient interface {
 	// failed instead, since nothing can ever run it), and workflows whose
 	// latest run is still "running" — the worker must not start a second run
 	// alongside it; the workflow reappears once that run is reported finished
-	// or is failed as stuck (a periodic server sweep fails runs "running" for
-	// longer than WORKFLOW_RUN_STUCK_TIMEOUT, 8 hours by default).
+	// or is failed as stuck (a periodic server sweep fails a "running" run whose
+	// running step has outlasted the worker's own time limits, or which has no
+	// step running and no step transition reported for about 20 minutes).
 	GetWorkflowConfigs(context.Context, *connect.Request[v1.GetWorkflowConfigsRequest]) (*connect.Response[v1.GetWorkflowConfigsResponse], error)
 	// ReportWorkflowRun records a workflow run's progress. It is an idempotent
 	// upsert on run_id, step runs included, so the worker reports after every
@@ -289,8 +290,9 @@ type WorkflowServiceHandler interface {
 	// failed instead, since nothing can ever run it), and workflows whose
 	// latest run is still "running" — the worker must not start a second run
 	// alongside it; the workflow reappears once that run is reported finished
-	// or is failed as stuck (a periodic server sweep fails runs "running" for
-	// longer than WORKFLOW_RUN_STUCK_TIMEOUT, 8 hours by default).
+	// or is failed as stuck (a periodic server sweep fails a "running" run whose
+	// running step has outlasted the worker's own time limits, or which has no
+	// step running and no step transition reported for about 20 minutes).
 	GetWorkflowConfigs(context.Context, *connect.Request[v1.GetWorkflowConfigsRequest]) (*connect.Response[v1.GetWorkflowConfigsResponse], error)
 	// ReportWorkflowRun records a workflow run's progress. It is an idempotent
 	// upsert on run_id, step runs included, so the worker reports after every

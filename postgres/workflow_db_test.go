@@ -298,21 +298,36 @@ func TestWorkflowStore_FailureSummarySetEnabledAndStuckRuns(t *testing.T) {
 		t.Fatalf("missing workflow: %v", err)
 	}
 
-	stuckID := uuid.NewString()
+	// Every "running" run is listed, old or fresh — the sweep's policy, not
+	// the query, decides which is dead — with its step runs and their times.
+	running := map[string]bool{uuid.NewString(): true, uuid.NewString(): true}
 	fresh := time.Now()
-	for id, started := range map[string]*time.Time{stuckID: &old, uuid.NewString(): &fresh} {
+	startedAt := []*time.Time{&old, &fresh}
+	i := 0
+	for id := range running {
+		started := startedAt[i]
+		i++
 		if _, err := fx.repo.UpsertWorkflowRun(ctx, &workspace.WorkflowRun{
 			ID: id, WorkflowID: w.ID, Status: workspace.RunStatusRunning, StartedAt: started,
-			StepRuns: []workspace.WorkflowStepRun{{Position: 0, Kind: workspace.StepKindPipeline, RefID: string(fx.pipe), Name: "orders", Status: workspace.RunStatusRunning}},
+			StepRuns: []workspace.WorkflowStepRun{{Position: 0, Kind: workspace.StepKindPipeline, RefID: string(fx.pipe), Name: "orders", Status: workspace.RunStatusRunning, StartedAt: started}},
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	stuck, err := fx.repo.ListStuckWorkflowRuns(ctx, fx.slug, 8*time.Hour)
-	if err != nil || len(stuck) != 1 || stuck[0].ID != stuckID || len(stuck[0].StepRuns) != 1 {
-		t.Fatalf("stuck = %+v, %v", stuck, err)
+	listed, err := fx.repo.ListRunningWorkflowRuns(ctx, fx.slug)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if other, _ := fx.repo.ListStuckWorkflowRuns(ctx, "someone-else", time.Minute); len(other) != 0 {
-		t.Fatalf("another workspace sees %d stuck runs", len(other))
+	for _, r := range listed {
+		if !running[r.ID] || len(r.StepRuns) != 1 || r.StepRuns[0].StartedAt == nil {
+			t.Fatalf("listed run = %+v", r)
+		}
+		delete(running, r.ID)
+	}
+	if len(running) != 0 {
+		t.Fatalf("running runs not listed: %v (listed %+v)", running, listed)
+	}
+	if other, _ := fx.repo.ListRunningWorkflowRuns(ctx, "someone-else"); len(other) != 0 {
+		t.Fatalf("another workspace sees %d running runs", len(other))
 	}
 }

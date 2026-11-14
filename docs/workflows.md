@@ -178,14 +178,19 @@ workflows, then transformations:
 1. `GetWorkflowConfigs{customer_slug}`. Each item carries the steps (position,
    kind, `ref_id`, current name, `ref_enabled`), `schedule`, `enabled`,
    `trigger_now` + `pending_run_id`, and `last_run_at` / `last_run_status`.
-   **A workflow whose latest run is still `running` is left out** (not even a
+   **A disabled workflow is served only while it has a pending run** (a
+   Run-now outranks `enabled`); without one it is not in the response at
+   all, so `enabled` on a served item is `false` only next to
+   `trigger_now`. **A workflow whose latest run is still `running` is left
+   out** (not even a
    queued Run-now is offered), so a second run can never start beside it;
    it comes back once that run is reported finished or is failed as stuck.
    Withholding the item, rather than flagging it, needs no worker logic: a
    worker cannot start what it is not given.
 2. **Is it due?** `trigger_now` → due, even when the workflow is disabled (the
    pipeline rule: disabling stops the schedule, not a run a person asked
-   for). Otherwise, not `enabled` or empty `schedule` → not due. Otherwise
+   for). Otherwise, not `enabled` (an item the worker should not see, but
+   check it anyway) or empty `schedule` → not due. Otherwise
    evaluate cron with `last_run_at` as the baseline — it is the start of the
    last run that left `pending`, whatever its outcome, so a failing workflow
    waits for its next slot instead of retrying every tick. Never run → due.

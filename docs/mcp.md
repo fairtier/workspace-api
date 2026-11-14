@@ -38,7 +38,7 @@ A workspace, as the tools describe it to the agent:
 | `list_workflows` | read | Workflows with their steps, schedule, enabled flag and last run — when it failed, which step and the first line of its error. |
 | `get_workflow` | read | One workflow and its 10 most recent runs, each with step runs (status, error, the pipeline/transformation run produced). |
 | `list_workflow_runs` | read | A workflow's older runs, paginated (`page_size` ≤ 100, `page_token`). |
-| `list_repo_files` | read | Files in `transformations` or `rill`. |
+| `list_repo_files` | read | Files in `transformations` (including the rendered `transformations/*.yaml` and `workflows/*.yaml`) or `rill`. |
 | `read_repo_file` | read | One file's content and blob sha (files up to 256 KB). |
 | `list_notifications` | read | Recent notifications and the unread count. |
 | `trigger_pipeline` | write | Queue a pipeline run now (a run already queued or running is returned instead). |
@@ -60,6 +60,31 @@ There is deliberately **no delete tool** — not for workflows, pipelines or
 transformations. An agent can disable a workflow (`update_workflow` with
 `enabled: false`); deleting it, and its run history, stays a person's act in
 the Console.
+
+### Authoring a workflow: tool or file
+
+Workflows are files too (`workflows/<slug>.yaml` in the `transformations`
+repository, see [workflows.md](./workflows.md#workflows-as-files)), and that
+repository is on the repo tools' allowlist, so an agent with the write scope
+*can* author one with `write_repo_file`: steps name targets by their file
+slugs (`pipeline: orders`), no id needed. Agents should still use
+**`create_workflow` / `update_workflow`**, and the tool descriptions say so:
+
+- the API validates **on the call** and answers with the offending field; a
+  file is only looked at by the next adopt sweep (`PIPELINE_ADOPT_SWEEP_INTERVAL`,
+  10 minutes by default), and a mistake comes back as a notification the agent
+  has to go and read (`list_notifications`);
+- until that sweep runs, any Console save re-renders the file and overwrites
+  the agent's edit (with a notification);
+- `create_workflow` can create the workflow disabled, so nothing runs before a
+  person has looked; a file without `enabled: false` is enabled.
+
+The file path is the right one when the change should be reviewed as a git
+commit, or made from outside the workspace (a clone, a push mirror). There is
+no delete tool, and `write_repo_file` cannot remove a file, so the file path
+does not open one: removing a workflow file (which *does* delete the workflow
+on the box) stays a person's act in git, and a file overwritten with something
+invalid is refused, not applied.
 
 `workspace_status` is built from the list handlers plus one get per item whose
 last run failed (at most 50 per call), so it adds no queries of its own. It does

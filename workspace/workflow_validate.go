@@ -16,10 +16,18 @@ import (
 const maxWorkflowDescription = 2000
 
 // validateWorkflow normalizes and checks a workflow definition before it is
-// stored: name, description, schedule, and a 1..MaxWorkflowSteps step list of
-// distinct pipelines/transformations that all belong to customerSlug. Step
-// positions are reassigned from the list order.
+// stored; see ValidateWorkflowDefinition.
 func (s *WorkflowService) validateWorkflow(ctx context.Context, customerSlug string, w *Workflow) error {
+	return ValidateWorkflowDefinition(ctx, s.Pipelines, s.Transformations, customerSlug, w)
+}
+
+// ValidateWorkflowDefinition normalizes and checks a workflow definition
+// before it is stored: name, description, schedule, and a 1..MaxWorkflowSteps
+// step list of distinct pipelines/transformations that all belong to
+// customerSlug. Step positions are reassigned from the list order. It is the
+// one validator behind both write paths — the API and a workflow file adopted
+// from the repo — so a definition one accepts the other accepts too.
+func ValidateWorkflowDefinition(ctx context.Context, pipelines PipelineReader, transformations TransformationReader, customerSlug string, w *Workflow) error {
 	w.Name = strings.TrimSpace(w.Name)
 	w.Schedule = strings.TrimSpace(w.Schedule)
 	if w.Name == "" {
@@ -36,7 +44,7 @@ func (s *WorkflowService) validateWorkflow(ctx context.Context, customerSlug str
 	}
 	for i := range w.Steps {
 		w.Steps[i].Position = i
-		if err := s.checkStepRef(ctx, customerSlug, i, w.Steps[i]); err != nil {
+		if err := checkStepRef(ctx, pipelines, transformations, customerSlug, i, w.Steps[i]); err != nil {
 			return err
 		}
 	}
@@ -83,8 +91,8 @@ func validateStepRef(field string, kind WorkflowStepKind, refID string) error {
 // checkStepRef verifies the step's target exists in the caller's workspace.
 // Missing and foreign targets read the same, so the answer leaks nothing
 // about other tenants.
-func (s *WorkflowService) checkStepRef(ctx context.Context, customerSlug string, i int, step WorkflowStep) error {
-	owner, err := s.stepRefOwner(ctx, step)
+func checkStepRef(ctx context.Context, pipelines PipelineReader, transformations TransformationReader, customerSlug string, i int, step WorkflowStep) error {
+	owner, err := stepRefOwner(ctx, pipelines, transformations, step)
 	if errors.Is(err, ErrPipelineNotFound) || errors.Is(err, ErrTransformationNotFound) || (err == nil && owner != customerSlug) {
 		return &ErrInvalidWorkflow{
 			Field: fmt.Sprintf("steps[%d].ref_id", i),
@@ -95,15 +103,15 @@ func (s *WorkflowService) checkStepRef(ctx context.Context, customerSlug string,
 }
 
 // stepRefOwner returns the workspace slug owning the step's target.
-func (s *WorkflowService) stepRefOwner(ctx context.Context, step WorkflowStep) (string, error) {
+func stepRefOwner(ctx context.Context, pipelines PipelineReader, transformations TransformationReader, step WorkflowStep) (string, error) {
 	if step.Kind == StepKindPipeline {
-		p, err := s.Pipelines.GetPipeline(ctx, step.PipelineID)
+		p, err := pipelines.GetPipeline(ctx, step.PipelineID)
 		if err != nil {
 			return "", err
 		}
 		return p.CustomerSlug, nil
 	}
-	t, err := s.Transformations.GetTransformation(ctx, step.TransformationID)
+	t, err := transformations.GetTransformation(ctx, step.TransformationID)
 	if err != nil {
 		return "", err
 	}

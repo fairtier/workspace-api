@@ -175,6 +175,20 @@ func run() error {
 		Logger:       logger,
 	}
 
+	// Workflows are files too: workflows/<slug>.yaml in the transformations
+	// repo, with steps keyed by the targets' file slugs.
+	workflowMirror := &workspace.WorkflowMirror{
+		Workspaces:        resolver,
+		Credentials:       boxCreds,
+		Workflows:         repo,
+		Pipelines:         repo,
+		Transformations:   repo,
+		DefinitionRenders: repo,
+		Notifications:     notificationSvc,
+		NewClient:         gitea.NewClient,
+		Logger:            logger,
+	}
+
 	// The box repo IS the source of truth, unconditionally: the
 	// PIPELINES_GIT_PRIMARY / TRANSFORMATIONS_GIT_PRIMARY levers were retired
 	// with the pipelines-as-files Phase 2.5 cleanup, together with the legacy
@@ -192,7 +206,7 @@ func run() error {
 		Workspaces:    resolver,
 		Pipelines:     repo,
 		Notifications: notificationSvc,
-		Mirror:        pipelineMirror,
+		Mirror:        &workspace.ThenSyncWorkflows{Primary: pipelineMirror, Workflows: workflowMirror, Logger: logger},
 		Ownership:     repo,
 		Users:         commitUsers,
 		Versions:      pipelineMirror,
@@ -246,26 +260,29 @@ func run() error {
 		NewClient:         gitea.NewClient,
 		Logger:            logger,
 	}
-	wireRepoImport(pipelineMirror, transformationMirror, repo, logger)
+	wireRepoImport(pipelineMirror, transformationMirror, workflowMirror, repo, logger)
 
 	transformationSvc := &workspace.TransformationService{
 		Workspaces:      resolver,
 		Transformations: repo,
 		Pipelines:       repo,
 		Notifications:   notificationSvc,
-		Mirror:          transformationMirror,
-		Users:           commitUsers,
-		Logger:          logger,
+		// A target rename or delete changes workflow files (step keys,
+		// cascaded steps), so every converge re-renders them after.
+		Mirror: &workspace.ThenSyncWorkflows{Primary: transformationMirror, Workflows: workflowMirror, Logger: logger},
+		Users:  commitUsers,
+		Logger: logger,
 	}
 	transformationServer := &server.TransformationServer{Service: transformationSvc}
 
-	// Workflows are rows only (not mirrored to the repo yet), so no mirror.
 	workflowSvc := &workspace.WorkflowService{
 		Workspaces:      resolver,
 		Workflows:       repo,
 		Pipelines:       repo,
 		Transformations: repo,
 		Notifications:   notificationSvc,
+		Mirror:          workflowMirror,
+		Users:           commitUsers,
 		Logger:          logger,
 	}
 
@@ -422,6 +439,7 @@ func run() error {
 		Resolver:             resolver,
 		PipelineMirror:       pipelineMirror,
 		TransformationMirror: transformationMirror,
+		WorkflowMirror:       workflowMirror,
 		Workflows:            workflowSvc,
 	})
 	// A source test carries a credential and belongs to nobody once it is
@@ -461,13 +479,18 @@ func run() error {
 // definition files back into rows with their ids intact; the pass stays
 // read-only toward the repo. WORKSPACE_IMPORT_FROM_REPO=off disables it.
 // Central never wires this: there the Console is the only create path.
-func wireRepoImport(pipelines *workspace.PipelineMirror, transformations *workspace.TransformationMirror, repo *postgres.Repository, logger *slog.Logger) {
+//
+// For workflows the same switch also turns on the adoption of additions and
+// deletions from the repo (see workspace/workflowmirror_adopt.go): with it
+// off, only edits to already-rendered workflow files are adopted.
+func wireRepoImport(pipelines *workspace.PipelineMirror, transformations *workspace.TransformationMirror, workflows *workspace.WorkflowMirror, repo *postgres.Repository, logger *slog.Logger) {
 	if os.Getenv("WORKSPACE_IMPORT_FROM_REPO") == "off" {
 		logger.Info("repo import disabled: definitions already in the workspace repositories will not be loaded into this database")
 		return
 	}
 	pipelines.Importer = repo
 	transformations.Importer = repo
+	workflows.Importer = repo
 }
 
 // backgroundSweeps carries the wiring for the periodic sweeps.
@@ -477,6 +500,7 @@ type backgroundSweeps struct {
 	Resolver             *workspace.StaticResolver
 	PipelineMirror       *workspace.PipelineMirror
 	TransformationMirror *workspace.TransformationMirror
+	WorkflowMirror       *workspace.WorkflowMirror
 	Workflows            *workspace.WorkflowService
 }
 
@@ -493,6 +517,7 @@ func startBackgroundSweeps(ctx context.Context, logger *slog.Logger, s backgroun
 		Workspaces:      s.Resolver,
 		Mirror:          s.PipelineMirror,
 		Transformations: s.TransformationMirror,
+		Workflows:       s.WorkflowMirror,
 		Logger:          logger,
 	}
 	go sweeper.Run(ctx, loadDurationEnv("PIPELINE_ADOPT_SWEEP_INTERVAL", 10*time.Minute))

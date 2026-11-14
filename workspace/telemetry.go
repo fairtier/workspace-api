@@ -42,6 +42,7 @@ const (
 	attrPipelineID      = attribute.Key("workspace.pipeline.id")
 	attrSourceType      = attribute.Key("workspace.pipeline.source_type")
 	attrTransformID     = attribute.Key("workspace.transformation.id")
+	attrWorkflowID      = attribute.Key("workspace.workflow.id")
 	attrRunStatus       = attribute.Key("workspace.run.status")
 	attrRepoPath        = attribute.Key("workspace.repo.path")
 	attrRepoPlane       = attribute.Key("workspace.repo.plane")
@@ -54,10 +55,12 @@ const (
 	attrFileFormat      = attribute.Key("workspace.file.format")
 )
 
-// The two mirrored planes, as a metric dimension.
+// The mirrored planes, as a metric dimension. Workflows have no repo of their
+// own: their files live in the transformations repo, under workflows/.
 const (
 	planePipelines       = "pipelines"
 	planeTransformations = "transformations"
+	planeWorkflows       = "workflows"
 )
 
 // Outcomes shared by the converge and adopt instruments. "skipped" is not a
@@ -69,6 +72,7 @@ const (
 	outcomeAdopted      = "adopted"
 	outcomeRefused      = "refused"
 	outcomeImported     = "imported"
+	outcomeDeleted      = "deleted"
 	outcomeExternal     = "flagged_external"
 	outcomeRateLimited  = "rate_limited"
 	outcomeUnavailable  = "unavailable"
@@ -182,8 +186,10 @@ func recordSync(ctx context.Context, span trace.Span, plane string, started time
 
 // recordCommit counts one mirror write and notes it on the current span, so a
 // converge span shows which files it actually touched rather than only how
-// long the whole pass took. plane doubles as the repo name — they are the same
-// string by construction, which is what lets the generic helpers report it.
+// long the whole pass took. For pipelines and transformations, plane doubles
+// as the repo name — the same string by construction, which is what lets the
+// generic helpers report it. Workflows ("workflows") live in the
+// transformations repo and report their own plane.
 func recordCommit(ctx context.Context, plane, operation, filePath string) {
 	repoCommits.Add(ctx, 1, metric.WithAttributes(
 		attrRepoPlane.String(plane),

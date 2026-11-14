@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -450,11 +451,20 @@ func (s *TransformationService) notifyRun(ctx context.Context, run *Transformati
 		Type:         "transformation_run",
 		Title:        title,
 		Body:         body,
-		Link:         "transformations",
+		// The Console deep-links ?transformation=<id> to its run history,
+		// as ?pipeline=<id> does for a failed pipeline run.
+		Link: transformationLink(t.ID),
 	}
 	if err := s.Notifications.Notify(ctx, n); err != nil && s.Logger != nil {
 		s.Logger.WarnContext(ctx, "notify run: publish", "transformation_id", run.TransformationID, "err", err)
 	}
+}
+
+// transformationLink is the Console path of one transformation's run
+// history. Notification links are paths ("/pipelines?pipeline=<id>"); the
+// Console still accepts a bare route name from older rows.
+func transformationLink(id TransformationID) string {
+	return "/transformations?transformation=" + url.QueryEscape(string(id))
 }
 
 // transformationRunNotificationText builds the notification title and body for a

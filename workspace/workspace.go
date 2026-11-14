@@ -66,6 +66,13 @@ type Workspace struct {
 	DuckFlightURL       string
 	DuckFlightAuthToken string
 
+	// DuckFlightReadOnlyAuthToken is a DuckFlight credential listed in the
+	// engine's AUTH_READONLY_TOKENS: every request made with it runs in the
+	// engine's locked-down read-only session. Optional; used for SQL written
+	// by an agent (MCP). Without it that SQL uses DuckFlightAuthToken plus the
+	// read-only request header.
+	DuckFlightReadOnlyAuthToken string
+
 	// DuckFlightDialURL replaces the address THIS process dials for
 	// ExecuteQuery. Empty = the advertised URL. An http:// value dials
 	// plaintext h2c, which is exactly what the box's in-cluster

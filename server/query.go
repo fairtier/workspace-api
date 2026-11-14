@@ -36,40 +36,80 @@ const queryTimeout = 65 * time.Second
 type QueryServer struct {
 	Workspaces workspace.Resolver
 	Executor   duckflight.Executor
+	// ReadOnly, when set, runs every statement of this server in a DuckFlight
+	// read-only session (or refuses / falls back, as ReadOnlySessions
+	// describes). Set on the instance that backs MCP only; the Console's
+	// QueryServer leaves it nil and stays read-write.
+	ReadOnly *ReadOnlySessions
 }
 
 // engine resolves the caller's DuckFlight endpoint. It is the tenant-binding
 // choke point every RPC in this service goes through.
-func (s *QueryServer) engine(ctx context.Context) (endpoint, token string, err error) {
+func (s *QueryServer) engine(ctx context.Context) (engineTarget, error) {
 	callerID := core.UserIDFromContext(ctx)
 	if callerID == "" {
-		return "", "", connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
+		return engineTarget{}, connect.NewError(connect.CodeUnauthenticated, errors.New("authentication required"))
 	}
 	ws, err := s.Workspaces.GetWorkspaceByUser(ctx, callerID)
 	if err != nil {
-		return "", "", domainError(err)
+		return engineTarget{}, domainError(err)
 	}
 	// The dial URL, not the advertised one: on a box they differ, and this is
 	// the side that has to connect.
-	endpoint = ws.DuckFlightServiceURL()
-	if endpoint == "" || ws.DuckFlightAuthToken == "" {
-		return "", "", connect.NewError(connect.CodeFailedPrecondition, errors.New("the query engine is not enabled for this workspace"))
+	t := engineTarget{endpoint: ws.DuckFlightServiceURL(), token: ws.DuckFlightAuthToken}
+	if s.ReadOnly != nil {
+		// Only the read-only path may use the read-only credential, and it
+		// alone is enough for it.
+		t.readOnlyToken = ws.DuckFlightReadOnlyAuthToken
 	}
-	return endpoint, ws.DuckFlightAuthToken, nil
+	if t.endpoint == "" || (t.token == "" && t.readOnlyToken == "") {
+		return engineTarget{}, connect.NewError(connect.CodeFailedPrecondition, errors.New("the query engine is not enabled for this workspace"))
+	}
+	return t, nil
 }
 
 func (s *QueryServer) execute(ctx context.Context, sql string, maxRows int) (*duckflight.Result, error) {
-	endpoint, token, err := s.engine(ctx)
+	t, err := s.engine(ctx)
 	if err != nil {
 		return nil, err
 	}
 	tctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
-	res, err := s.Executor.Execute(tctx, endpoint, token, sql, maxRows)
+	if s.ReadOnly != nil {
+		return s.ReadOnly.execute(tctx, s.Executor, t, sql, maxRows)
+	}
+	res, err := s.Executor.Execute(tctx, t.endpoint, t.token, sql, maxRows)
 	if err != nil {
 		return nil, queryError(err)
 	}
 	return res, nil
+}
+
+// AgentSQLMode reports what keeps this server's SQL read-only for the
+// caller's workspace, and why when it is not the engine. Without ReadOnly it
+// is AgentSQLGuardOnly: nothing in the engine confines the statement.
+func (s *QueryServer) AgentSQLMode(ctx context.Context) (AgentSQLMode, string) {
+	t, err := s.engine(ctx)
+	if err != nil {
+		return AgentSQLUnknown, err.Error()
+	}
+	if s.ReadOnly == nil {
+		return AgentSQLGuardOnly, "read-only sessions are not configured for this query service"
+	}
+	return s.ReadOnly.mode(ctx, t)
+}
+
+// ProbeAgentSQLMode asks the engine of ws, as AgentSQLMode does, without a
+// caller: for the startup log line.
+func (s *QueryServer) ProbeAgentSQLMode(ctx context.Context, ws *workspace.Workspace) (AgentSQLMode, string) {
+	if s.ReadOnly == nil {
+		return AgentSQLGuardOnly, "read-only sessions are not configured for this query service"
+	}
+	t := engineTarget{endpoint: ws.DuckFlightServiceURL(), token: ws.DuckFlightAuthToken, readOnlyToken: ws.DuckFlightReadOnlyAuthToken}
+	if t.endpoint == "" || (t.token == "" && t.readOnlyToken == "") {
+		return AgentSQLUnknown, "the query engine is not enabled for this workspace"
+	}
+	return s.ReadOnly.mode(ctx, t)
 }
 
 func (s *QueryServer) ExecuteQuery(ctx context.Context, req *connect.Request[queryv1.ExecuteQueryRequest]) (*connect.Response[queryv1.ExecuteQueryResponse], error) {

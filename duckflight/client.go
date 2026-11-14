@@ -97,23 +97,23 @@ func (c *Client) Execute(ctx context.Context, endpoint, token, sql string, maxRo
 		span.End()
 	}()
 
-	addr, plaintext := normalizeAddr(endpoint)
-	transport := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
-	if plaintext {
-		transport = insecure.NewCredentials()
-	}
-	fc, err := flightsql.NewClientCtx(ctx, addr, nil, nil,
-		grpc.WithTransportCredentials(transport),
-		grpc.WithPerRPCCredentials(bearerCreds{token: token, requireTLS: !plaintext}),
-	)
+	readOnly := IsReadOnly(ctx)
+	span.SetAttributes(attribute.Bool("duckflight.read_only", readOnly))
+	fc, err := dial(ctx, endpoint, token)
 	if err != nil {
-		return nil, fmt.Errorf("dial duckflight: %w", err)
+		return nil, err
 	}
 	defer func() { _ = fc.Close() }()
 
+	if readOnly {
+		ctx = withReadOnlyHeader(ctx)
+		if err := verifyReadOnly(ctx, fc); err != nil {
+			return nil, err
+		}
+	}
 	info, err := fc.Execute(ctx, sql)
 	if err != nil {
-		return nil, err
+		return nil, readOnlyRefusal(readOnly, err)
 	}
 
 	res := &Result{}
@@ -130,6 +130,22 @@ func (c *Client) Execute(ctx context.Context, endpoint, token, sql string, maxRo
 		attribute.Bool("db.response.truncated", res.Truncated),
 	)
 	return res, nil
+}
+
+func dial(ctx context.Context, endpoint, token string) (*flightsql.Client, error) {
+	addr, plaintext := normalizeAddr(endpoint)
+	transport := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	if plaintext {
+		transport = insecure.NewCredentials()
+	}
+	fc, err := flightsql.NewClientCtx(ctx, addr, nil, nil,
+		grpc.WithTransportCredentials(transport),
+		grpc.WithPerRPCCredentials(bearerCreds{token: token, requireTLS: !plaintext}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("dial duckflight: %w", err)
+	}
+	return fc, nil
 }
 
 // readEndpoint drains one Flight endpoint into res, populating columns on the

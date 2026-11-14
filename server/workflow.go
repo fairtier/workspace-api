@@ -58,7 +58,10 @@ func (s *WorkflowServer) CreateWorkflow(ctx context.Context, req *connect.Reques
 		Name:        req.Msg.Name,
 		Description: req.Msg.Description,
 		Schedule:    req.Msg.Schedule,
-		Steps:       stepsFromPB(req.Msg.Steps),
+		// Absent means enabled: clients written before the field existed
+		// create enabled workflows.
+		Enabled: req.Msg.Enabled == nil || *req.Msg.Enabled,
+		Steps:   stepsFromPB(req.Msg.Steps),
 	}
 	result, err := s.Service.CreateWorkflow(ctx, callerID, w)
 	if err != nil {
@@ -95,16 +98,6 @@ func (s *WorkflowServer) GetWorkflow(ctx context.Context, req *connect.Request[w
 	if err != nil {
 		return nil, domainError(err)
 	}
-	// Mirror the list view's last-run fields from the newest run, as
-	// GetTransformation does.
-	if len(runs) > 0 {
-		latest := runs[0]
-		w.LastRunStatus = latest.Status
-		w.LastRunAt = &latest.CreatedAt
-		if latest.StartedAt != nil {
-			w.LastRunAt = latest.StartedAt
-		}
-	}
 	return connect.NewResponse(&workflowv1.GetWorkflowResponse{
 		Workflow:   workflowToPB(w),
 		RecentRuns: workflowRunsToPB(runs),
@@ -132,6 +125,21 @@ func (s *WorkflowServer) UpdateWorkflow(ctx context.Context, req *connect.Reques
 		return nil, domainError(err)
 	}
 	return connect.NewResponse(&workflowv1.UpdateWorkflowResponse{Workflow: workflowToPB(result)}), nil
+}
+
+func (s *WorkflowServer) SetWorkflowEnabled(ctx context.Context, req *connect.Request[workflowv1.SetWorkflowEnabledRequest]) (*connect.Response[workflowv1.SetWorkflowEnabledResponse], error) {
+	callerID, err := requireCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireID(req.Msg.Id); err != nil {
+		return nil, err
+	}
+	result, err := s.Service.SetWorkflowEnabled(ctx, callerID, workspace.WorkflowID(req.Msg.Id), req.Msg.Enabled)
+	if err != nil {
+		return nil, domainError(err)
+	}
+	return connect.NewResponse(&workflowv1.SetWorkflowEnabledResponse{Workflow: workflowToPB(result)}), nil
 }
 
 func (s *WorkflowServer) DeleteWorkflow(ctx context.Context, req *connect.Request[workflowv1.DeleteWorkflowRequest]) (*connect.Response[workflowv1.DeleteWorkflowResponse], error) {
@@ -300,18 +308,30 @@ func workflowToPB(w *workspace.Workflow) *workflowv1.Workflow {
 		})
 	}
 	return &workflowv1.Workflow{
-		Id:            string(w.ID),
-		CustomerSlug:  w.CustomerSlug,
-		Name:          w.Name,
-		Description:   w.Description,
-		Schedule:      w.Schedule,
-		Enabled:       w.Enabled,
-		Steps:         steps,
-		CreatedAt:     formatTime(&w.CreatedAt),
-		UpdatedAt:     formatTime(&w.UpdatedAt),
-		LastRunAt:     formatTime(w.LastRunAt),
-		LastRunStatus: w.LastRunStatus,
+		Id:                     string(w.ID),
+		CustomerSlug:           w.CustomerSlug,
+		Name:                   w.Name,
+		Description:            w.Description,
+		Schedule:               w.Schedule,
+		Enabled:                w.Enabled,
+		Steps:                  steps,
+		CreatedAt:              formatTime(&w.CreatedAt),
+		UpdatedAt:              formatTime(&w.UpdatedAt),
+		LastRunAt:              formatTime(w.LastRunAt),
+		LastRunStatus:          w.LastRunStatus,
+		LastRunError:           w.LastRunError,
+		LastFailedStepPosition: optionalInt32(w.LastFailedStepPosition),
+		LastFailedStepName:     w.LastFailedStepName,
 	}
+}
+
+// optionalInt32 converts a step position, keeping its absence.
+func optionalInt32(p *int) *int32 {
+	if p == nil {
+		return nil
+	}
+	v := int32(*p) //nolint:gosec // a step position, < MaxWorkflowSteps
+	return &v
 }
 
 func workflowConfigToPB(w *workspace.Workflow) *workflowv1.WorkflowConfigItem {

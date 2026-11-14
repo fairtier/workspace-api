@@ -97,8 +97,8 @@ func (f *fakeWorkspace) ListPipelines(ctx context.Context, _ *connect.Request[pi
 		return nil, err
 	}
 	return connect.NewResponse(&pipelinev1.ListPipelinesResponse{Pipelines: []*pipelinev1.Pipeline{
-		{Id: "p1", Name: "orders", SourceType: "rest_api", DatasetName: "sales", Enabled: true, Schedule: "@daily", LastRunStatus: "failed", LastRunAt: "2026-01-02T03:04:05Z"},
-		{Id: "p2", Name: "customers", SourceType: "sql_database", DatasetName: "crm", Enabled: true, Schedule: "@hourly"},
+		{Id: "p1", Name: "orders", SourceType: "rest_api", DatasetName: "sales", Enabled: true, Schedule: "0 0 * * *", LastRunStatus: "failed", LastRunAt: "2026-01-02T03:04:05Z"},
+		{Id: "p2", Name: "customers", SourceType: "sql_database", DatasetName: "crm", Enabled: true, Schedule: "0 * * * *"},
 	}}), nil
 }
 
@@ -190,7 +190,7 @@ func (f *fakeWorkspace) ListWorkflows(ctx context.Context, _ *connect.Request[wo
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []*workflowv1.Workflow{{
-		Id: "w1", Name: "nightly", Schedule: "@daily", Enabled: true, LastRunStatus: "failed", LastRunAt: "2026-01-02T05:00:00Z",
+		Id: "w1", Name: "nightly", Schedule: "0 0 * * *", Enabled: true, LastRunStatus: "failed", LastRunAt: "2026-01-02T05:00:00Z",
 		Steps: []*workflowv1.WorkflowStep{{Kind: "pipeline", RefId: "p1", Name: "orders"}, {Kind: "transformation", RefId: "t1", Name: "marts", Position: 1}},
 	}}
 	for _, w := range f.workflows {
@@ -213,7 +213,7 @@ func (f *fakeWorkspace) GetWorkflow(ctx context.Context, req *connect.Request[wo
 	}
 	return connect.NewResponse(&workflowv1.GetWorkflowResponse{
 		Workflow: &workflowv1.Workflow{
-			Id: "w1", Name: "nightly", Schedule: "@daily", Enabled: true,
+			Id: "w1", Name: "nightly", Schedule: "0 0 * * *", Enabled: true,
 			Steps: []*workflowv1.WorkflowStep{{Kind: "pipeline", RefId: "p1", Name: "orders"}, {Kind: "transformation", RefId: "t1", Name: "marts", Position: 1}},
 		},
 		RecentRuns: []*workflowv1.WorkflowRun{{
@@ -271,6 +271,20 @@ func (f *fakeWorkspace) UpdateWorkflow(ctx context.Context, req *connect.Request
 	}
 	f.workflows[w.Id] = w
 	return connect.NewResponse(&workflowv1.UpdateWorkflowResponse{Workflow: w}), nil
+}
+
+func (f *fakeWorkspace) SetWorkflowEnabled(ctx context.Context, req *connect.Request[workflowv1.SetWorkflowEnabledRequest]) (*connect.Response[workflowv1.SetWorkflowEnabledResponse], error) {
+	if err := f.record(ctx, "SetWorkflowEnabled"); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[req.Msg.Id]
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("workflow not found"))
+	}
+	w.Enabled = req.Msg.Enabled
+	return connect.NewResponse(&workflowv1.SetWorkflowEnabledResponse{Workflow: w}), nil
 }
 
 // testJWKS returns a Keyfunc over a fresh ed25519 key and a signer for it (a

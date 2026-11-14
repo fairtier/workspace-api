@@ -414,6 +414,7 @@ func run() error {
 		Resolver:             resolver,
 		PipelineMirror:       pipelineMirror,
 		TransformationMirror: transformationMirror,
+		Workflows:            workflowSvc,
 	})
 	// A source test carries a credential and belongs to nobody once it is
 	// answered, so it is swept like an abandoned OAuth grant rather than left
@@ -468,6 +469,7 @@ type backgroundSweeps struct {
 	Resolver             *workspace.StaticResolver
 	PipelineMirror       *workspace.PipelineMirror
 	TransformationMirror *workspace.TransformationMirror
+	Workflows            *workspace.WorkflowService
 }
 
 // startBackgroundSweeps launches the sweeps that run in the central
@@ -494,6 +496,14 @@ func startBackgroundSweeps(ctx context.Context, logger *slog.Logger, s backgroun
 		Logger:  logger,
 	}
 	go stuckSweeper.Run(ctx, loadDurationEnv("PIPELINE_RUN_STUCK_SWEEP_INTERVAL", 5*time.Minute))
+
+	workflowSweeper := &workspace.WorkflowStuckRunSweeper{
+		Service: s.Workflows,
+		Slug:    s.Slug,
+		Timeout: loadDurationEnv("WORKFLOW_RUN_STUCK_TIMEOUT", 0),
+		Logger:  logger,
+	}
+	go workflowSweeper.Run(ctx, loadDurationEnv("WORKFLOW_RUN_STUCK_SWEEP_INTERVAL", 5*time.Minute))
 }
 
 // loadStaticWorkspace builds the single workspace this deployment serves from

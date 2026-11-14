@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/fairtier/workspace-api/core"
@@ -72,6 +73,62 @@ type Workflow struct {
 	// which is the worker's cron baseline.
 	LastRunAt     *time.Time
 	LastRunStatus string
+
+	// Transient failure summary of the most recent run (List/Get only), set
+	// when it failed: the first line of the failed step's error (else the
+	// run's), and the failed step's position and name when one failed.
+	LastRunError           string
+	LastFailedStepPosition *int
+	LastFailedStepName     string
+}
+
+// maxLastRunErrorLen caps Workflow.LastRunError and a failure notification's
+// error line.
+const maxLastRunErrorLen = 200
+
+// SetLastRun copies the most recent run's status, time and failure summary
+// onto w.
+func (w *Workflow) SetLastRun(run *WorkflowRun) {
+	w.LastRunStatus = run.Status
+	w.LastRunAt = &run.CreatedAt
+	if run.StartedAt != nil {
+		w.LastRunAt = run.StartedAt
+	}
+	w.LastRunError, w.LastFailedStepPosition, w.LastFailedStepName = "", nil, ""
+	if run.Status != RunStatusFailed {
+		return
+	}
+	msg := run.ErrorMessage
+	if sr := run.failedStep(); sr != nil {
+		pos := sr.Position
+		w.LastFailedStepPosition, w.LastFailedStepName = &pos, sr.Name
+		msg = cmp.Or(sr.ErrorMessage, msg)
+	}
+	w.LastRunError = FirstLine(msg, maxLastRunErrorLen)
+}
+
+// failedStep returns the first failed step run, or nil.
+func (r *WorkflowRun) failedStep() *WorkflowStepRun {
+	for i := range r.StepRuns {
+		if r.StepRuns[i].Status == RunStatusFailed {
+			return &r.StepRuns[i]
+		}
+	}
+	return nil
+}
+
+// FirstLine returns the first non-empty line of s, trimmed and cut to at most
+// n runes (marked with "…").
+func FirstLine(s string, n int) string {
+	for line := range strings.SplitSeq(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			if r := []rune(line); len(r) > n {
+				return string(r[:n-1]) + "…"
+			}
+			return line
+		}
+	}
+	return ""
 }
 
 // WorkflowStep is one entry in a workflow's step list. Exactly one of
@@ -155,6 +212,8 @@ type WorkflowRepository interface {
 	ListWorkflowsByCustomer(ctx context.Context, customerSlug string) ([]Workflow, error)
 	// UpdateWorkflow rewrites the workflow and replaces its steps atomically.
 	UpdateWorkflow(ctx context.Context, w *Workflow) error
+	// SetWorkflowEnabled sets only the enabled flag (and updated_at).
+	SetWorkflowEnabled(ctx context.Context, id WorkflowID, enabled bool, at time.Time) error
 	DeleteWorkflow(ctx context.Context, id WorkflowID) error
 
 	// GetEnabledWorkflows returns every enabled workflow plus any disabled
@@ -175,6 +234,10 @@ type WorkflowRepository interface {
 	// ListWorkflowRuns returns up to limit runs newest first, strictly older
 	// than after when it is non-nil, with their step runs.
 	ListWorkflowRuns(ctx context.Context, id WorkflowID, limit int, after *WorkflowRunCursor) ([]WorkflowRun, error)
+	// ListStuckWorkflowRuns returns the workspace's runs that have been
+	// "running" since before olderThan ago (started_at, else created_at),
+	// with their step runs.
+	ListStuckWorkflowRuns(ctx context.Context, customerSlug string, olderThan time.Duration) ([]WorkflowRun, error)
 }
 
 // TransformationReader is the narrow transformation lookup the workflow
@@ -236,7 +299,6 @@ func (s *WorkflowService) CreateWorkflow(ctx context.Context, callerID core.User
 	now := time.Now()
 	w.CreatedAt = now
 	w.UpdatedAt = now
-	w.Enabled = true
 
 	if err := s.Workflows.CreateWorkflow(ctx, w); err != nil {
 		return nil, fmt.Errorf("create workflow: %w", err)
@@ -267,6 +329,9 @@ func (s *WorkflowService) ListWorkflows(ctx context.Context, callerID core.UserI
 	if err != nil {
 		return nil, fmt.Errorf("list workflows: %w", err)
 	}
+	for i := range workflows {
+		workflows[i].LastRunError = FirstLine(workflows[i].LastRunError, maxLastRunErrorLen)
+	}
 	return workflows, nil
 }
 
@@ -280,6 +345,10 @@ func (s *WorkflowService) GetWorkflow(ctx context.Context, callerID core.UserID,
 	runs, err := s.Workflows.ListWorkflowRuns(ctx, id, recentWorkflowRuns, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list recent workflow runs: %w", err)
+	}
+	// The list view's last-run fields, from the newest run.
+	if len(runs) > 0 {
+		w.SetLastRun(&runs[0])
 	}
 	return w, runs, nil
 }
@@ -300,6 +369,19 @@ func (s *WorkflowService) UpdateWorkflow(ctx context.Context, callerID core.User
 
 	if err := s.Workflows.UpdateWorkflow(ctx, w); err != nil {
 		return nil, fmt.Errorf("update workflow: %w", err)
+	}
+	return s.reload(ctx, w)
+}
+
+// SetWorkflowEnabled turns a workflow's schedule on or off, verifying
+// ownership, without touching its definition.
+func (s *WorkflowService) SetWorkflowEnabled(ctx context.Context, callerID core.UserID, id WorkflowID, enabled bool) (*Workflow, error) {
+	_, w, err := s.ownedWorkflow(ctx, callerID, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Workflows.SetWorkflowEnabled(ctx, id, enabled, time.Now()); err != nil {
+		return nil, fmt.Errorf("set workflow enabled: %w", err)
 	}
 	return s.reload(ctx, w)
 }
@@ -387,8 +469,13 @@ func clampPageSize(n int) int {
 }
 
 // GetWorkflowConfigs returns the workflows the worker should act on
-// (worker-facing). Workflows left without steps — every target deleted — are
-// omitted: there is nothing to run.
+// (worker-facing). Omitted:
+//   - workflows left without steps (every target deleted): there is nothing
+//     to run. A run queued for one is failed here, or it would stay pending
+//     forever.
+//   - workflows whose latest started run is still "running": the worker must
+//     not start a second run beside it. A run that never reports again is
+//     failed by the stuck-run sweep, after which the workflow reappears.
 func (s *WorkflowService) GetWorkflowConfigs(ctx context.Context, customerSlug string) ([]Workflow, error) {
 	workflows, err := s.Workflows.GetEnabledWorkflows(ctx, customerSlug)
 	if err != nil {
@@ -396,11 +483,112 @@ func (s *WorkflowService) GetWorkflowConfigs(ctx context.Context, customerSlug s
 	}
 	out := workflows[:0]
 	for _, w := range workflows {
-		if len(w.Steps) > 0 {
+		switch {
+		case len(w.Steps) == 0:
+			if w.PendingRunID != "" {
+				s.failStrandedRun(ctx, &w)
+			}
+		case w.LastRunStatus == RunStatusRunning:
+			// Withheld until that run finishes.
+		default:
 			out = append(out, w)
 		}
 	}
 	return out, nil
+}
+
+// errNoStepsLeft is the error recorded on a run queued for a workflow that
+// then lost every step.
+const errNoStepsLeft = "not run: every step of this workflow was removed (its pipelines or transformations were deleted) before the run started"
+
+// failStrandedRun fails the pending run of a workflow without steps.
+// Best-effort: an error is logged and the next poll retries.
+func (s *WorkflowService) failStrandedRun(ctx context.Context, w *Workflow) {
+	now := time.Now()
+	run := &WorkflowRun{
+		ID: w.PendingRunID, WorkflowID: w.ID, Status: RunStatusFailed, Trigger: WorkflowTriggerManual,
+		StartedAt: &now, CompletedAt: &now, ErrorMessage: errNoStepsLeft,
+	}
+	if err := s.recordFailure(ctx, w, run); err != nil && s.Logger != nil {
+		s.Logger.WarnContext(ctx, "fail stranded workflow run", "workflow_id", w.ID, "run_id", run.ID, "err", err)
+	}
+}
+
+// recordFailure upserts a run the server itself failed and notifies on the
+// transition into failed, as a worker report would.
+func (s *WorkflowService) recordFailure(ctx context.Context, w *Workflow, run *WorkflowRun) error {
+	previous, err := s.Workflows.UpsertWorkflowRun(ctx, run)
+	if err != nil {
+		return err
+	}
+	if previous != RunStatusFailed {
+		s.notifyFailure(ctx, w, run)
+	}
+	return nil
+}
+
+// DefaultWorkflowStuckRunTimeout is how long a workflow run may stay
+// "running" without a report before SweepStuckRuns fails it. Generous: a
+// workflow runs its steps one after another, and a single pipeline run may
+// take up to the worker's 6-hour default timeout.
+const DefaultWorkflowStuckRunTimeout = 8 * time.Hour
+
+// errStuck is the error recorded on a run failed by the stuck-run sweep.
+const errStuck = "no report from the worker for %s: the run was marked failed (the worker probably restarted or was killed mid-run)"
+
+// SweepStuckRuns fails the workspace's workflow runs that have been
+// "running" for longer than olderThan (0 = DefaultWorkflowStuckRunTimeout):
+// the run and its running step become failed, steps that never started
+// become skipped, and the usual failure notification fires once. It returns
+// how many runs it failed.
+func (s *WorkflowService) SweepStuckRuns(ctx context.Context, customerSlug string, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		olderThan = DefaultWorkflowStuckRunTimeout
+	}
+	runs, err := s.Workflows.ListStuckWorkflowRuns(ctx, customerSlug, olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("list stuck workflow runs: %w", err)
+	}
+	failed := 0
+	for i := range runs {
+		run := &runs[i]
+		w, err := s.Workflows.GetWorkflow(ctx, run.WorkflowID)
+		if err != nil {
+			return failed, fmt.Errorf("get workflow: %w", err)
+		}
+		failStuckRun(run, w, olderThan, time.Now())
+		if err := s.recordFailure(ctx, w, run); err != nil {
+			return failed, fmt.Errorf("fail stuck workflow run: %w", err)
+		}
+		failed++
+	}
+	return failed, nil
+}
+
+// failStuckRun turns a stuck run into its failed form: a running (or
+// pending) step fails, and every step the workflow defines that has no
+// step run yet is recorded as skipped.
+func failStuckRun(run *WorkflowRun, w *Workflow, olderThan time.Duration, now time.Time) {
+	msg := fmt.Sprintf(errStuck, olderThan)
+	run.Status, run.CompletedAt, run.ErrorMessage = RunStatusFailed, &now, msg
+	seen := map[int]bool{}
+	for i := range run.StepRuns {
+		sr := &run.StepRuns[i]
+		seen[sr.Position] = true
+		switch sr.Status {
+		case RunStatusRunning:
+			sr.Status, sr.CompletedAt, sr.ErrorMessage = RunStatusFailed, &now, msg
+		case RunStatusPending:
+			sr.Status = RunStatusSkipped
+		}
+	}
+	for _, st := range w.Steps {
+		if !seen[st.Position] {
+			run.StepRuns = append(run.StepRuns, WorkflowStepRun{
+				Position: st.Position, Kind: st.Kind, RefID: st.RefID(), Name: st.Name, Status: RunStatusSkipped,
+			})
+		}
+	}
 }
 
 // ReportWorkflowRun records a workflow run's progress from the dlt-worker: an
@@ -458,12 +646,12 @@ func workflowFailureBody(run *WorkflowRun) string {
 			continue
 		}
 		body := fmt.Sprintf("Step %d (%s %q) failed.", sr.Position+1, sr.Kind, sr.Name)
-		if msg := cmp.Or(sr.ErrorMessage, run.ErrorMessage); msg != "" {
+		if msg := FirstLine(cmp.Or(sr.ErrorMessage, run.ErrorMessage), maxLastRunErrorLen); msg != "" {
 			body += " " + msg
 		}
 		return body
 	}
-	return run.ErrorMessage
+	return FirstLine(run.ErrorMessage, maxLastRunErrorLen)
 }
 
 // Workflow error sentinels.

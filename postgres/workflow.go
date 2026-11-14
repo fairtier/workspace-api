@@ -57,6 +57,19 @@ func (r *Repository) UpdateWorkflow(ctx context.Context, w *workspace.Workflow) 
 	})
 }
 
+// SetWorkflowEnabled sets only the enabled flag.
+func (r *Repository) SetWorkflowEnabled(ctx context.Context, id workspace.WorkflowID, enabled bool, at time.Time) error {
+	res, err := r.DB.ExecContext(ctx,
+		`UPDATE workflows SET enabled = $1, updated_at = $2 WHERE id = $3`, enabled, at, id)
+	if err != nil {
+		return fmt.Errorf("postgres: set workflow enabled: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return workspace.ErrWorkflowNotFound
+	}
+	return nil
+}
+
 func insertWorkflowSteps(ctx context.Context, tx *sql.Tx, id workspace.WorkflowID, steps []workspace.WorkflowStep) error {
 	for _, s := range steps {
 		_, err := tx.ExecContext(ctx,
@@ -103,18 +116,30 @@ func (r *Repository) GetWorkflow(ctx context.Context, id workspace.WorkflowID) (
 }
 
 func (r *Repository) ListWorkflowsByCustomer(ctx context.Context, customerSlug string) ([]workspace.Workflow, error) {
-	// The most recent run of any status, as ListTransformationsByCustomer.
+	// The most recent run of any status, as ListTransformationsByCustomer,
+	// and — when it failed — its first failed step (the service trims the
+	// error to its first line).
 	return r.queryWorkflows(ctx,
 		`SELECT w.id, w.customer_slug, w.name, w.description, w.schedule, w.enabled, w.created_at, w.updated_at,
-		        '' AS pending_run_id, lr.last_run_at, lr.last_run_status
+		        '' AS pending_run_id, lr.last_run_at, lr.last_run_status,
+		        CASE WHEN lr.last_run_status = 'failed' THEN COALESCE(NULLIF(fs.error_message, ''), lr.error_message) ELSE '' END,
+		        CASE WHEN lr.last_run_status = 'failed' THEN fs.position END,
+		        CASE WHEN lr.last_run_status = 'failed' THEN COALESCE(fs.name, '') ELSE '' END
 		 FROM workflows w
 		 LEFT JOIN LATERAL (
-		     SELECT COALESCE(started_at, created_at) AS last_run_at, status AS last_run_status
+		     SELECT id, COALESCE(started_at, created_at) AS last_run_at, status AS last_run_status, error_message
 		     FROM workflow_runs
 		     WHERE workflow_id = w.id
 		     ORDER BY created_at DESC, id DESC
 		     LIMIT 1
 		 ) lr ON true
+		 LEFT JOIN LATERAL (
+		     SELECT position, name, error_message
+		     FROM workflow_step_runs
+		     WHERE workflow_run_id = lr.id AND status = 'failed'
+		     ORDER BY position
+		     LIMIT 1
+		 ) fs ON true
 		 WHERE w.customer_slug = $1
 		 ORDER BY w.created_at`,
 		customerSlug)
@@ -126,7 +151,8 @@ func (r *Repository) GetEnabledWorkflows(ctx context.Context, customerSlug strin
 	// skips pending rows: a queued run has not started anything yet.
 	return r.queryWorkflows(ctx,
 		`SELECT w.id, w.customer_slug, w.name, w.description, w.schedule, w.enabled, w.created_at, w.updated_at,
-		        COALESCE(pr.id::text, '') AS pending_run_id, lr.last_run_at, lr.last_run_status
+		        COALESCE(pr.id::text, '') AS pending_run_id, lr.last_run_at, lr.last_run_status,
+		        '', NULL::int, ''
 		 FROM workflows w
 		 LEFT JOIN LATERAL (
 		     SELECT r.id FROM workflow_runs r
@@ -147,7 +173,8 @@ func (r *Repository) GetEnabledWorkflows(ctx context.Context, customerSlug strin
 }
 
 // queryWorkflows runs a workflow list query whose columns are the workflow
-// row plus pending_run_id, last_run_at, last_run_status, then attaches steps.
+// row plus pending_run_id, last_run_at, last_run_status and the failure
+// summary (error, failed step position, name), then attaches steps.
 func (r *Repository) queryWorkflows(ctx context.Context, query string, args ...any) ([]workspace.Workflow, error) {
 	rows, err := r.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -185,10 +212,17 @@ func (r *Repository) queryWorkflows(ctx context.Context, query string, args ...a
 func scanWorkflowListRow(rows *sql.Rows) (workspace.Workflow, error) {
 	var w workspace.Workflow
 	var lastRunAt sql.NullTime
-	var lastRunStatus sql.NullString
+	var lastRunStatus, lastRunError, failedStepName sql.NullString
+	var failedStepPos sql.NullInt32
 	if err := rows.Scan(&w.ID, &w.CustomerSlug, &w.Name, &w.Description, &w.Schedule, &w.Enabled,
-		&w.CreatedAt, &w.UpdatedAt, &w.PendingRunID, &lastRunAt, &lastRunStatus); err != nil {
+		&w.CreatedAt, &w.UpdatedAt, &w.PendingRunID, &lastRunAt, &lastRunStatus,
+		&lastRunError, &failedStepPos, &failedStepName); err != nil {
 		return w, fmt.Errorf("postgres: scan workflow: %w", err)
+	}
+	w.LastRunError, w.LastFailedStepName = lastRunError.String, failedStepName.String
+	if failedStepPos.Valid {
+		pos := int(failedStepPos.Int32)
+		w.LastFailedStepPosition = &pos
 	}
 	w.TriggerNow = w.PendingRunID != ""
 	if lastRunAt.Valid {
@@ -347,6 +381,23 @@ func (r *Repository) ListWorkflowRuns(ctx context.Context, id workspace.Workflow
 		 ORDER BY created_at DESC, id DESC
 		 LIMIT $4`,
 		id, afterAt, afterID, limit)
+	if err != nil || len(runs) == 0 {
+		return runs, err
+	}
+	return runs, r.attachStepRuns(ctx, runs)
+}
+
+// ListStuckWorkflowRuns returns the workspace's runs "running" since before
+// olderThan ago, with their step runs.
+func (r *Repository) ListStuckWorkflowRuns(ctx context.Context, customerSlug string, olderThan time.Duration) ([]workspace.WorkflowRun, error) {
+	runs, err := r.queryWorkflowRuns(ctx,
+		`SELECT r.id, r.workflow_id, r.status, r.trigger, r.started_at, r.completed_at, r.error_message, r.created_at
+		 FROM workflow_runs r
+		 JOIN workflows w ON w.id = r.workflow_id
+		 WHERE w.customer_slug = $1 AND r.status = 'running'
+		   AND COALESCE(r.started_at, r.created_at) < now() - make_interval(secs => $2)
+		 ORDER BY r.created_at`,
+		customerSlug, olderThan.Seconds())
 	if err != nil || len(runs) == 0 {
 		return runs, err
 	}

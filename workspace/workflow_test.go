@@ -95,6 +95,35 @@ func (f *fakeWorkflowStore) UpdateWorkflow(_ context.Context, w *workspace.Workf
 	return nil
 }
 
+func (f *fakeWorkflowStore) SetWorkflowEnabled(_ context.Context, id workspace.WorkflowID, enabled bool, at time.Time) error {
+	w, ok := f.workflows[id]
+	if !ok {
+		return workspace.ErrWorkflowNotFound
+	}
+	w.Enabled, w.UpdatedAt = enabled, at
+	return nil
+}
+
+func (f *fakeWorkflowStore) ListStuckWorkflowRuns(_ context.Context, slug string, older time.Duration) ([]workspace.WorkflowRun, error) {
+	var out []workspace.WorkflowRun
+	for _, r := range f.runs {
+		w, ok := f.workflows[r.WorkflowID]
+		if !ok || w.CustomerSlug != slug || r.Status != workspace.RunStatusRunning {
+			continue
+		}
+		since := r.CreatedAt
+		if r.StartedAt != nil {
+			since = *r.StartedAt
+		}
+		if time.Since(since) > older {
+			cp := *r
+			cp.StepRuns = append([]workspace.WorkflowStepRun(nil), r.StepRuns...)
+			out = append(out, cp)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeWorkflowStore) DeleteWorkflow(_ context.Context, id workspace.WorkflowID) error {
 	if _, ok := f.workflows[id]; !ok {
 		return workspace.ErrWorkflowNotFound
@@ -117,6 +146,13 @@ func (f *fakeWorkflowStore) GetEnabledWorkflows(ctx context.Context, slug string
 		cp := *w
 		if pending, _ := f.GetPendingWorkflowRun(ctx, w.ID); pending != nil {
 			cp.TriggerNow, cp.PendingRunID = true, pending.ID
+		}
+		// The cron baseline: the newest run that left pending.
+		for _, r := range f.sortedRuns(w.ID) {
+			if r.Status != workspace.RunStatusPending {
+				cp.LastRunStatus, cp.LastRunAt = r.Status, r.StartedAt
+				break
+			}
 		}
 		if cp.Enabled || cp.TriggerNow {
 			out = append(out, cp)
@@ -307,7 +343,7 @@ func trStep(id string) workspace.WorkflowStep {
 
 func (fx workflowFixture) create(t *testing.T, name string, steps ...workspace.WorkflowStep) *workspace.Workflow {
 	t.Helper()
-	w, err := fx.svc.CreateWorkflow(context.Background(), "user-acme", &workspace.Workflow{Name: name, Steps: steps})
+	w, err := fx.svc.CreateWorkflow(context.Background(), "user-acme", &workspace.Workflow{Name: name, Enabled: true, Steps: steps})
 	if err != nil {
 		t.Fatalf("CreateWorkflow(%q) error = %v", name, err)
 	}
@@ -392,13 +428,13 @@ func TestWorkflowService_DuplicateName(t *testing.T) {
 }
 
 func TestValidateCronSchedule(t *testing.T) {
-	valid := []string{"", "@daily", "@HOURLY", "0 * * * *", "*/15 2-4 1,15 jan-mar mon-fri", "0 0 * * 7", "5 4 * * sun"}
+	valid := []string{"", "0 * * * *", "*/15 2-4 1,15 jan-mar mon-fri", "0 0 * * 7", "5 4 * * sun"}
 	for _, s := range valid {
 		if err := workspace.ValidateCronSchedule(s); err != nil {
 			t.Errorf("ValidateCronSchedule(%q) = %v, want nil", s, err)
 		}
 	}
-	invalid := []string{"daily", "* * * *", "* * * * * *", "60 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "*/0 * * * *", "5-1 * * * *", "* * * * funday", "@reboot"}
+	invalid := []string{"daily", "* * * *", "* * * * * *", "60 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "*/0 * * * *", "5-1 * * * *", "* * * * funday", "@reboot", "@daily", "@HOURLY"}
 	for _, s := range invalid {
 		if err := workspace.ValidateCronSchedule(s); err == nil {
 			t.Errorf("ValidateCronSchedule(%q) = nil, want error", s)
@@ -445,13 +481,13 @@ func TestWorkflowService_Update(t *testing.T) {
 	fx := newWorkflowFixture()
 	w := fx.create(t, "nightly", pipeStep(pipeAcme))
 	got, err := fx.svc.UpdateWorkflow(context.Background(), "user-acme", &workspace.Workflow{
-		ID: w.ID, Name: "nightly", Schedule: "@daily", Enabled: false,
+		ID: w.ID, Name: "nightly", Schedule: "0 2 * * *", Enabled: false,
 		Steps: []workspace.WorkflowStep{trStep(trAcme), pipeStep(pipeAcme)},
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorkflow() error = %v", err)
 	}
-	if got.Enabled || got.Schedule != "@daily" || got.Steps[0].Kind != workspace.StepKindTransformation || got.Steps[1].Position != 1 {
+	if got.Enabled || got.Schedule != "0 2 * * *" || got.Steps[0].Kind != workspace.StepKindTransformation || got.Steps[1].Position != 1 {
 		t.Fatalf("updated = %+v", got)
 	}
 	if !got.CreatedAt.Equal(w.CreatedAt) {
@@ -641,5 +677,178 @@ func TestWorkflowService_ListRunsPagination(t *testing.T) {
 
 	if _, _, err := fx.svc.ListWorkflowRuns(ctx, "user-acme", w.ID, 2, "garbage!"); !errors.Is(err, workspace.ErrInvalidPageToken) {
 		t.Fatalf("bad token: %v, want ErrInvalidPageToken", err)
+	}
+}
+
+func TestFirstLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                       "",
+		"boom":                   "boom",
+		"\n  boom  \nTraceback…": "boom",
+		strings.Repeat("é", 205): strings.Repeat("é", 199) + "…",
+	} {
+		if got := workspace.FirstLine(in, 200); got != want {
+			t.Errorf("FirstLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The list/get failure summary names the failed step and the first line of
+// its error, so a list row needs no call of its own.
+func TestWorkflowService_GetCarriesFailureSummary(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme), trStep(trAcme))
+	ctx := context.Background()
+	failed := stepRun(1, "transformation", trAcme, "failed")
+	failed.Name, failed.ErrorMessage = "marts", "dbt failed\nTraceback (most recent call last): ..."
+	if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+		ID: runA, WorkflowID: w.ID, Status: "failed", ErrorMessage: "step 1 failed",
+		StepRuns: []workspace.WorkflowStepRun{stepRun(0, "pipeline", pipeAcme, "success"), failed},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := fx.svc.GetWorkflow(ctx, "user-acme", w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastRunStatus != "failed" || got.LastRunError != "dbt failed" || got.LastFailedStepPosition == nil ||
+		*got.LastFailedStepPosition != 1 || got.LastFailedStepName != "marts" {
+		t.Fatalf("summary = %q %q %v %q", got.LastRunStatus, got.LastRunError, got.LastFailedStepPosition, got.LastFailedStepName)
+	}
+	// D: the notification names the step and carries only the first line.
+	if body := fx.notes.notes[0].Body; body != `Step 2 (transformation "marts") failed. dbt failed` {
+		t.Errorf("notification body = %q", body)
+	}
+
+	// A later success clears it.
+	if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+		ID: "55555555-5555-4555-8555-555555555555", WorkflowID: w.ID, Status: "success",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = fx.svc.GetWorkflow(ctx, "user-acme", w.ID)
+	if got.LastRunStatus != "success" || got.LastRunError != "" || got.LastFailedStepPosition != nil {
+		t.Fatalf("summary after success = %+v", got)
+	}
+}
+
+func TestWorkflowService_SetEnabled(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme))
+	ctx := context.Background()
+	got, err := fx.svc.SetWorkflowEnabled(ctx, "user-acme", w.ID, false)
+	if err != nil || got.Enabled || len(got.Steps) != 1 || got.Name != "nightly" {
+		t.Fatalf("SetWorkflowEnabled = %+v, %v", got, err)
+	}
+	if _, err := fx.svc.SetWorkflowEnabled(ctx, "user-evil", w.ID, true); !errors.Is(err, workspace.ErrWorkflowNotFound) {
+		t.Fatalf("another workspace: %v, want ErrWorkflowNotFound", err)
+	}
+	if fx.store.workflows[w.ID].Enabled {
+		t.Fatal("another workspace re-enabled it")
+	}
+}
+
+// A run queued before its workflow lost every step can never run: serving
+// configs fails it, once, with a message saying why.
+func TestWorkflowService_StrandedPendingRunIsFailed(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme))
+	ctx := context.Background()
+	run, err := fx.svc.TriggerWorkflow(ctx, "user-acme", w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.store.workflows[w.ID].Steps = nil // the FK cascade
+
+	for range 2 {
+		if cfgs, err := fx.svc.GetWorkflowConfigs(ctx, "acme"); err != nil || len(cfgs) != 0 {
+			t.Fatalf("configs = %+v, %v", cfgs, err)
+		}
+	}
+	got := fx.store.runs[run.ID]
+	if got.Status != "failed" || !strings.Contains(got.ErrorMessage, "every step") || got.CompletedAt == nil {
+		t.Fatalf("stranded run = %+v", got)
+	}
+	if len(fx.notes.notes) != 1 {
+		t.Fatalf("notifications = %d, want 1", len(fx.notes.notes))
+	}
+}
+
+// A workflow whose latest run is still running is not offered to the worker
+// (not even with a Run-now queued), so two runs never overlap.
+func TestWorkflowService_RunningWorkflowIsWithheld(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme))
+	ctx := context.Background()
+	started := time.Now()
+	if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+		ID: runA, WorkflowID: w.ID, Status: "running", StartedAt: &started,
+		StepRuns: []workspace.WorkflowStepRun{stepRun(0, "pipeline", pipeAcme, "running")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.svc.TriggerWorkflow(ctx, "user-acme", w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if cfgs, _ := fx.svc.GetWorkflowConfigs(ctx, "acme"); len(cfgs) != 0 {
+		t.Fatalf("running workflow served: %+v", cfgs)
+	}
+	done := started.Add(time.Minute)
+	if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+		ID: runA, WorkflowID: w.ID, Status: "success", StartedAt: &started, CompletedAt: &done,
+		StepRuns: []workspace.WorkflowStepRun{stepRun(0, "pipeline", pipeAcme, "success")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfgs, _ := fx.svc.GetWorkflowConfigs(ctx, "acme")
+	if len(cfgs) != 1 || !cfgs[0].TriggerNow {
+		t.Fatalf("after the run finished: %+v, want it served with the queued Run-now", cfgs)
+	}
+}
+
+func TestWorkflowService_SweepStuckRuns(t *testing.T) {
+	fx := newWorkflowFixture()
+	w := fx.create(t, "nightly", pipeStep(pipeAcme), trStep(trAcme), pipeStep(pipe2))
+	ctx := context.Background()
+	report := func(id string, started time.Time) {
+		t.Helper()
+		if err := fx.svc.ReportWorkflowRun(ctx, "acme", &workspace.WorkflowRun{
+			ID: id, WorkflowID: w.ID, Status: "running", StartedAt: &started,
+			StepRuns: []workspace.WorkflowStepRun{stepRun(0, "pipeline", pipeAcme, "success"), stepRun(1, "transformation", trAcme, "running")},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stuckID, freshID := runA, "55555555-5555-4555-8555-555555555555"
+	report(stuckID, time.Now().Add(-9*time.Hour))
+	report(freshID, time.Now().Add(-time.Hour))
+
+	for range 2 { // a second sweep finds nothing and notifies nothing
+		if _, err := fx.svc.SweepStuckRuns(ctx, "acme", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := fx.store.runs[stuckID]
+	if got.Status != "failed" || got.CompletedAt == nil || !strings.Contains(got.ErrorMessage, "no report from the worker") {
+		t.Fatalf("stuck run = %+v", got)
+	}
+	want := []string{"success", "failed", "skipped"}
+	if len(got.StepRuns) != 3 {
+		t.Fatalf("step runs = %+v", got.StepRuns)
+	}
+	for i, sr := range got.StepRuns {
+		if sr.Status != want[i] {
+			t.Errorf("step %d status = %q, want %q", i, sr.Status, want[i])
+		}
+	}
+	if fx.store.runs[freshID].Status != "running" {
+		t.Error("a run inside the timeout was failed")
+	}
+	if len(fx.notes.notes) != 1 {
+		t.Fatalf("notifications = %d, want exactly 1", len(fx.notes.notes))
+	}
+	// Another workspace's sweep leaves acme's runs alone.
+	if n, _ := fx.svc.SweepStuckRuns(ctx, "evil", time.Minute); n != 0 {
+		t.Fatalf("evil sweep failed %d acme runs", n)
 	}
 }

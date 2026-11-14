@@ -123,6 +123,17 @@ func redactString(s string) string {
 	return urlUserinfoRE.ReplaceAllString(s, "${1}"+redacted+"@")
 }
 
+// cutURLRE matches a URL that was cut before its host — at the end of a
+// server-shortened string ("…"), where the "@" that urlUserinfoRE needs may
+// have been cut off with the rest.
+var cutURLRE = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]*…$`)
+
+// redactCutURL redacts what may be a credential at the cut end of a string
+// the server already shortened (Workflow.last_run_error).
+func redactCutURL(s string) string {
+	return cutURLRE.ReplaceAllString(s, "${1}"+redacted+"…")
+}
+
 // truncate caps s at n bytes on a rune boundary, marking the cut.
 func truncate(s string, n int) string {
 	if len(s) <= n {

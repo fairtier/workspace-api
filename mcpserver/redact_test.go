@@ -85,3 +85,15 @@ func TestTruncate(t *testing.T) {
 		t.Errorf("truncate split a rune: %q", got)
 	}
 }
+
+func TestRedactCutURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"connect postgresql://app:s3cr…":           "connect postgresql://[redacted]…",
+		"connect postgresql://[redacted]@db/x: no": "connect postgresql://[redacted]@db/x: no",
+		"plain error…":                             "plain error…",
+	} {
+		if got := redactCutURL(in); got != want {
+			t.Errorf("redactCutURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

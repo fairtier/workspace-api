@@ -137,7 +137,7 @@ func workflowSummaryOf(w *workflowv1.Workflow) workflowSummary {
 	out := workflowSummary{
 		ID: w.Id, Name: w.Name, Description: w.Description, Schedule: w.Schedule, Enabled: w.Enabled,
 		Steps: make([]workflowStep, 0, len(w.Steps)), LastRunStatus: w.LastRunStatus, LastRunAt: w.LastRunAt,
-		LastRunError: redactString(w.LastRunError), LastFailedStepName: w.LastFailedStepName,
+		LastRunError: redactCutURL(redactString(w.LastRunError)), LastFailedStepName: w.LastFailedStepName,
 	}
 	if w.LastFailedStepPosition != nil {
 		out.LastFailedStep = int(*w.LastFailedStepPosition) + 1

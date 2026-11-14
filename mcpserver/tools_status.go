@@ -13,7 +13,7 @@ import (
 	"github.com/fairtier/workspace-api/workspace"
 )
 
-const workspaceStatusDesc = `Answer "what is broken or stale right now?" in one call: every pipeline, transformation and workflow with whether it is enabled, its schedule (empty = manual only), its last run's status and time, and — when that run failed — its error message (shortened). attention lists what most likely needs a look: failed last runs, and enabled schedules that have never run. Compare last_run_at with now and the schedule to spot stale data (a run stuck in "pending" for minutes means the worker is not picking work up). Start here, then drill in with get_pipeline / get_transformation / get_workflow.`
+const workspaceStatusDesc = `Answer "what is broken or stale right now?" in one call: every pipeline, transformation and workflow with whether it is enabled, its schedule (empty = manual only), its last run's status and time, and — when that run failed — its error message (shortened). attention lists what most likely needs a look: failed last runs, and enabled schedules that have never run. Compare last_run_at with now and the schedule to spot stale data (a run stuck in "pending" for minutes means the worker is not picking work up). Start here, then drill in with get_pipeline / get_transformation / get_workflow. agent_sql says what keeps run_query read-only: "engine" (the query engine's read-only session, behind this server's statement check), "guard_only" (this server's statement check alone), or "refused" (run_query is unavailable until the engine has read-only sessions).`
 
 // statusErrorLen caps each error message in workspace_status: enough to
 // recognise the failure, short enough that a workspace with many failing
@@ -41,6 +41,8 @@ type workspaceStatusOut struct {
 	Pipelines       []statusItem `json:"pipelines"`
 	Transformations []statusItem `json:"transformations"`
 	Workflows       []statusItem `json:"workflows"`
+	// AgentSQL says what keeps run_query read-only right now.
+	AgentSQL SQLSafety `json:"agent_sql"`
 }
 
 // workspaceStatus is built from the list handlers, plus one get per item
@@ -59,7 +61,19 @@ func workspaceStatus(ctx context.Context, b Backends, _ struct{}) (workspaceStat
 		return out, err
 	}
 	out.Attention = st.attention
+	out.AgentSQL = agentSQL(ctx, b)
 	return out, nil
+}
+
+// agentSQL reports the SQL safety mode, its detail redacted and shortened
+// like any other error text (it can carry an engine error message).
+func agentSQL(ctx context.Context, b Backends) SQLSafety {
+	if b.SQLSafety == nil {
+		return SQLSafety{EnforcedBy: "unknown"}
+	}
+	s := b.SQLSafety(ctx)
+	s.Detail = workspace.FirstLine(redactString(s.Detail), statusErrorLen)
+	return s
 }
 
 type statusBuilder struct {

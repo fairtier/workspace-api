@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -325,6 +326,48 @@ func TestMCP_WorkspaceStatus(t *testing.T) {
 	// Only failed items cost a get call.
 	if env.fake.called("GetTransformation") {
 		t.Error("a successful transformation was fetched")
+	}
+	if out.AgentSQL.EnforcedBy != "unknown" {
+		t.Errorf("agent_sql = %+v, want unknown from a backend that reports nothing", out.AgentSQL)
+	}
+}
+
+// workspace_status says what keeps run_query read-only, with the reason
+// redacted like any other error text.
+func TestMCP_WorkspaceStatusReportsSQLSafety(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.safety = SQLSafety{
+		EnforcedBy: "guard_only",
+		Mode:       "guard_only",
+		Detail:     "the query engine has no read-only session: dial postgres://agent:hunter2@engine:5432\nsecond line",
+	}
+	readPAT, _ := env.mintPAT(t, workspace.ScopeWorkspaceRead)
+	res := call(t, env.connect(t, readPAT), "workspace_status", map[string]any{})
+	if res.IsError {
+		t.Fatalf("workspace_status: %s", text(res))
+	}
+	got := structured[workspaceStatusOut](t, res).AgentSQL
+	if got.EnforcedBy != "guard_only" || !strings.Contains(got.Detail, "no read-only session") {
+		t.Errorf("agent_sql = %+v", got)
+	}
+	if strings.Contains(text(res), "hunter2") {
+		t.Errorf("agent_sql leaked a credential: %+v", got)
+	}
+}
+
+// A statement the lexical guard lets through but the engine's read-only
+// session refuses comes back as a tool error carrying the engine's reason.
+func TestMCP_RunQueryEngineRefusal(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.queryErr = connect.NewError(connect.CodePermissionDenied,
+		errors.New(`the query engine's read-only session refused this statement: table function "read_blob" is not allowed`))
+	readPAT, _ := env.mintPAT(t, workspace.ScopeWorkspaceRead)
+	res := call(t, env.connect(t, readPAT), "run_query", map[string]any{"sql": "SELECT 1"})
+	if !res.IsError {
+		t.Fatalf("run_query succeeded: %s", text(res))
+	}
+	if msg := text(res); !strings.Contains(msg, "read-only session refused") || !strings.Contains(msg, "read_blob") {
+		t.Errorf("tool error = %q, want the engine's refusal and reason", msg)
 	}
 }
 

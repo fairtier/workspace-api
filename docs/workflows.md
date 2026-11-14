@@ -210,13 +210,19 @@ workflows, then transformations:
    - A target that already ran **this tick** (as a standalone run, or as a
      step of an earlier workflow) is not run again: the step reuses that run's
      id and status.
-   - Report the step `running` (optional, but it makes the Console live).
    - Run it exactly as a standalone run of that pipeline/transformation —
      same isolation, same local-first recording, same `ReportPipelineRun` /
      `ReportTransformationRun`. The step's run id is the run id the worker
      records that run under; send it as `pipeline_run_id` /
      `transformation_run_id`. These are plain columns, not foreign keys, so
      the order in which the run row and the step report land does not matter.
+   - Report the step `running` once that run has its id, and send the id
+     with it (optional, but it makes the Console live, and a worker killed
+     mid-step then leaves the step linked to its run: later reports that
+     leave the id empty keep the stored one). The reference worker sends it
+     after the run's local row is written and before the run executes; a
+     step that fails or reuses a run without running goes straight to its
+     outcome.
    - Report the workflow run again with the step's terminal status.
 6. **Finish**: on the first failed step, mark every later step `skipped` and
    report the run `failed` with `completed_at` and an `error_message`;

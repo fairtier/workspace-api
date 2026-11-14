@@ -17,7 +17,12 @@ user-facing handlers as tools to a person's own agent; see
 by `/mcp` **only** — never widen the ConnectRPC auth interceptor to accept
 them, or a leaked token could mint its own successors. The MCP toolset has
 deliberately **no delete tools**; an MCP backend interface lists exactly the
-RPCs a tool may reach, so keep `Delete*` out of them.
+RPCs a tool may reach, so keep `Delete*` out of them. MCP's SQL tools use
+their own `server.QueryServer` with `ReadOnly` set (DuckFlight read-only
+sessions, verified by `GetSqlInfo` because an older DuckFlight silently
+ignores the read-only header); the Console's `QueryServer` stays read-write
+— do not share one instance between them. The lexical guard
+(`mcpserver/sqlguard.go`) stays the first layer in every mode.
 
 ## Hard rules
 

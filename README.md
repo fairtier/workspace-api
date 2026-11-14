@@ -19,8 +19,10 @@ services that run against a single data workspace:
   and an editor for the workspace's own git repositories.
 - **MCP** — an optional [Model Context Protocol](https://modelcontextprotocol.io)
   endpoint so a person's own agent (Claude Code, Cursor, …) can operate the
-  workspace, authenticated by revocable workspace access tokens. Off by
-  default; see [docs/mcp.md](./docs/mcp.md).
+  workspace, with a handful of playbook prompts (diagnose failures, build a
+  workflow, profile a table, review a transformation), authenticated by
+  revocable workspace access tokens. Off by default; see
+  [docs/mcp.md](./docs/mcp.md).
 - **Health** — an unauthenticated `workspace_health.v1.HealthService`
   alongside the plain HTTP `/healthz` and `/readyz` probes.
 

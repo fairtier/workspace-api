@@ -1,0 +1,324 @@
+syntax = "proto3";
+
+package workflow.v1;
+
+option go_package = "github.com/fairtier/workspace-api/proto/workflow/v1;workflowv1";
+
+// WorkflowService manages workflows: a named, ordered, linear list of steps,
+// each step running an existing pipeline or transformation. A workflow has at
+// most one cron schedule (empty = manual only), runs its steps one after the
+// other, and stops at the first failed step — the remaining steps are recorded
+// as skipped. There is deliberately no DAG, no parallelism and no parameters.
+//
+// Execution happens on the box: the dlt-worker polls GetWorkflowConfigs,
+// runs each step through the same code paths it uses for a pipeline or a
+// transformation (reporting those runs exactly as it always does), and
+// reports the workflow run's progress with ReportWorkflowRun after every step.
+//
+// User-facing RPCs (require JWT auth, available on public port):
+//   CreateWorkflow, ListWorkflows, GetWorkflow, UpdateWorkflow,
+//   DeleteWorkflow, TriggerWorkflow, ListWorkflowRuns
+//
+// Worker-facing RPCs (served on the authenticated internal port, not the
+// public one; tenant-bound service tokens):
+//   GetWorkflowConfigs, ReportWorkflowRun
+// They are served on the internal port only — the public mux denies them,
+// whatever customer_slug the request carries.
+service WorkflowService {
+  // --- User-facing ---
+
+  // CreateWorkflow defines a new workflow. It is enabled on creation.
+  rpc CreateWorkflow(CreateWorkflowRequest) returns (CreateWorkflowResponse) {}
+
+  // ListWorkflows returns all workflows of the caller's workspace, each with
+  // its steps and the status of its most recent run.
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse) {}
+
+  // GetWorkflow returns one workflow with its most recent runs (newest first,
+  // step runs included).
+  rpc GetWorkflow(GetWorkflowRequest) returns (GetWorkflowResponse) {}
+
+  // UpdateWorkflow replaces a workflow's definition, steps included.
+  rpc UpdateWorkflow(UpdateWorkflowRequest) returns (UpdateWorkflowResponse) {}
+
+  // DeleteWorkflow permanently removes a workflow and its run history. The
+  // pipelines and transformations it references are not touched.
+  rpc DeleteWorkflow(DeleteWorkflowRequest) returns (DeleteWorkflowResponse) {}
+
+  // TriggerWorkflow queues a manual run ("pending") outside the schedule. A
+  // run already waiting to be picked up satisfies the trigger and is
+  // returned instead of queueing a second one.
+  rpc TriggerWorkflow(TriggerWorkflowRequest) returns (TriggerWorkflowResponse) {}
+
+  // ListWorkflowRuns pages through a workflow's run history, newest first.
+  rpc ListWorkflowRuns(ListWorkflowRunsRequest) returns (ListWorkflowRunsResponse) {}
+
+  // --- Worker-facing (internal only) ---
+
+  // GetWorkflowConfigs returns the workflows the worker should act on: every
+  // enabled workflow, plus a disabled one that has a pending (manually
+  // triggered) run. Workflows without steps are omitted.
+  rpc GetWorkflowConfigs(GetWorkflowConfigsRequest) returns (GetWorkflowConfigsResponse) {}
+
+  // ReportWorkflowRun records a workflow run's progress. It is an idempotent
+  // upsert on run_id, step runs included, so the worker reports after every
+  // step and may safely repeat a report.
+  rpc ReportWorkflowRun(ReportWorkflowRunRequest) returns (ReportWorkflowRunResponse) {}
+}
+
+// --- Messages ---
+
+// WorkflowStep is one entry in a workflow's ordered step list.
+message WorkflowStep {
+  // "pipeline" or "transformation".
+  string kind = 1;
+  // UUID of the pipeline or transformation (per kind) this step runs. It must
+  // belong to the same workspace as the workflow.
+  string ref_id = 2;
+  // Output only: the referenced pipeline's or transformation's current name.
+  // Ignored on input.
+  string name = 3;
+  // Output only: zero-based position in the workflow. On input, order is the
+  // order of the repeated field.
+  int32 position = 4;
+}
+
+// Workflow is a named, linear sequence of pipeline/transformation steps.
+message Workflow {
+  // Unique workflow identifier (UUID).
+  string id = 1;
+  // Tenant slug this workflow belongs to.
+  string customer_slug = 2;
+  // Human-readable name, unique within the workspace.
+  string name = 3;
+  string description = 4;
+  // Cron expression (five fields, or a macro such as "@daily"), or empty for
+  // manual runs only.
+  string schedule = 5;
+  bool enabled = 6;
+  // Steps in run order.
+  repeated WorkflowStep steps = 7;
+  // RFC 3339 timestamps.
+  string created_at = 8;
+  string updated_at = 9;
+  // RFC 3339 timestamp of the most recent run (any status), empty if never
+  // run.
+  string last_run_at = 10;
+  // Status of the most recent run ("pending", "running", "success",
+  // "failed"), empty if never run.
+  string last_run_status = 11;
+}
+
+// WorkflowStepRun records what one step did within one workflow run. It is a
+// snapshot: kind, ref_id and name are what the step was when the run
+// executed, so history survives later edits and deletions.
+message WorkflowStepRun {
+  // Zero-based position of the step in the run.
+  int32 position = 1;
+  // "pipeline" or "transformation".
+  string kind = 2;
+  // UUID of the pipeline or transformation the step ran.
+  string ref_id = 3;
+  // Name of the referenced pipeline or transformation at run time.
+  string name = 4;
+  // "pending", "running", "success", "failed", or "skipped" (not run because
+  // an earlier step failed).
+  string status = 5;
+  // The pipeline run this step produced (kind "pipeline"), empty if none.
+  string pipeline_run_id = 6;
+  // The transformation run this step produced (kind "transformation"),
+  // empty if none.
+  string transformation_run_id = 7;
+  // RFC 3339 timestamps.
+  string started_at = 8;
+  string completed_at = 9;
+  string error_message = 10;
+}
+
+// WorkflowRun records one execution of a workflow.
+message WorkflowRun {
+  // Unique run identifier (UUID).
+  string id = 1;
+  // Workflow this run belongs to.
+  string workflow_id = 2;
+  // "pending", "running", "success", or "failed".
+  string status = 3;
+  // "manual" or "schedule".
+  string trigger = 4;
+  // RFC 3339 timestamps.
+  string started_at = 5;
+  string completed_at = 6;
+  string error_message = 7;
+  string created_at = 8;
+  // Step runs in position order. Empty while the run is still pending.
+  repeated WorkflowStepRun step_runs = 9;
+}
+
+// --- User-facing requests/responses ---
+
+message CreateWorkflowRequest {
+  string name = 1;
+  string description = 2;
+  string schedule = 3;
+  // Steps in run order: 1 to 20, each pipeline/transformation at most once.
+  // Only kind and ref_id are read.
+  repeated WorkflowStep steps = 4;
+}
+
+message CreateWorkflowResponse {
+  Workflow workflow = 1;
+}
+
+message ListWorkflowsRequest {}
+
+message ListWorkflowsResponse {
+  repeated Workflow workflows = 1;
+}
+
+message GetWorkflowRequest {
+  string id = 1;
+}
+
+message GetWorkflowResponse {
+  Workflow workflow = 1;
+  // The 10 most recent runs, newest first, step runs included.
+  repeated WorkflowRun recent_runs = 2;
+}
+
+message UpdateWorkflowRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string schedule = 4;
+  bool enabled = 5;
+  // Replaces the whole step list. Same rules as on create.
+  repeated WorkflowStep steps = 6;
+}
+
+message UpdateWorkflowResponse {
+  Workflow workflow = 1;
+}
+
+message DeleteWorkflowRequest {
+  string id = 1;
+}
+
+message DeleteWorkflowResponse {}
+
+message TriggerWorkflowRequest {
+  string id = 1;
+}
+
+message TriggerWorkflowResponse {
+  WorkflowRun run = 1;
+}
+
+message ListWorkflowRunsRequest {
+  string workflow_id = 1;
+  // Maximum runs to return; 0 means 20, values above 100 are capped to 100.
+  int32 page_size = 2;
+  // Opaque token from a previous response's next_page_token; empty for the
+  // first page.
+  string page_token = 3;
+}
+
+message ListWorkflowRunsResponse {
+  // Newest first, step runs included.
+  repeated WorkflowRun runs = 1;
+  // Token for the next (older) page; empty when there are no more runs.
+  string next_page_token = 2;
+}
+
+// --- Worker-facing requests/responses ---
+
+message GetWorkflowConfigsRequest {
+  string customer_slug = 1;
+}
+
+message GetWorkflowConfigsResponse {
+  repeated WorkflowConfigItem workflows = 1;
+}
+
+// WorkflowConfigStep is a step as the worker needs it. The referenced
+// pipeline's or transformation's own definition comes from the worker's
+// usual sources (GetPipelineConfigs / GetTransformationConfigs, or the
+// definition checkout) and is looked up by ref_id.
+message WorkflowConfigStep {
+  // Zero-based position.
+  int32 position = 1;
+  // "pipeline" or "transformation".
+  string kind = 2;
+  // UUID of the pipeline or transformation to run.
+  string ref_id = 3;
+  // Current name of the referenced pipeline or transformation.
+  string name = 4;
+  // Whether the referenced pipeline or transformation is enabled. A step
+  // whose target is disabled fails without running it.
+  bool ref_enabled = 5;
+}
+
+message WorkflowConfigItem {
+  string id = 1;
+  string name = 2;
+  // Cron expression, or empty for manual runs only.
+  string schedule = 3;
+  bool enabled = 4;
+  // Steps in run order (never empty).
+  repeated WorkflowConfigStep steps = 5;
+  // True when a pending (manually triggered) run exists. A triggered run is
+  // due even when the workflow is disabled.
+  bool trigger_now = 6;
+  // UUID of the oldest pending run: report under this id instead of
+  // generating a new one.
+  string pending_run_id = 7;
+  // RFC 3339 start time of the most recent run that left "pending" (any of
+  // "running", "success", "failed"), empty if never run. This is the cron
+  // baseline: a failed run waits for the next slot like a successful one.
+  string last_run_at = 8;
+  // Status of that run, empty if never run.
+  string last_run_status = 9;
+}
+
+// WorkflowStepRunReport is one step's state in a ReportWorkflowRun call.
+message WorkflowStepRunReport {
+  // Zero-based position; the step-run identity within the run.
+  int32 position = 1;
+  // "pipeline" or "transformation".
+  string kind = 2;
+  // UUID of the pipeline or transformation the step runs.
+  string ref_id = 3;
+  // Name of the referenced pipeline or transformation (snapshot).
+  string name = 4;
+  // "pending", "running", "success", "failed", or "skipped".
+  string status = 5;
+  // UUID of the pipeline run the step produced (kind "pipeline").
+  string pipeline_run_id = 6;
+  // UUID of the transformation run the step produced (kind
+  // "transformation").
+  string transformation_run_id = 7;
+  // RFC 3339 timestamps.
+  string started_at = 8;
+  string completed_at = 9;
+  string error_message = 10;
+}
+
+message ReportWorkflowRunRequest {
+  // UUID of the run: the config's pending_run_id for a manual run, otherwise
+  // a worker-generated UUID that stays the same for every report of the run.
+  string run_id = 1;
+  string workflow_id = 2;
+  // "running", "success", or "failed".
+  string status = 3;
+  // "manual" or "schedule". Empty keeps the stored value ("schedule" for a
+  // run first seen in this report).
+  string trigger = 4;
+  // RFC 3339 timestamps.
+  string started_at = 5;
+  string completed_at = 6;
+  string error_message = 7;
+  // Step states, upserted by position. Send every step of the run on every
+  // report; positions not sent are left as they are.
+  repeated WorkflowStepRunReport step_runs = 8;
+}
+
+message ReportWorkflowRunResponse {}

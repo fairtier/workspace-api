@@ -5,8 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 `workspace-api` is FairTier's workspace plane: the product services that run
-against a single data workspace (pipelines, transformations, queries,
-warehouses, snapshots, notifications, repository editing). It is designed to be
+against a single data workspace (pipelines, transformations, workflows,
+queries, warehouses, snapshots, notifications, repository editing).
+Feature notes live in `docs/` (e.g. `docs/workflows.md` for the workflow
+model and the worker contract). It is designed to be
 self-hostable — see [README.md](./README.md) for the layout and configuration.
 
 ## Hard rules

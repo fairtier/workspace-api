@@ -7,6 +7,9 @@ services that run against a single data workspace:
   tables, defined through the API and rendered to files in a git repository.
 - **Transformations** — git-backed [dbt](https://www.getdbt.com) projects, with
   every run pinned to the commit it ran from.
+- **Workflows** — a named, linear sequence of pipeline and transformation
+  steps on one schedule, stopping at the first failure, with a recorded run
+  history. See [docs/workflows.md](./docs/workflows.md).
 - **Queries** — SQL over the warehouse via Arrow Flight SQL.
 - **Warehouses & catalog users** — Iceberg warehouse configuration and
   [Lakekeeper](https://lakekeeper.io) principals.
@@ -44,6 +47,7 @@ Iceberg catalog, and it keeps working with no vendor service behind it.
 | `core/` | Shared plain types, error sentinels, and the caller-identity/auth-interceptor primitives both planes authenticate with. |
 | `proto/` | Service definitions plus their generated Go stubs. |
 | `postgres/` | The stores and the schema migrations. |
+| `docs/` | Feature notes that do not fit this README (e.g. [workflows](./docs/workflows.md)). |
 | `telemetry/` | OpenTelemetry providers and the helpers adapters use to instrument outbound calls. |
 | `casdoor/`, `gitea/`, `lakekeeper/`, `duckflight/`, `objstore/`, `llm/`, `oauthgoogle/`, `crypto/`, `demo/` | Adapters implementing the ports. |
 

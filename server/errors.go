@@ -32,6 +32,11 @@ var domainErrorCodes = []struct {
 	{workspace.ErrTransformationNotFound, connect.CodeNotFound},
 	{workspace.ErrTransformationAlreadyExists, connect.CodeAlreadyExists},
 	{workspace.ErrTransformationRunNotFound, connect.CodeNotFound},
+	{workspace.ErrWorkflowNotFound, connect.CodeNotFound},
+	{workspace.ErrWorkflowAlreadyExists, connect.CodeAlreadyExists},
+	{workspace.ErrWorkflowRunNotFound, connect.CodeNotFound},
+	{workspace.ErrWorkflowHasNoSteps, connect.CodeFailedPrecondition},
+	{workspace.ErrInvalidPageToken, connect.CodeInvalidArgument},
 	{workspace.ErrWorkspaceNotFound, connect.CodeNotFound},
 	{workspace.ErrBoxRepoUnavailable, connect.CodeFailedPrecondition},
 	{workspace.ErrBoxUnreachable, connect.CodeUnavailable},
@@ -65,6 +70,7 @@ func validationDomainError(err error) (error, bool) {
 	var invalidCfg *workspace.ErrInvalidSourceConfig
 	var invalidCreds *workspace.ErrInvalidSourceCredentials
 	var invalidUpload *workspace.ErrInvalidUploadFile
+	var invalidWorkflow *workspace.ErrInvalidWorkflow
 
 	switch {
 	case errors.As(err, &invalidCfg):
@@ -73,6 +79,8 @@ func validationDomainError(err error) (error, bool) {
 		return validationError(err, invalidCreds.Field, invalidCreds.Msg), true
 	case errors.As(err, &invalidUpload):
 		return connect.NewError(connect.CodeInvalidArgument, err), true
+	case errors.As(err, &invalidWorkflow):
+		return validationError(err, invalidWorkflow.Field, invalidWorkflow.Msg), true
 	default:
 		return nil, false
 	}

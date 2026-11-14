@@ -23,6 +23,7 @@ import (
 	"github.com/fairtier/workspace-api/proto/snapshot/v1/snapshotv1connect"
 	"github.com/fairtier/workspace-api/proto/transformation/v1/transformationv1connect"
 	"github.com/fairtier/workspace-api/proto/warehouse/v1/warehousev1connect"
+	"github.com/fairtier/workspace-api/proto/workflow/v1/workflowv1connect"
 	"github.com/fairtier/workspace-api/proto/workspace_health/v1/workspacehealthv1connect"
 	"github.com/fairtier/workspace-api/workspace"
 )
@@ -58,6 +59,10 @@ type WorkspacePlaneServers struct {
 	// pipelines and the query engine both consume it). Optional: nil does not
 	// mount the service, and the Console hides the surface.
 	Connections *ConnectionServer
+	// Workflows manages linear pipeline/transformation workflows. Optional:
+	// nil does not mount the service. Like Pipelines and Transformations it
+	// carries worker RPCs, so it must be a public-mux instance.
+	Workflows *WorkflowServer
 }
 
 // RegisterWorkspacePlane mounts the workspace plane's Connect services on the
@@ -70,15 +75,7 @@ type WorkspacePlaneServers struct {
 // Handing one of those instances to the public mux would re-open the leak,
 // so — as with the internal mux — that is a startup panic, not a subtle bug.
 func RegisterWorkspacePlane(mux *http.ServeMux, s WorkspacePlaneServers, opts connect.HandlerOption) {
-	if s.Pipelines == nil || s.Pipelines.worker.internal {
-		panic("RegisterWorkspacePlane: Pipelines must be a public-mux PipelineServer")
-	}
-	if s.Transformations == nil || s.Transformations.worker.internal {
-		panic("RegisterWorkspacePlane: Transformations must be a public-mux TransformationServer")
-	}
-	if s.Health == nil {
-		panic("RegisterWorkspacePlane: Health must be set")
-	}
+	mustBePublicHandlers(s)
 	// Deliberately without opts: a health check that needs a JWT is useless to
 	// the operator asking whether auth itself is up.
 	mux.Handle(workspacehealthv1connect.NewHealthServiceHandler(s.Health))
@@ -99,6 +96,26 @@ func RegisterWorkspacePlane(mux *http.ServeMux, s WorkspacePlaneServers, opts co
 	if s.Connections != nil {
 		mux.Handle(connectionv1connect.NewConnectionServiceHandler(s.Connections, opts))
 	}
+	if s.Workflows != nil {
+		mux.Handle(workflowv1connect.NewWorkflowServiceHandler(s.Workflows, opts))
+	}
+}
+
+// mustBePublicHandlers panics on a wiring that would mount a worker-enabled
+// handler on the public mux, or leave out a required server.
+func mustBePublicHandlers(s WorkspacePlaneServers) {
+	if s.Pipelines == nil || s.Pipelines.worker.internal {
+		panic("RegisterWorkspacePlane: Pipelines must be a public-mux PipelineServer")
+	}
+	if s.Transformations == nil || s.Transformations.worker.internal {
+		panic("RegisterWorkspacePlane: Transformations must be a public-mux TransformationServer")
+	}
+	if s.Workflows != nil && s.Workflows.worker.internal {
+		panic("RegisterWorkspacePlane: Workflows must be a public-mux WorkflowServer")
+	}
+	if s.Health == nil {
+		panic("RegisterWorkspacePlane: Health must be set")
+	}
 }
 
 // WorkspaceInternalServers bundles the worker-facing handlers (:8081).
@@ -115,6 +132,10 @@ type WorkspaceInternalServers struct {
 	// skips registration (the box-local workspace_api reads its own
 	// credentials from static config and never receives deposits).
 	BoxCredentials *BoxCredentialServer
+	// Workflows serves the worker's workflow poll and run reports. Optional
+	// (nil skips registration); when set it must come from
+	// NewInternalWorkflowServer.
+	Workflows *WorkflowServer
 }
 
 // RegisterWorkspaceInternal mounts the worker-facing RPCs on the internal mux.
@@ -128,8 +149,14 @@ func RegisterWorkspaceInternal(mux *http.ServeMux, s WorkspaceInternalServers, o
 	if s.Transformations == nil || !s.Transformations.worker.internal {
 		panic("RegisterWorkspaceInternal: Transformations must come from NewInternalTransformationServer")
 	}
+	if s.Workflows != nil && !s.Workflows.worker.internal {
+		panic("RegisterWorkspaceInternal: Workflows must come from NewInternalWorkflowServer")
+	}
 	mux.Handle(pipelinev1connect.NewPipelineServiceHandler(s.Pipelines, opts))
 	mux.Handle(transformationv1connect.NewTransformationServiceHandler(s.Transformations, opts))
+	if s.Workflows != nil {
+		mux.Handle(workflowv1connect.NewWorkflowServiceHandler(s.Workflows, opts))
+	}
 	if s.BoxCredentials != nil {
 		mux.Handle(boxcredentialv1connect.NewBoxCredentialServiceHandler(s.BoxCredentials, opts))
 	}
@@ -199,4 +226,5 @@ var WorkspaceServiceNames = []string{
 	notificationv1connect.NotificationServiceName,
 	queryv1connect.QueryServiceName,
 	transformationv1connect.TransformationServiceName,
+	workflowv1connect.WorkflowServiceName,
 }

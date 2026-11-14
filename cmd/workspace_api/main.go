@@ -258,6 +258,16 @@ func run() error {
 	}
 	transformationServer := &server.TransformationServer{Service: transformationSvc}
 
+	// Workflows are rows only (not mirrored to the repo yet), so no mirror.
+	workflowSvc := &workspace.WorkflowService{
+		Workspaces:      resolver,
+		Workflows:       repo,
+		Pipelines:       repo,
+		Transformations: repo,
+		Notifications:   notificationSvc,
+		Logger:          logger,
+	}
+
 	boxRepoSvc := &workspace.BoxRepoService{
 		Workspaces:      resolver,
 		Credentials:     boxCreds,
@@ -330,6 +340,7 @@ func run() error {
 		Snapshots:       &server.SnapshotServer{Workspaces: resolver, Snapshots: boxCreds, HTTPClient: http.DefaultClient},
 		Pipelines:       &server.PipelineServer{Service: pipelineSvc, FileDrop: fileDropSvc, SourceTests: sourceTestSvc},
 		Transformations: transformationServer,
+		Workflows:       &server.WorkflowServer{Service: workflowSvc},
 		PipelineAssist:  pipelineAssistServer,
 		Assist:          assistServer,
 		BoxRepos:        &server.BoxRepoServer{Service: boxRepoSvc},
@@ -371,7 +382,7 @@ func run() error {
 		return err
 	}
 	internalMux := http.NewServeMux()
-	internalServers, serviceNames := buildInternalServers(pipelineSvc, sourceTestSvc, transformationSvc)
+	internalServers, serviceNames := buildInternalServers(pipelineSvc, sourceTestSvc, transformationSvc, workflowSvc)
 	server.RegisterWorkspaceInternal(internalMux, internalServers, internalOpts)
 	internalMux.Handle(grpchealth.NewHandler(grpchealth.NewStaticChecker(serviceNames...)))
 	internalMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(serviceNames...)))
@@ -679,10 +690,12 @@ func buildInternalServers(
 	pipelineSvc *workspace.PipelineService,
 	sourceTestSvc *workspace.SourceTestService,
 	transformationSvc *workspace.TransformationService,
+	workflowSvc *workspace.WorkflowService,
 ) (server.WorkspaceInternalServers, []string) {
 	servers := server.WorkspaceInternalServers{
 		Pipelines:       server.NewInternalPipelineServer(pipelineSvc, sourceTestSvc),
 		Transformations: server.NewInternalTransformationServer(transformationSvc),
+		Workflows:       server.NewInternalWorkflowServer(workflowSvc),
 	}
 	return servers, workspaceServiceNamesWithoutBoxCredential()
 }

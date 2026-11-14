@@ -11,6 +11,12 @@ Feature notes live in `docs/` (e.g. `docs/workflows.md` for the workflow
 model and the worker contract). It is designed to be
 self-hostable — see [README.md](./README.md) for the layout and configuration.
 
+An optional MCP endpoint (`mcpserver/`, `MCP_ENABLED`) exposes the same
+user-facing handlers as tools to a person's own agent; see
+[docs/mcp.md](./docs/mcp.md). Workspace access tokens (`ftw_…`) are accepted
+by `/mcp` **only** — never widen the ConnectRPC auth interceptor to accept
+them, or a leaked token could mint its own successors.
+
 ## Hard rules
 
 - **Never depend on the hosted control plane.** Billing, identity provisioning

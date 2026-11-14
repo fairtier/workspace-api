@@ -15,6 +15,10 @@ services that run against a single data workspace:
   [Lakekeeper](https://lakekeeper.io) principals.
 - **Snapshots**, **notifications**, **file drop**, a loadable starter project,
   and an editor for the workspace's own git repositories.
+- **MCP** — an optional [Model Context Protocol](https://modelcontextprotocol.io)
+  endpoint so a person's own agent (Claude Code, Cursor, …) can operate the
+  workspace, authenticated by revocable workspace access tokens. Off by
+  default; see [docs/mcp.md](./docs/mcp.md).
 - **Health** — an unauthenticated `workspace_health.v1.HealthService`
   alongside the plain HTTP `/healthz` and `/readyz` probes.
 
@@ -44,6 +48,7 @@ Iceberg catalog, and it keeps working with no vendor service behind it.
 | `cmd/workspace_api/` | The binary: one workspace configured from `WORKSPACE_*` env, authenticated against a local OIDC issuer. |
 | `server/` | ConnectRPC handlers and the plain-HTTP endpoints (file upload, OAuth callback, probes). |
 | `workspace/` | The services, and the ports through which infrastructure reaches them. |
+| `mcpserver/` | The MCP endpoint: tools over the user-facing handlers, its bearer verification, and the read-only SQL guard. |
 | `core/` | Shared plain types, error sentinels, and the caller-identity/auth-interceptor primitives both planes authenticate with. |
 | `proto/` | Service definitions plus their generated Go stubs. |
 | `postgres/` | The stores and the schema migrations. |
@@ -96,6 +101,8 @@ for co-located workers and should not be published.
 | `BOX_AGE_PUBLIC_KEY` | | age recipient that pipeline credential files are encrypted to. |
 | `BOX_SNAPSHOT_TOKEN` | | Token for the snapshot sidecar. |
 | `INTERNAL_PORT` | | Port for the worker-facing API. Defaults to `8081`. |
+| `MCP_ENABLED` | | `true` serves the MCP endpoint at `/mcp` and the access-token API it authenticates with. Off by default — read the threat model in [docs/mcp.md](./docs/mcp.md) first. |
+| `WORKSPACE_API_URL` | | This API's public base URL, from which the MCP resource identifier (`<url>/mcp`) is derived. Defaults to `https://api.<WORKSPACE_CUSTOMER_DOMAIN>`. |
 | `CORS_ALLOWED_ORIGINS` | | Comma-separated browser origins allowed to call the API (your Console's origin). Unset disables cross-origin browser access entirely. |
 | `FILEDROP_MAX_BYTES` | | Upload size ceiling for file drop. |
 | `WORKSPACE_IMPORT_FROM_REPO` | | On by default: definitions already in the repositories are loaded into an empty database on the first sweep, keeping their ids. Set it to `off` to start with whatever the database holds instead. |

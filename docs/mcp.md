@@ -41,7 +41,7 @@ A workspace, as the tools describe it to the agent:
 | `list_repo_files` | read | Files in `transformations` or `rill`. |
 | `read_repo_file` | read | One file's content and blob sha (files up to 256 KB). |
 | `list_notifications` | read | Recent notifications and the unread count. |
-| `trigger_pipeline` | write | Queue a pipeline run now. |
+| `trigger_pipeline` | write | Queue a pipeline run now (a run already queued or running is returned instead). |
 | `trigger_transformation` | write | Queue a transformation run now. |
 | `trigger_workflow` | write | Queue a workflow run now (an already-pending run is returned instead). |
 | `create_workflow` | write | Create a workflow from steps that reference existing pipeline/transformation ids. |

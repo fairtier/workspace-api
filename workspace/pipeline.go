@@ -80,9 +80,10 @@ type PipelineRepository interface {
 	UpdatePipelineRun(ctx context.Context, run *PipelineRun) error
 	ListRecentRuns(ctx context.Context, pipelineID PipelineID, limit int) ([]PipelineRun, error)
 
-	// GetPendingRun returns the oldest queued run for a pipeline, or (nil, nil)
-	// when none is pending. Used to keep manual triggers idempotent.
-	GetPendingRun(ctx context.Context, pipelineID PipelineID) (*PipelineRun, error)
+	// GetActiveRun returns the run already in flight for a pipeline — the
+	// oldest pending one, else the oldest running one — or (nil, nil) when
+	// the pipeline is idle. Used to keep manual triggers idempotent.
+	GetActiveRun(ctx context.Context, pipelineID PipelineID) (*PipelineRun, error)
 }
 
 // PipelineMirrorer mirrors a customer's pipeline definitions into the box's
@@ -548,8 +549,10 @@ func (s *PipelineService) RestorePipelineVersion(ctx context.Context, callerID c
 }
 
 // TriggerPipeline queues a "pending" run for a pipeline, verifying ownership.
-// It is idempotent: if a run is already queued, that run is returned rather
-// than stacking a duplicate the worker would later run twice. Works on paused
+// It is idempotent: if a run is already queued or running, that run is
+// returned rather than stacking a duplicate the worker would run again right
+// after (the worker reads triggers once per tick, so a run queued while one
+// is executing fires on the next tick as a second full load). Works on paused
 // (disabled) pipelines too — GetEnabledPipelines surfaces a pending run so the
 // worker executes it once.
 func (s *PipelineService) TriggerPipeline(ctx context.Context, callerID core.UserID, id PipelineID) (*PipelineRun, error) {
@@ -566,11 +569,14 @@ func (s *PipelineService) TriggerPipeline(ctx context.Context, callerID core.Use
 		return nil, ErrPipelineNotFound
 	}
 
-	// Idempotency: a run already waiting to be picked up satisfies the trigger.
-	if pending, err := s.Pipelines.GetPendingRun(ctx, id); err != nil {
-		return nil, fmt.Errorf("get pending run: %w", err)
-	} else if pending != nil {
-		return pending, nil
+	// Idempotency: a run already queued or executing satisfies the trigger.
+	// A "running" row left by a dead worker blocks Run-now only until it is
+	// failed — by the worker's own start-up/between-tick stale-run sweep
+	// (2h) or the stuck-run sweep, whichever comes first.
+	if active, err := s.Pipelines.GetActiveRun(ctx, id); err != nil {
+		return nil, fmt.Errorf("get active run: %w", err)
+	} else if active != nil {
+		return active, nil
 	}
 
 	now := time.Now()

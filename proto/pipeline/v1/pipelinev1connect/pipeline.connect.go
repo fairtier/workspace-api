@@ -97,6 +97,8 @@ type PipelineServiceClient interface {
 	// DeletePipeline permanently removes a pipeline and its run history.
 	DeletePipeline(context.Context, *connect.Request[v1.DeletePipelineRequest]) (*connect.Response[v1.DeletePipelineResponse], error)
 	// TriggerPipeline manually starts a pipeline execution outside its schedule.
+	// Idempotent: when a run is already queued or running, that run is returned
+	// instead of queueing another.
 	TriggerPipeline(context.Context, *connect.Request[v1.TriggerPipelineRequest]) (*connect.Response[v1.TriggerPipelineResponse], error)
 	// ListPipelineVersions returns the newest-first history of the pipeline's
 	// rendered definition file in the workspace's git repo (VM boxes only;
@@ -373,6 +375,8 @@ type PipelineServiceHandler interface {
 	// DeletePipeline permanently removes a pipeline and its run history.
 	DeletePipeline(context.Context, *connect.Request[v1.DeletePipelineRequest]) (*connect.Response[v1.DeletePipelineResponse], error)
 	// TriggerPipeline manually starts a pipeline execution outside its schedule.
+	// Idempotent: when a run is already queued or running, that run is returned
+	// instead of queueing another.
 	TriggerPipeline(context.Context, *connect.Request[v1.TriggerPipelineRequest]) (*connect.Response[v1.TriggerPipelineResponse], error)
 	// ListPipelineVersions returns the newest-first history of the pipeline's
 	// rendered definition file in the workspace's git repo (VM boxes only;

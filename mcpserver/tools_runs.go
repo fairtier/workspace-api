@@ -13,7 +13,7 @@ const listPipelinesDesc = `List the workspace's pipelines: declarative dlt inges
 
 const getPipelineDesc = `Get one pipeline by id: its full definition (source type, source configuration with secrets redacted, dataset, schedule, write disposition) and its most recent runs with status, rows loaded and error messages. Use this to diagnose a failing pipeline. Credentials are never returned.`
 
-const triggerPipelineDesc = `Queue a run of one pipeline now, outside its schedule. The run is picked up by the workspace's worker within seconds and executes asynchronously: this returns the queued run immediately; poll get_pipeline to follow it. A run fetches from the pipeline's source and writes to its tables (with write_disposition "replace", replacing their contents).`
+const triggerPipelineDesc = `Queue a run of one pipeline now, outside its schedule. The run is picked up by the workspace's worker within seconds and executes asynchronously: this returns the queued run immediately; poll get_pipeline to follow it. If a run is already queued or running, that run is returned instead of a new one. A run fetches from the pipeline's source and writes to its tables (with write_disposition "replace", replacing their contents).`
 
 const listTransformationsDesc = `List the workspace's transformations: dbt projects (kept in the "transformations" git repository unless a repo_url is set) that build models — more Iceberg tables — from the loaded data. Shows schedule, the pipeline whose success triggers it (trigger_after_pipeline_id), the dbt selector, and the last run's status.`
 

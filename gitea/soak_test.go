@@ -131,7 +131,7 @@ func (s *soakStore) ListRecentRuns(context.Context, workspace.PipelineID, int) (
 	return nil, nil
 }
 
-func (s *soakStore) GetPendingRun(context.Context, workspace.PipelineID) (*workspace.PipelineRun, error) {
+func (s *soakStore) GetActiveRun(context.Context, workspace.PipelineID) (*workspace.PipelineRun, error) {
 	return nil, nil
 }
 

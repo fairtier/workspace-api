@@ -15,7 +15,9 @@ An optional MCP endpoint (`mcpserver/`, `MCP_ENABLED`) exposes the same
 user-facing handlers as tools to a person's own agent; see
 [docs/mcp.md](./docs/mcp.md). Workspace access tokens (`ftw_…`) are accepted
 by `/mcp` **only** — never widen the ConnectRPC auth interceptor to accept
-them, or a leaked token could mint its own successors.
+them, or a leaked token could mint its own successors. The MCP toolset has
+deliberately **no delete tools**; an MCP backend interface lists exactly the
+RPCs a tool may reach, so keep `Delete*` out of them.
 
 ## Hard rules
 

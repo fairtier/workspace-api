@@ -10,6 +10,8 @@ The older chaining mechanism — `transformations.trigger_after_pipeline_id` —
 is unchanged and independent of workflows.
 
 Service: `workflow.v1.WorkflowService` ([`proto/workflow.proto`](../proto/workflow.proto)).
+An agent can list, inspect, create, change and trigger workflows over the MCP
+endpoint (no delete) — see [mcp.md](./mcp.md).
 
 ## Model
 

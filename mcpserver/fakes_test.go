@@ -19,6 +19,7 @@ import (
 	pipelinev1 "github.com/fairtier/workspace-api/proto/pipeline/v1"
 	queryv1 "github.com/fairtier/workspace-api/proto/query/v1"
 	transformationv1 "github.com/fairtier/workspace-api/proto/transformation/v1"
+	workflowv1 "github.com/fairtier/workspace-api/proto/workflow/v1"
 )
 
 // fakeWorkspace stands in for every backend and records what reached it, and
@@ -30,6 +31,10 @@ type fakeWorkspace struct {
 	callers []core.UserID
 	queries []string
 	puts    []*boxrepov1.PutFileRequest
+	// workflows is the fake's workflow store, keyed by id; updates records
+	// every UpdateWorkflow request as received.
+	workflows map[string]*workflowv1.Workflow
+	updates   []*workflowv1.UpdateWorkflowRequest
 }
 
 func (f *fakeWorkspace) record(ctx context.Context, call string) error {
@@ -56,7 +61,7 @@ func (f *fakeWorkspace) called(call string) bool {
 }
 
 func (f *fakeWorkspace) backends() Backends {
-	return Backends{Query: f, Pipelines: f, Transformations: f, Repos: f, Notifications: f}
+	return Backends{Query: f, Pipelines: f, Transformations: f, Workflows: f, Repos: f, Notifications: f}
 }
 
 func (f *fakeWorkspace) ExecuteQuery(ctx context.Context, req *connect.Request[queryv1.ExecuteQueryRequest]) (*connect.Response[queryv1.ExecuteQueryResponse], error) {
@@ -91,7 +96,10 @@ func (f *fakeWorkspace) ListPipelines(ctx context.Context, _ *connect.Request[pi
 	if err := f.record(ctx, "ListPipelines"); err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&pipelinev1.ListPipelinesResponse{Pipelines: []*pipelinev1.Pipeline{{Id: "p1", Name: "orders", SourceType: "rest_api", DatasetName: "sales"}}}), nil
+	return connect.NewResponse(&pipelinev1.ListPipelinesResponse{Pipelines: []*pipelinev1.Pipeline{
+		{Id: "p1", Name: "orders", SourceType: "rest_api", DatasetName: "sales", Enabled: true, Schedule: "@daily", LastRunStatus: "failed", LastRunAt: "2026-01-02T03:04:05Z"},
+		{Id: "p2", Name: "customers", SourceType: "sql_database", DatasetName: "crm", Enabled: true, Schedule: "@hourly"},
+	}}), nil
 }
 
 func (f *fakeWorkspace) GetPipeline(ctx context.Context, req *connect.Request[pipelinev1.GetPipelineRequest]) (*connect.Response[pipelinev1.GetPipelineResponse], error) {
@@ -122,7 +130,7 @@ func (f *fakeWorkspace) ListTransformations(ctx context.Context, _ *connect.Requ
 	if err := f.record(ctx, "ListTransformations"); err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&transformationv1.ListTransformationsResponse{Transformations: []*transformationv1.Transformation{{Id: "t1", Name: "marts"}}}), nil
+	return connect.NewResponse(&transformationv1.ListTransformationsResponse{Transformations: []*transformationv1.Transformation{{Id: "t1", Name: "marts", Enabled: true, LastRunStatus: "success", LastRunAt: "2026-01-02T04:00:00Z"}}}), nil
 }
 
 func (f *fakeWorkspace) GetTransformation(ctx context.Context, _ *connect.Request[transformationv1.GetTransformationRequest]) (*connect.Response[transformationv1.GetTransformationResponse], error) {
@@ -173,6 +181,96 @@ func (f *fakeWorkspace) ListNotifications(ctx context.Context, _ *connect.Reques
 		return nil, err
 	}
 	return connect.NewResponse(&notificationv1.ListNotificationsResponse{UnreadCount: 1, Notifications: []*notificationv1.Notification{{Id: "n1", Title: "Pipeline failed"}}}), nil
+}
+
+func (f *fakeWorkspace) ListWorkflows(ctx context.Context, _ *connect.Request[workflowv1.ListWorkflowsRequest]) (*connect.Response[workflowv1.ListWorkflowsResponse], error) {
+	if err := f.record(ctx, "ListWorkflows"); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []*workflowv1.Workflow{{
+		Id: "w1", Name: "nightly", Schedule: "@daily", Enabled: true, LastRunStatus: "failed", LastRunAt: "2026-01-02T05:00:00Z",
+		Steps: []*workflowv1.WorkflowStep{{Kind: "pipeline", RefId: "p1", Name: "orders"}, {Kind: "transformation", RefId: "t1", Name: "marts", Position: 1}},
+	}}
+	for _, w := range f.workflows {
+		out = append(out, w)
+	}
+	return connect.NewResponse(&workflowv1.ListWorkflowsResponse{Workflows: out}), nil
+}
+
+func (f *fakeWorkspace) GetWorkflow(ctx context.Context, req *connect.Request[workflowv1.GetWorkflowRequest]) (*connect.Response[workflowv1.GetWorkflowResponse], error) {
+	if err := f.record(ctx, "GetWorkflow"); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if w, ok := f.workflows[req.Msg.Id]; ok {
+		return connect.NewResponse(&workflowv1.GetWorkflowResponse{Workflow: w}), nil
+	}
+	if req.Msg.Id != "w1" {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("workflow not found"))
+	}
+	return connect.NewResponse(&workflowv1.GetWorkflowResponse{
+		Workflow: &workflowv1.Workflow{
+			Id: "w1", Name: "nightly", Schedule: "@daily", Enabled: true,
+			Steps: []*workflowv1.WorkflowStep{{Kind: "pipeline", RefId: "p1", Name: "orders"}, {Kind: "transformation", RefId: "t1", Name: "marts", Position: 1}},
+		},
+		RecentRuns: []*workflowv1.WorkflowRun{{
+			Id: "wr1", WorkflowId: "w1", Status: "failed", Trigger: "schedule", ErrorMessage: "step 0 failed",
+			StepRuns: []*workflowv1.WorkflowStepRun{
+				{Position: 0, Kind: "pipeline", RefId: "p1", Name: "orders", Status: "failed", PipelineRunId: "r1", ErrorMessage: "connect postgresql://app:s3cret@db.example.test/x: refused"},
+				{Position: 1, Kind: "transformation", RefId: "t1", Name: "marts", Status: "skipped"},
+			},
+		}},
+	}), nil
+}
+
+func (f *fakeWorkspace) ListWorkflowRuns(ctx context.Context, req *connect.Request[workflowv1.ListWorkflowRunsRequest]) (*connect.Response[workflowv1.ListWorkflowRunsResponse], error) {
+	if err := f.record(ctx, "ListWorkflowRuns"); err != nil {
+		return nil, err
+	}
+	// Two pages of one run each.
+	if req.Msg.PageToken == "" {
+		return connect.NewResponse(&workflowv1.ListWorkflowRunsResponse{Runs: []*workflowv1.WorkflowRun{{Id: "wr2", Status: "success"}}, NextPageToken: "page2"}), nil
+	}
+	return connect.NewResponse(&workflowv1.ListWorkflowRunsResponse{Runs: []*workflowv1.WorkflowRun{{Id: "wr1", Status: "failed"}}}), nil
+}
+
+func (f *fakeWorkspace) TriggerWorkflow(ctx context.Context, req *connect.Request[workflowv1.TriggerWorkflowRequest]) (*connect.Response[workflowv1.TriggerWorkflowResponse], error) {
+	if err := f.record(ctx, "TriggerWorkflow"); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&workflowv1.TriggerWorkflowResponse{Run: &workflowv1.WorkflowRun{Id: "wr3", WorkflowId: req.Msg.Id, Status: "pending", Trigger: "manual"}}), nil
+}
+
+func (f *fakeWorkspace) CreateWorkflow(ctx context.Context, req *connect.Request[workflowv1.CreateWorkflowRequest]) (*connect.Response[workflowv1.CreateWorkflowResponse], error) {
+	if err := f.record(ctx, "CreateWorkflow"); err != nil {
+		return nil, err
+	}
+	w := &workflowv1.Workflow{Id: "w2", Name: req.Msg.Name, Description: req.Msg.Description, Schedule: req.Msg.Schedule, Enabled: true, Steps: req.Msg.Steps}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.workflows == nil {
+		f.workflows = map[string]*workflowv1.Workflow{}
+	}
+	f.workflows[w.Id] = w
+	return connect.NewResponse(&workflowv1.CreateWorkflowResponse{Workflow: w}), nil
+}
+
+func (f *fakeWorkspace) UpdateWorkflow(ctx context.Context, req *connect.Request[workflowv1.UpdateWorkflowRequest]) (*connect.Response[workflowv1.UpdateWorkflowResponse], error) {
+	if err := f.record(ctx, "UpdateWorkflow"); err != nil {
+		return nil, err
+	}
+	w := &workflowv1.Workflow{Id: req.Msg.Id, Name: req.Msg.Name, Description: req.Msg.Description, Schedule: req.Msg.Schedule, Enabled: req.Msg.Enabled, Steps: req.Msg.Steps}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updates = append(f.updates, req.Msg)
+	if f.workflows == nil {
+		f.workflows = map[string]*workflowv1.Workflow{}
+	}
+	f.workflows[w.Id] = w
+	return connect.NewResponse(&workflowv1.UpdateWorkflowResponse{Workflow: w}), nil
 }
 
 // testJWKS returns a Keyfunc over a fresh ed25519 key and a signer for it (a

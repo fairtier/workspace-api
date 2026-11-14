@@ -130,8 +130,12 @@ func text(res *mcp.CallToolResult) string {
 }
 
 var (
-	readTools  = []string{"list_tables", "describe_table", "run_query", "list_pipelines", "get_pipeline", "list_transformations", "get_transformation", "list_repo_files", "read_repo_file", "list_notifications"}
-	writeTools = []string{"trigger_pipeline", "trigger_transformation", "write_repo_file"}
+	readTools = []string{
+		"workspace_status", "list_tables", "describe_table", "run_query", "list_pipelines", "get_pipeline",
+		"list_transformations", "get_transformation", "list_workflows", "get_workflow", "list_workflow_runs",
+		"list_repo_files", "read_repo_file", "list_notifications",
+	}
+	writeTools = []string{"trigger_pipeline", "trigger_transformation", "trigger_workflow", "create_workflow", "update_workflow", "write_repo_file"}
 )
 
 func TestMCP_ToolsListDependsOnScope(t *testing.T) {
@@ -147,11 +151,18 @@ func TestMCP_ToolsListDependsOnScope(t *testing.T) {
 		t.Errorf("read token sees %v, want %v", got, want)
 	}
 
+	if len(got) != 14 {
+		t.Errorf("read token sees %d tools, want 14", len(got))
+	}
+	if slices.Contains(got, "delete_workflow") {
+		t.Error("a delete_workflow tool exists")
+	}
+
 	got = toolNames(t, env.connect(t, writePAT))
 	slices.Sort(got)
 	want = append(slices.Clone(readTools), writeTools...)
 	slices.Sort(want)
-	if !slices.Equal(got, want) {
+	if !slices.Equal(got, want) || len(got) != 20 {
 		t.Errorf("write token sees %v, want %v", got, want)
 	}
 
@@ -183,12 +194,129 @@ func TestMCP_WriteToolWithReadTokenFails(t *testing.T) {
 	readPAT, _ := env.mintPAT(t, workspace.ScopeWorkspaceRead)
 	s := env.connect(t, readPAT)
 
-	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{Name: "trigger_pipeline", Arguments: map[string]any{"id": "p1"}})
-	if err == nil && !res.IsError {
-		t.Fatalf("trigger_pipeline with a read token succeeded: %s", text(res))
+	for name, args := range map[string]map[string]any{
+		"trigger_pipeline": {"id": "p1"},
+		"trigger_workflow": {"id": "w1"},
+		"create_workflow":  {"name": "x", "steps": []any{map[string]any{"kind": "pipeline", "ref_id": "p1"}}},
+		"update_workflow":  {"id": "w1", "enabled": false},
+	} {
+		res, err := s.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+		if err == nil && !res.IsError {
+			t.Fatalf("%s with a read token succeeded: %s", name, text(res))
+		}
 	}
-	if env.fake.called("TriggerPipeline") {
-		t.Fatal("the backend was reached")
+	for _, c := range []string{"TriggerPipeline", "TriggerWorkflow", "CreateWorkflow", "UpdateWorkflow", "GetWorkflow"} {
+		if env.fake.called(c) {
+			t.Fatalf("the backend was reached: %s", c)
+		}
+	}
+}
+
+func structured[T any](t *testing.T, res *mcp.CallToolResult) T {
+	t.Helper()
+	var out T
+	raw, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("%v (%s)", err, raw)
+	}
+	return out
+}
+
+func TestMCP_WorkflowHappyPath(t *testing.T) {
+	env := newTestEnv(t)
+	writePAT, _ := env.mintPAT(t, workspace.ScopeWorkspaceWrite)
+	s := env.connect(t, writePAT)
+
+	res := call(t, s, "create_workflow", map[string]any{
+		"name": "daily", "schedule": "@daily",
+		"steps": []any{map[string]any{"kind": "pipeline", "ref_id": "p1"}, map[string]any{"kind": "transformation", "ref_id": "t1"}},
+	})
+	if res.IsError {
+		t.Fatalf("create_workflow: %s", text(res))
+	}
+	created := structured[workflowOut](t, res).Workflow
+	if created.ID != "w2" || !created.Enabled || len(created.Steps) != 2 || created.Steps[1].Kind != "transformation" {
+		t.Fatalf("created = %+v", created)
+	}
+
+	// Disabling keeps every other field: a read-modify-write.
+	res = call(t, s, "update_workflow", map[string]any{"id": "w2", "enabled": false})
+	if res.IsError {
+		t.Fatalf("update_workflow: %s", text(res))
+	}
+	upd := env.fake.updates[len(env.fake.updates)-1]
+	if upd.Enabled || upd.Name != "daily" || upd.Schedule != "@daily" || len(upd.Steps) != 2 {
+		t.Errorf("update request = %+v", upd)
+	}
+	// An explicit "" clears the schedule; steps replace the list.
+	res = call(t, s, "update_workflow", map[string]any{"id": "w2", "schedule": "", "steps": []any{map[string]any{"kind": "pipeline", "ref_id": "p1"}}})
+	if res.IsError {
+		t.Fatalf("update_workflow: %s", text(res))
+	}
+	upd = env.fake.updates[len(env.fake.updates)-1]
+	if upd.Schedule != "" || upd.Enabled || len(upd.Steps) != 1 {
+		t.Errorf("update request = %+v", upd)
+	}
+
+	run := structured[workflowRunOut](t, call(t, s, "trigger_workflow", map[string]any{"id": "w2"})).Run
+	if run.Status != "pending" || run.Trigger != "manual" {
+		t.Errorf("trigger_workflow run = %+v", run)
+	}
+
+	got := structured[getWorkflowOut](t, call(t, s, "get_workflow", map[string]any{"id": "w1"}))
+	if len(got.RecentRuns) != 1 || len(got.RecentRuns[0].StepRuns) != 2 || got.RecentRuns[0].StepRuns[1].Status != "skipped" {
+		t.Fatalf("get_workflow = %+v", got)
+	}
+	if strings.Contains(got.RecentRuns[0].StepRuns[0].ErrorMessage, "s3cret") {
+		t.Error("get_workflow leaked a step run's credential")
+	}
+
+	page := structured[listWorkflowRunsOut](t, call(t, s, "list_workflow_runs", map[string]any{"workflow_id": "w1"}))
+	if len(page.Runs) != 1 || page.NextPageToken != "page2" {
+		t.Fatalf("page 1 = %+v", page)
+	}
+	page = structured[listWorkflowRunsOut](t, call(t, s, "list_workflow_runs", map[string]any{"workflow_id": "w1", "page_token": page.NextPageToken}))
+	if len(page.Runs) != 1 || page.Runs[0].ID != "wr1" || page.NextPageToken != "" {
+		t.Fatalf("page 2 = %+v", page)
+	}
+
+	if res := call(t, s, "update_workflow", map[string]any{"id": "nope", "enabled": true}); !res.IsError || !strings.Contains(text(res), "not found") {
+		t.Errorf("update of a missing workflow: %s", text(res))
+	}
+}
+
+func TestMCP_WorkspaceStatus(t *testing.T) {
+	env := newTestEnv(t)
+	readPAT, _ := env.mintPAT(t, workspace.ScopeWorkspaceRead)
+	s := env.connect(t, readPAT)
+
+	res := call(t, s, "workspace_status", map[string]any{})
+	if res.IsError {
+		t.Fatalf("workspace_status: %s", text(res))
+	}
+	if raw := text(res); strings.Contains(raw, "s3cret") || strings.Contains(raw, "hunter2") {
+		t.Fatalf("workspace_status leaked a credential: %s", raw)
+	}
+	out := structured[workspaceStatusOut](t, res)
+	if len(out.Pipelines) != 2 || len(out.Transformations) != 1 || len(out.Workflows) != 1 || out.Now == "" {
+		t.Fatalf("status = %+v", out)
+	}
+	if p := out.Pipelines[0]; p.LastRunStatus != "failed" || !strings.Contains(p.LastError, "refused") || !strings.Contains(p.LastError, "[redacted]") {
+		t.Errorf("failed pipeline = %+v", p)
+	}
+	if w := out.Workflows[0]; !strings.HasPrefix(w.LastError, `step 1 (pipeline "orders") failed`) {
+		t.Errorf("failed workflow = %+v", w)
+	}
+	if out.Transformations[0].LastError != "" {
+		t.Errorf("a successful transformation carries an error: %+v", out.Transformations[0])
+	}
+	// Failed pipeline, never-run scheduled pipeline, failed workflow.
+	if len(out.Attention) != 3 || !strings.Contains(out.Attention[1], "never run") {
+		t.Errorf("attention = %q", out.Attention)
+	}
+	// Only failed items cost a get call.
+	if env.fake.called("GetTransformation") {
+		t.Error("a successful transformation was fetched")
 	}
 }
 
@@ -315,6 +443,10 @@ func TestMCP_AllReadToolsAnswer(t *testing.T) {
 		"list_repo_files":      {"repo": "transformations"},
 		"read_repo_file":       {"repo": "transformations", "path": "models/orders.sql"},
 		"list_notifications":   {},
+		"workspace_status":     {},
+		"list_workflows":       {},
+		"get_workflow":         {"id": "w1"},
+		"list_workflow_runs":   {"workflow_id": "w1"},
 	} {
 		if res := call(t, s, name, args); res.IsError || res.StructuredContent == nil {
 			t.Errorf("%s: IsError=%v %s", name, res.IsError, text(res))

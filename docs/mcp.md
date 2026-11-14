@@ -3,8 +3,9 @@
 `workspace-api` can serve the workspace over the
 [Model Context Protocol](https://modelcontextprotocol.io), so a data engineer's
 own agent — Claude Code, Cursor, any MCP client — can look at the lakehouse,
-run read-only SQL, check on pipelines and transformations, trigger runs, and
-edit the dbt and Rill repositories.
+run read-only SQL, find out what is broken or stale, check on pipelines,
+transformations and [workflows](./workflows.md), trigger runs, build workflows,
+and edit the dbt and Rill repositories.
 
 It is a **proof of concept**, off by default. Read [the threat model](#threat-model)
 before turning it on.
@@ -19,10 +20,14 @@ A workspace, as the tools describe it to the agent:
 - **Tables** are queried with DuckDB SQL through the workspace's query engine.
 - **Transformations** are dbt projects in the workspace's `transformations` git
   repository; a run builds models (more Iceberg tables).
+- **Workflows** chain existing pipelines and transformations into one linear,
+  scheduled run that stops at the first failed step — see
+  [workflows.md](./workflows.md) for the model.
 - **Dashboards** are Rill projects in the workspace's `rill` git repository.
 
 | Tool | Scope | What it does |
 | --- | --- | --- |
+| `workspace_status` | read | One-call overview: every pipeline, transformation and workflow with enabled, schedule, last run status/time and the failed run's error (300 chars), plus an `attention` list (failed last runs; enabled schedules that never ran) and the server's `now`. |
 | `list_tables` | read | Every table, as namespace + name. |
 | `describe_table` | read | One table's columns and types. |
 | `run_query` | read | One read-only SQL statement; at most 1000 rows / ~256 KB. See [the SQL guard](#the-sql-guard). |
@@ -30,11 +35,17 @@ A workspace, as the tools describe it to the agent:
 | `get_pipeline` | read | One pipeline's definition (source config with secrets redacted) and recent runs with errors. |
 | `list_transformations` | read | Transformations with schedule, trigger and last run. |
 | `get_transformation` | read | One transformation and its recent runs: commit, model/test counts, errors. |
+| `list_workflows` | read | Workflows with their steps, schedule, enabled flag and last run. |
+| `get_workflow` | read | One workflow and its 10 most recent runs, each with step runs (status, error, the pipeline/transformation run produced). |
+| `list_workflow_runs` | read | A workflow's older runs, paginated (`page_size` ≤ 100, `page_token`). |
 | `list_repo_files` | read | Files in `transformations` or `rill`. |
 | `read_repo_file` | read | One file's content and blob sha (files up to 256 KB). |
 | `list_notifications` | read | Recent notifications and the unread count. |
 | `trigger_pipeline` | write | Queue a pipeline run now. |
 | `trigger_transformation` | write | Queue a transformation run now. |
+| `trigger_workflow` | write | Queue a workflow run now (an already-pending run is returned instead). |
+| `create_workflow` | write | Create a workflow from steps that reference existing pipeline/transformation ids. |
+| `update_workflow` | write | Change name, description, schedule, enabled flag or the whole step list; omitted fields are kept. |
 | `write_repo_file` | write | Commit one file to `transformations` or `rill` (pass the sha from `read_repo_file` to update). |
 
 Every tool calls the same API handlers the Console calls, as the person the
@@ -44,6 +55,16 @@ reachable from MCP at all.
 
 A token without the `workspace:write` scope does not see the write tools in
 `tools/list`, and calling one fails.
+
+There is deliberately **no delete tool** — not for workflows, pipelines or
+transformations. An agent can disable a workflow (`update_workflow` with
+`enabled: false`); deleting it, and its run history, stays a person's act in
+the Console.
+
+`workspace_status` is built from the list handlers plus one get per item whose
+last run failed (at most 50 per call), so it adds no queries of its own. It does
+not evaluate cron: an agent judges staleness from `last_run_at`, `schedule` and
+`now`.
 
 ## Enabling it
 

@@ -52,7 +52,7 @@ Iceberg catalog, and it keeps working with no vendor service behind it.
 | `core/` | Shared plain types, error sentinels, and the caller-identity/auth-interceptor primitives both planes authenticate with. |
 | `proto/` | Service definitions plus their generated Go stubs. |
 | `postgres/` | The stores and the schema migrations. |
-| `docs/` | Feature notes that do not fit this README (e.g. [workflows](./docs/workflows.md)). |
+| `docs/` | Feature notes that do not fit this README ([workflows](./docs/workflows.md), [MCP](./docs/mcp.md)). |
 | `telemetry/` | OpenTelemetry providers and the helpers adapters use to instrument outbound calls. |
 | `casdoor/`, `gitea/`, `lakekeeper/`, `duckflight/`, `objstore/`, `llm/`, `oauthgoogle/`, `crypto/`, `demo/` | Adapters implementing the ports. |
 

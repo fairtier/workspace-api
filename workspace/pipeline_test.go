@@ -23,7 +23,7 @@ type mockPipelineRepo struct {
 	createPipelineRunFn       func(ctx context.Context, run *workspace.PipelineRun) error
 	updatePipelineRunFn       func(ctx context.Context, run *workspace.PipelineRun) error
 	listRecentRunsFn          func(ctx context.Context, pipelineID workspace.PipelineID, limit int) ([]workspace.PipelineRun, error)
-	getPendingRunFn           func(ctx context.Context, pipelineID workspace.PipelineID) (*workspace.PipelineRun, error)
+	getActiveRunFn            func(ctx context.Context, pipelineID workspace.PipelineID) (*workspace.PipelineRun, error)
 }
 
 func (m *mockPipelineRepo) CreatePipeline(ctx context.Context, p *workspace.Pipeline) error {
@@ -58,11 +58,11 @@ func (m *mockPipelineRepo) UpdatePipelineRun(ctx context.Context, run *workspace
 	return m.updatePipelineRunFn(ctx, run)
 }
 
-func (m *mockPipelineRepo) GetPendingRun(ctx context.Context, pipelineID workspace.PipelineID) (*workspace.PipelineRun, error) {
-	if m.getPendingRunFn == nil {
+func (m *mockPipelineRepo) GetActiveRun(ctx context.Context, pipelineID workspace.PipelineID) (*workspace.PipelineRun, error) {
+	if m.getActiveRunFn == nil {
 		return nil, nil
 	}
-	return m.getPendingRunFn(ctx, pipelineID)
+	return m.getActiveRunFn(ctx, pipelineID)
 }
 
 func (m *mockPipelineRepo) ListRecentRuns(ctx context.Context, pipelineID workspace.PipelineID, limit int) ([]workspace.PipelineRun, error) {
@@ -498,7 +498,7 @@ func TestPipelineService_TriggerPipeline(t *testing.T) {
 				getPipelineFn: func(context.Context, workspace.PipelineID) (*workspace.Pipeline, error) {
 					return &workspace.Pipeline{ID: "pipe-1", CustomerSlug: "acme"}, nil
 				},
-				getPendingRunFn: func(context.Context, workspace.PipelineID) (*workspace.PipelineRun, error) {
+				getActiveRunFn: func(context.Context, workspace.PipelineID) (*workspace.PipelineRun, error) {
 					return queued, nil
 				},
 				createPipelineRunFn: func(context.Context, *workspace.PipelineRun) error {
@@ -518,6 +518,43 @@ func TestPipelineService_TriggerPipeline(t *testing.T) {
 		}
 		if createCalled {
 			t.Error("CreatePipelineRun should NOT be called when a run is already pending")
+		}
+	})
+
+	t.Run("run now during a run returns the running run instead of queueing a duplicate", func(t *testing.T) {
+		createCalled := false
+		running := &workspace.PipelineRun{ID: "run-live", PipelineID: "pipe-1", Status: "running"}
+
+		svc := &workspace.PipelineService{
+			Workspaces: &mockCustomerReader{
+				getByUserIDFn: func(context.Context, core.UserID) (*workspace.Workspace, error) {
+					return &workspace.Workspace{Slug: "acme"}, nil
+				},
+			},
+			Pipelines: &mockPipelineRepo{
+				getPipelineFn: func(context.Context, workspace.PipelineID) (*workspace.Pipeline, error) {
+					return &workspace.Pipeline{ID: "pipe-1", CustomerSlug: "acme", Enabled: true}, nil
+				},
+				getActiveRunFn: func(context.Context, workspace.PipelineID) (*workspace.PipelineRun, error) {
+					return running, nil
+				},
+				createPipelineRunFn: func(context.Context, *workspace.PipelineRun) error {
+					createCalled = true
+					return nil
+				},
+			},
+			Logger: slog.Default(),
+		}
+
+		run, err := svc.TriggerPipeline(context.Background(), "user-1", "pipe-1")
+		if err != nil {
+			t.Fatalf("TriggerPipeline() error = %v", err)
+		}
+		if run.ID != "run-live" || run.Status != "running" {
+			t.Errorf("run = %+v, want the in-flight run", run)
+		}
+		if createCalled {
+			t.Error("CreatePipelineRun must not be called while a run is executing")
 		}
 	})
 

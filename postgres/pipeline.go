@@ -273,16 +273,18 @@ func (r *Repository) CreatePipelineRun(ctx context.Context, run *workspace.Pipel
 	return nil
 }
 
-// GetPendingRun returns the oldest run still in "pending" for a pipeline, or
-// (nil, nil) when none is queued. Used to keep manual triggers idempotent.
-func (r *Repository) GetPendingRun(ctx context.Context, pipelineID workspace.PipelineID) (*workspace.PipelineRun, error) {
+// GetActiveRun returns the run a manual trigger should answer with instead of
+// queueing another: the oldest "pending" run, else the oldest "running" one,
+// or (nil, nil) when the pipeline is idle. Used to keep manual triggers
+// idempotent.
+func (r *Repository) GetActiveRun(ctx context.Context, pipelineID workspace.PipelineID) (*workspace.PipelineRun, error) {
 	var run workspace.PipelineRun
 	var startedAt, completedAt sql.NullTime
 	err := r.DB.QueryRowContext(ctx,
 		`SELECT id, pipeline_id, status, started_at, completed_at, rows_loaded, error_message, created_at
 		 FROM pipeline_runs
-		 WHERE pipeline_id = $1 AND status = 'pending'
-		 ORDER BY created_at ASC
+		 WHERE pipeline_id = $1 AND status IN ('pending', 'running')
+		 ORDER BY (status = 'pending') DESC, created_at ASC
 		 LIMIT 1`,
 		pipelineID,
 	).Scan(&run.ID, &run.PipelineID, &run.Status, &startedAt, &completedAt, &run.RowsLoaded, &run.ErrorMessage, &run.CreatedAt)
@@ -290,7 +292,7 @@ func (r *Repository) GetPendingRun(ctx context.Context, pipelineID workspace.Pip
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("postgres: get pending run: %w", err)
+		return nil, fmt.Errorf("postgres: get active run: %w", err)
 	}
 	if startedAt.Valid {
 		run.StartedAt = &startedAt.Time

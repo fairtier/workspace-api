@@ -322,7 +322,8 @@ func run() error {
 	// answers 501, GetOAuthClient reports flow_available=false.
 	googleOAuth := buildGoogleOAuth(logger)
 
-	queryServer := &server.QueryServer{Workspaces: resolver, Executor: duckflight.NewClient()}
+	duckflightClient := duckflight.NewClient()
+	queryServer := &server.QueryServer{Workspaces: resolver, Executor: duckflightClient}
 	pipelineAssistServer, assistServer := buildAssistServers(resolver, logger)
 	// The SQL and error-diagnosis surfaces need more than a caller: the
 	// tenant's schema (through the same QueryServer the editor uses) and the
@@ -341,15 +342,21 @@ func run() error {
 	// The MCP endpoint (off unless MCP_ENABLED=true): a person's own agent
 	// calls the same handlers as the Console, authenticated by an access
 	// token or a sign-in token.
-	accessTokenServer, mountMCP := buildMCP(loadMCPConfig(os.Getenv, ws), logger, ws, resolver, repo, userAuth,
+	// Its SQL tools get their own QueryServer, which runs every statement in
+	// a DuckFlight read-only session; the Console's stays read-write.
+	mcpCfg := loadMCPConfig(os.Getenv, ws)
+	mcpQuery := buildMCPQuery(mcpCfg, logger, resolver, duckflightClient)
+	accessTokenServer, mountMCP := buildMCP(mcpCfg, logger, ws, resolver, repo, userAuth,
 		mcpserver.Backends{
-			Query:           queryServer,
+			Query:           mcpQuery,
 			Pipelines:       pipelineServer,
 			Transformations: transformationServer,
 			Workflows:       workflowServer,
 			Repos:           boxRepoServer,
 			Notifications:   notificationServer,
+			SQLSafety:       sqlSafety(mcpQuery),
 		}, corsAllowedOrigins())
+	go logAgentSQLMode(ctx, mcpCfg, logger, mcpQuery, ws)
 
 	mux := http.NewServeMux()
 	server.RegisterWorkspacePlane(mux, server.WorkspacePlaneServers{
@@ -389,8 +396,9 @@ func run() error {
 	// resolver/grants, so passing them unconditionally is safe either way.
 	server.RegisterWorkspacePlainHTTP(mux, logger, userAuth, db, resolver, repo, repo, fileDropSvc, googleOAuth, firstCORSOrigin())
 	// The pre-authentication discovery document.
-	server.RegisterWorkspaceBootstrap(mux, logger,
-		server.BootstrapFromWorkspace(ws, consoleClientID(logger), fileDropSvc != nil, googleOAuth != nil))
+	bootstrap := server.BootstrapFromWorkspace(ws, consoleClientID(logger), fileDropSvc != nil, googleOAuth != nil)
+	mcpCfg.advertise(bootstrap)
+	server.RegisterWorkspaceBootstrap(mux, logger, bootstrap)
 
 	// Internal mux (:8081): the local dlt-worker's poll + run reporting.
 	// The worker authenticates with a token from the box's own Casdoor;
@@ -570,6 +578,9 @@ func loadStaticWorkspace() (*workspace.Workspace, error) {
 		// because nothing advertises them at all; see Workspace.BoxGiteaURL.
 		GiteaURL:    os.Getenv("WORKSPACE_GITEA_URL"),
 		SnapshotURL: os.Getenv("WORKSPACE_RILL_SNAPSHOT_URL"),
+
+		// Optional: agent (MCP) SQL runs with it when set; see docs/mcp.md.
+		DuckFlightReadOnlyAuthToken: os.Getenv("WORKSPACE_DUCKFLIGHT_READONLY_AUTH_TOKEN"),
 	}, nil
 }
 

@@ -27,7 +27,7 @@ const runQueryDesc = `Run one read-only SQL query against the workspace's lakeho
 
 The engine is DuckDB (DuckDB SQL dialect: e.g. date_trunc, strftime, list/struct types, QUALIFY, SUMMARIZE, FROM-first syntax). Address tables as <namespace>.<table> as list_tables reports them.
 
-Read-only, enforced before the query runs: exactly one statement, starting with SELECT, WITH, FROM, VALUES, TABLE, DESCRIBE, SHOW, SUMMARIZE or EXPLAIN. Statements that write or change engine state are refused, as are file and URL readers (read_csv, read_parquet, read_text, glob, 'path' in FROM, ...): query tables only. If a column is named like a SQL keyword (load, set, use, ...), double-quote it.
+Read-only, checked before the query runs: exactly one statement, starting with SELECT, WITH, FROM, VALUES, TABLE, DESCRIBE, SHOW, SUMMARIZE or EXPLAIN. Statements that write or change engine state are refused, as are file and URL readers (read_csv, read_parquet, read_text, glob, 'path' in FROM, ...): query tables only. If a column is named like a SQL keyword (load, set, use, ...), double-quote it. Where the query engine has read-only sessions, it also runs the query in one and may refuse a statement itself (permission_denied, with the reason); workspace_status's agent_sql says which applies.
 
 Results are capped at max_rows rows (default 200, at most 1000) and about 256 KB in total; truncated is true when rows were cut. Aggregate in SQL rather than fetching raw rows. Queries time out after about 60 seconds.`
 

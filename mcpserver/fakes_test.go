@@ -35,6 +35,10 @@ type fakeWorkspace struct {
 	// every UpdateWorkflow request as received.
 	workflows map[string]*workflowv1.Workflow
 	updates   []*workflowv1.UpdateWorkflowRequest
+	// queryErr, when set, is what ExecuteQuery answers; safety is what
+	// SQLSafety reports (zero = the backend reports nothing).
+	queryErr error
+	safety   SQLSafety
 }
 
 func (f *fakeWorkspace) record(ctx context.Context, call string) error {
@@ -61,7 +65,17 @@ func (f *fakeWorkspace) called(call string) bool {
 }
 
 func (f *fakeWorkspace) backends() Backends {
-	return Backends{Query: f, Pipelines: f, Transformations: f, Workflows: f, Repos: f, Notifications: f}
+	return Backends{
+		Query: f, Pipelines: f, Transformations: f, Workflows: f, Repos: f, Notifications: f,
+		SQLSafety: func(context.Context) SQLSafety {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.safety.EnforcedBy == "" {
+				return SQLSafety{EnforcedBy: "unknown"}
+			}
+			return f.safety
+		},
+	}
 }
 
 func (f *fakeWorkspace) ExecuteQuery(ctx context.Context, req *connect.Request[queryv1.ExecuteQueryRequest]) (*connect.Response[queryv1.ExecuteQueryResponse], error) {
@@ -70,7 +84,11 @@ func (f *fakeWorkspace) ExecuteQuery(ctx context.Context, req *connect.Request[q
 	}
 	f.mu.Lock()
 	f.queries = append(f.queries, req.Msg.Sql)
+	queryErr := f.queryErr
 	f.mu.Unlock()
+	if queryErr != nil {
+		return nil, queryErr
+	}
 	return connect.NewResponse(&queryv1.ExecuteQueryResponse{
 		Columns:  []*queryv1.ColumnInfo{{Name: "n", Type: "BIGINT"}, {Name: "s", Type: "VARCHAR"}},
 		Rows:     []string{`[1,"a"]`, `[2,null]`},

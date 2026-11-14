@@ -299,6 +299,14 @@ configuration slip turns agent SQL off instead of quietly widening it. The
 default stays `false` only while the proof of concept runs against
 DuckFlights that predate read-only sessions.
 
+`go test -tags duckflight_e2e -run E2E -v ./duckflight/` checks all of this
+against real DuckFlight binaries (endpoints and tokens from the env variables
+named in `duckflight/readonly_e2e_test.go`): engine refusals of writes, file
+reads, `SET` and `ATTACH` in both engine modes, and detection of a DuckFlight
+without the read-only instance and of one from before read-only sessions —
+including that the latter really does run a header-marked write read-write
+when the check is skipped.
+
 The Console's SQL editor is **not** affected: `QueryService.ExecuteQuery`
 keeps the read-write path (see the follow-ups).
 

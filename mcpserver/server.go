@@ -207,6 +207,7 @@ func newMCPServer(b Backends, opts Options, write bool) *mcp.Server {
 		}
 		t.register(s, b)
 	}
+	registerPrompts(s, write)
 	return s
 }
 

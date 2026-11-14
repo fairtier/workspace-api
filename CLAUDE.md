@@ -8,7 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 against a single data workspace (pipelines, transformations, workflows,
 queries, warehouses, snapshots, notifications, repository editing).
 Feature notes live in `docs/` (e.g. `docs/workflows.md` for the workflow
-model and the worker contract). It is designed to be
+model, the workflow file format and the worker contract). Pipelines,
+transformations and workflows are all mirrored to the box's git repos and
+adopted back (`workspace/*mirror*.go`); workflow files name steps by the
+targets' file slugs, never ids — keep the mirror and the API on the one
+validator (`ValidateWorkflowDefinition`). It is designed to be
 self-hostable — see [README.md](./README.md) for the layout and configuration.
 
 An optional MCP endpoint (`mcpserver/`, `MCP_ENABLED`) exposes the same

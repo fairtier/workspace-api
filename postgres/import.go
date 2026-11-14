@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -59,6 +60,26 @@ func (r *Repository) ImportTransformation(ctx context.Context, t *workspace.Tran
 		return fmt.Errorf("postgres: import transformation: %w", err)
 	}
 	return nil
+}
+
+// ImportWorkflow inserts a workflow and its steps with the workflow's id
+// preserved — a definition file adopted from the repo keeps the id it
+// carries, or the one the adopt pass minted for a file written without one.
+func (r *Repository) ImportWorkflow(ctx context.Context, w *workspace.Workflow) error {
+	return r.inTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO workflows (id, customer_slug, name, description, schedule, enabled, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			w.ID, w.CustomerSlug, w.Name, w.Description, w.Schedule, w.Enabled, w.CreatedAt, w.UpdatedAt,
+		)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return workspace.ErrWorkflowAlreadyExists
+			}
+			return fmt.Errorf("postgres: import workflow: %w", err)
+		}
+		return insertWorkflowSteps(ctx, tx, w.ID, w.Steps)
+	})
 }
 
 // emptyJSONObject defaults absent credentials to "{}" — the credential

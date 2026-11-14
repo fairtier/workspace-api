@@ -12,7 +12,7 @@ import (
 	notificationv1 "github.com/fairtier/workspace-api/proto/notification/v1"
 )
 
-const reposNote = `The workspace has two editable git repositories: "transformations" (the dbt project: models/*.sql, schema .yml files, dbt_project.yml) and "rill" (Rill dashboards: sources, models and dashboard .yaml files; present only when Rill is enabled).`
+const reposNote = `The workspace has two editable git repositories: "transformations" (the dbt project: models/*.sql, schema .yml files, dbt_project.yml; plus the workspace's own definition files, transformations/<name>.yaml and workflows/<name>.yaml, which the workspace renders and adopts edits from) and "rill" (Rill dashboards: sources, models and dashboard .yaml files; present only when Rill is enabled). To create or change a workflow prefer create_workflow/update_workflow: they validate immediately, while an edited workflows/*.yaml file is only picked up on the next sweep (minutes) and a mistake shows up as a notification.`
 
 const listRepoFilesDesc = `List the files in one of the workspace's git repositories, with each file's blob sha. ` + reposNote + ` Dotfiles, platform-managed files and anything that looks like a secrets file are not listed.`
 

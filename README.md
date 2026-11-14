@@ -9,7 +9,9 @@ services that run against a single data workspace:
   every run pinned to the commit it ran from.
 - **Workflows** — a named, linear sequence of pipeline and transformation
   steps on one schedule, stopping at the first failure, with a recorded run
-  history. See [docs/workflows.md](./docs/workflows.md).
+  history; rendered to `workflows/<name>.yaml` in the transformations
+  repository, and edits made there are adopted back. See
+  [docs/workflows.md](./docs/workflows.md).
 - **Queries** — SQL over the warehouse via Arrow Flight SQL.
 - **Warehouses & catalog users** — Iceberg warehouse configuration and
   [Lakekeeper](https://lakekeeper.io) principals.
@@ -110,7 +112,7 @@ for co-located workers and should not be published.
 | `PIPELINE_RUN_TIMEOUT_SECONDS`, `PIPELINE_MAX_RETRIES`, `PIPELINE_RETRY_BASE_DELAY`, `PIPELINE_SUBPROCESS` | | The pipeline worker's own run limits, read under the worker's names and with its defaults (6 hours per attempt, 2 retries, 30 s doubling backoff). Give both processes the same values: the orphaned-run sweep fails a run only once it has been `running` longer than every attempt plus the backoff plus an hour's grace (19 h 1 min 30 s by default), so it never fails a run the worker is still allowed to finish. A worker with no limit (`PIPELINE_RUN_TIMEOUT_SECONDS=0`, or `PIPELINE_SUBPROCESS=0`) turns the sweep off. |
 | `PIPELINE_RUN_STUCK_TIMEOUT` | | Lengthens that sweep's timeout (a Go duration, e.g. `30h`). A value shorter than the worker's longest legitimate run is raised to it, with a warning. `PIPELINE_RUN_STUCK_SWEEP_INTERVAL` (default `5m`) sets how often it looks. |
 | `WORKFLOW_RUN_STUCK_TIMEOUT` | | Lengthens how long one workflow **step** may stay running before the workflow stuck-run sweep fails the run (default: the same worker-derived limit as above; shorter values are raised, with a warning). A run with no step running is failed after 15 minutes plus one `WORKFLOW_RUN_STUCK_SWEEP_INTERVAL` (default `5m`) without a step transition. See [docs/workflows.md](./docs/workflows.md).
-| `WORKSPACE_IMPORT_FROM_REPO` | | On by default: definitions already in the repositories are loaded into an empty database on the first sweep, keeping their ids. Set it to `off` to start with whatever the database holds instead. |
+| `WORKSPACE_IMPORT_FROM_REPO` | | On by default: definitions already in the repositories are loaded into an empty database on the first sweep, keeping their ids, and workflow files added to or removed from the repository create or delete the workflow. Set it to `off` to start with whatever the database holds instead (then only edits to rendered workflow files are adopted). |
 | `GOOGLE_OAUTH_REDIRECT_URL`, `GOOGLE_OAUTH_STATE_SECRET` | | Enable the Google Sheets "Sign in with Google" source flow. The redirect URL must point at this deployment's `/oauth/google/callback`; the state secret signs the consent round-trip and must be its own random value. The OAuth *application* is not configured here — each workspace registers its own client in its own Google Cloud project and stores it through `OAuthClientService`, so no operator holds a client secret that every workspace's pipelines depend on. |
 | `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` (plus `ANTHROPIC_MODEL` / `DEEPSEEK_MODEL`) | | Enables the optional AI drafting assists with your own provider key. Without any AI backend those endpoints stay unavailable. |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | | AI drafting against any OpenAI-compatible chat-completions endpoint (OpenAI, Groq, a local Ollama/vLLM). All three are required; set `LLM_API_KEY=none` for endpoints without auth. An explicit `DEEPSEEK_API_KEY`/`ANTHROPIC_API_KEY` takes precedence. |

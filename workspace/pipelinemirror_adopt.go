@@ -257,8 +257,11 @@ type WorkspaceLister interface {
 type AdoptSweeper struct {
 	Mirror          *PipelineMirror
 	Transformations *TransformationMirror
-	Workspaces      WorkspaceLister
-	Logger          *slog.Logger
+	// Workflows runs last: a workflow step resolves against the pipelines
+	// and transformations the two passes before it may just have imported.
+	Workflows  *WorkflowMirror
+	Workspaces WorkspaceLister
+	Logger     *slog.Logger
 }
 
 // Run sweeps immediately, then on every tick until ctx is done — same shape
@@ -293,15 +296,30 @@ func (s *AdoptSweeper) sweep(ctx context.Context) {
 	}
 	span.SetAttributes(attribute.Int("workspace.count", len(slugs)))
 	for _, slug := range slugs {
-		if s.Mirror != nil {
-			if err := s.Mirror.AdoptCustomer(ctx, slug); err != nil {
-				s.Logger.WarnContext(ctx, "adopt sweep", "customer", slug, "err", err)
-			}
-		}
-		if s.Transformations != nil {
-			if err := s.Transformations.AdoptCustomer(ctx, slug); err != nil {
-				s.Logger.WarnContext(ctx, "transformation adopt sweep", "customer", slug, "err", err)
-			}
+		s.adoptSlug(ctx, slug)
+	}
+}
+
+// adoptSlug runs every wired adopt pass for one workspace, in dependency
+// order: pipelines, transformations, then the workflows that reference both.
+func (s *AdoptSweeper) adoptSlug(ctx context.Context, slug string) {
+	type pass struct {
+		name  string
+		adopt func(context.Context, string) error
+	}
+	var passes []pass
+	if s.Mirror != nil {
+		passes = append(passes, pass{"adopt sweep", s.Mirror.AdoptCustomer})
+	}
+	if s.Transformations != nil {
+		passes = append(passes, pass{"transformation adopt sweep", s.Transformations.AdoptCustomer})
+	}
+	if s.Workflows != nil {
+		passes = append(passes, pass{"workflow adopt sweep", s.Workflows.AdoptCustomer})
+	}
+	for _, p := range passes {
+		if err := p.adopt(ctx, slug); err != nil {
+			s.Logger.WarnContext(ctx, p.name, "customer", slug, "err", err)
 		}
 	}
 }

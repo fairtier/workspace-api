@@ -50,8 +50,9 @@ const MaxWorkflowSteps = 20
 // existing pipeline or transformation, with at most one cron schedule. Steps
 // run one after the other and the first failure stops the run.
 //
-// Unlike pipelines and transformations, a workflow is not rendered to the
-// box's git repositories: the row is the only copy.
+// Like pipelines and transformations, a workflow is rendered to the box's
+// git repositories (workflows/<slug>.yaml in the transformations repo, see
+// WorkflowMirror) and edits made there are adopted back.
 type Workflow struct {
 	ID           WorkflowID
 	CustomerSlug string
@@ -255,7 +256,51 @@ type WorkflowService struct {
 	// Notifications, when set, raises an in-app notification when a run
 	// becomes failed. Optional (nil = no notifications).
 	Notifications Notifier
-	Logger        *slog.Logger
+	// Mirror, when set, renders workflows into the box's transformations
+	// repo on the request path: create, update, enable/disable and delete
+	// converge the repo synchronously, and a failed commit hard-fails the
+	// save with the row compensated back — TransformationService.Mirror's
+	// contract.
+	Mirror WorkflowMirrorer
+	// Users resolves the acting user so mirrored commits carry them as git
+	// author. Optional.
+	Users  UserReader
+	Logger *slog.Logger
+}
+
+// commitMirror converges the box repo on the request path. deleted, when
+// set, is the workflow the caller just deleted.
+func (s *WorkflowService) commitMirror(ctx context.Context, callerID core.UserID, customerSlug string, deleted *Workflow) error {
+	if s.Mirror == nil {
+		return nil
+	}
+	author := resolveCommitAuthor(ctx, s.Users, callerID)
+	ctx, cancel := context.WithTimeout(ctx, gitPrimarySyncTimeout)
+	defer cancel()
+	var err error
+	if deleted != nil {
+		err = s.Mirror.SyncCustomerAfterDelete(ctx, customerSlug, author, deleted)
+	} else {
+		err = s.Mirror.SyncCustomer(ctx, customerSlug, author)
+	}
+	if err != nil {
+		return fmt.Errorf("commit workflow definitions to the box repo: %w", err)
+	}
+	return nil
+}
+
+// commitOrCompensate is the git-first save tail: converge the repo and, on
+// failure, roll the row back so the failed save leaves no state. A failed
+// compensation is logged, not returned.
+func (s *WorkflowService) commitOrCompensate(ctx context.Context, callerID core.UserID, customerSlug, op string, id WorkflowID, deleted *Workflow, compensate func(context.Context) error) error {
+	err := s.commitMirror(ctx, callerID, customerSlug, deleted)
+	if err == nil {
+		return nil
+	}
+	if compErr := compensate(ctx); compErr != nil && s.Logger != nil {
+		s.Logger.ErrorContext(ctx, "git-first workflow "+op+": failed to compensate row after mirror failure; converge will heal", "workflow_id", id, "error", compErr)
+	}
+	return err
 }
 
 // recentWorkflowRuns is how many runs GetWorkflow returns.
@@ -301,6 +346,11 @@ func (s *WorkflowService) CreateWorkflow(ctx context.Context, callerID core.User
 
 	if err := s.Workflows.CreateWorkflow(ctx, w); err != nil {
 		return nil, fmt.Errorf("create workflow: %w", err)
+	}
+	if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "create", w.ID, nil, func(ctx context.Context) error {
+		return s.Workflows.DeleteWorkflow(ctx, w.ID)
+	}); err != nil {
+		return nil, err
 	}
 	return s.reload(ctx, w)
 }
@@ -369,18 +419,28 @@ func (s *WorkflowService) UpdateWorkflow(ctx context.Context, callerID core.User
 	if err := s.Workflows.UpdateWorkflow(ctx, w); err != nil {
 		return nil, fmt.Errorf("update workflow: %w", err)
 	}
+	if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "update", w.ID, nil, func(ctx context.Context) error {
+		return s.Workflows.UpdateWorkflow(ctx, existing)
+	}); err != nil {
+		return nil, err
+	}
 	return s.reload(ctx, w)
 }
 
 // SetWorkflowEnabled turns a workflow's schedule on or off, verifying
 // ownership, without touching its definition.
 func (s *WorkflowService) SetWorkflowEnabled(ctx context.Context, callerID core.UserID, id WorkflowID, enabled bool) (*Workflow, error) {
-	_, w, err := s.ownedWorkflow(ctx, callerID, id)
+	ws, w, err := s.ownedWorkflow(ctx, callerID, id)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.Workflows.SetWorkflowEnabled(ctx, id, enabled, time.Now()); err != nil {
 		return nil, fmt.Errorf("set workflow enabled: %w", err)
+	}
+	if err := s.commitOrCompensate(ctx, callerID, ws.Slug, "set enabled", id, nil, func(ctx context.Context) error {
+		return s.Workflows.SetWorkflowEnabled(ctx, id, w.Enabled, w.UpdatedAt)
+	}); err != nil {
+		return nil, err
 	}
 	return s.reload(ctx, w)
 }
@@ -388,13 +448,23 @@ func (s *WorkflowService) SetWorkflowEnabled(ctx context.Context, callerID core.
 // DeleteWorkflow deletes a workflow and its run history, verifying
 // ownership.
 func (s *WorkflowService) DeleteWorkflow(ctx context.Context, callerID core.UserID, id WorkflowID) error {
-	if _, _, err := s.ownedWorkflow(ctx, callerID, id); err != nil {
+	ws, existing, err := s.ownedWorkflow(ctx, callerID, id)
+	if err != nil {
 		return err
 	}
 	if err := s.Workflows.DeleteWorkflow(ctx, id); err != nil {
 		return fmt.Errorf("delete workflow: %w", err)
 	}
-	return nil
+	// Compensation re-inserts the definition; the run history is already
+	// gone (FK cascade), the same loss as a successful delete. The id is kept
+	// when the store can import, so the file the failed commit left behind
+	// still names this workflow.
+	return s.commitOrCompensate(ctx, callerID, ws.Slug, "delete", id, existing, func(ctx context.Context) error {
+		if imp, ok := s.Workflows.(WorkflowImporter); ok {
+			return imp.ImportWorkflow(ctx, existing)
+		}
+		return s.Workflows.CreateWorkflow(ctx, existing)
+	})
 }
 
 // TriggerWorkflow queues a "pending" manual run, verifying ownership. The

@@ -13,6 +13,10 @@ Service: `workflow.v1.WorkflowService` ([`proto/workflow.proto`](../proto/workfl
 An agent can list, inspect, create, change and trigger workflows over the MCP
 endpoint (no delete) — see [mcp.md](./mcp.md).
 
+Like pipelines and transformations, every workflow is also a file in the
+workspace's git repository, and edits made there are adopted back — see
+[Workflows as files](#workflows-as-files).
+
 ## Model
 
 | Table | Holds |
@@ -51,7 +55,8 @@ characters, the failed step's error before the run's) and
 which step failed without a call of its own.
 
 **Deleting a referenced pipeline or transformation removes the step** (FK
-`ON DELETE CASCADE`) rather than being refused. Deletions also arrive from
+`ON DELETE CASCADE`) rather than being refused, and the workflow's file is
+re-rendered without it. Deletions also arrive from
 unattended paths — a definition file removed from the repository and adopted,
 the demo teardown — where a refusal would wedge the sweep. It matches what
 `trigger_after_pipeline_id` does (`SET NULL`). Run history is unaffected:
@@ -65,6 +70,90 @@ Authorization mirrors `TransformationService` method for method: user RPCs
 need an authenticated caller and act only on their workspace (another
 workspace's workflow is `NotFound`); worker RPCs are served on the internal
 port only, with a tenant-bound service token.
+
+## Workflows as files
+
+Every workflow is rendered to `workflows/<slug>.yaml` in the box's
+**`transformations`** repository, next to the `transformations/<slug>.yaml`
+execution configs. That repository and not `pipelines`, because it is the one
+a person — and an agent, through `write_repo_file` — may edit: `pipelines`
+is platform-rendered and not editable from the Console or MCP. The dbt project
+around the directory is never touched; dbt reads only its own paths.
+
+```yaml
+# Rendered by the FairTier Console — a Console save overwrites this file.
+id: 3f2a9c1e-7b4d-4e8a-9c61-2d5b8e0f4a17
+name: Nightly
+description: Load orders and customers, then rebuild the marts.
+schedule: 0 2 * * *
+enabled: true
+steps:
+    - pipeline: orders
+    - pipeline: customers
+    - transformation: nightly-marts
+```
+
+| Key | Meaning |
+| --- | --- |
+| `id` | The workflow's identity, which the file name is not (it follows the name). **Leave it out** of a new hand-written file: one is assigned. Never copy it into a second file. |
+| `name` | Required, unique in the workspace. The file name is derived from it (lowercased, non-alphanumerics → `-`; names that slug alike get an `-<id[:8]>` suffix). |
+| `description`, `schedule` | As in the API; `schedule` is a five-field UTC cron expression or absent (manual only). |
+| `enabled` | Defaults to `true` when absent, as `CreateWorkflow` does. |
+| `steps` | 1–20 entries in run order, each **exactly one** of `pipeline: <key>` or `transformation: <key>`. |
+
+A step names its target by the target's **file slug**: the file name of
+`pipelines/<slug>.yaml` or `transformations/<slug>.yaml` without `.yaml`
+(a pipeline named "Orders EU" is `orders-eu`). That is the key a person can
+read off the repositories; ids stay in the API and the database. A target's
+id is accepted too, so a file keeps working if a target is renamed under it,
+but the mirror always writes slugs.
+
+**What the adopt sweep does** (every `PIPELINE_ADOPT_SWEEP_INTERVAL`, after
+the pipeline and transformation passes so a step resolves against what they
+just imported):
+
+- **An edit** to a rendered file is parsed strictly (an unknown key such as
+  `pipline:` is an error, not a dropped step), its keys resolved, and the
+  result checked by the **same validator as the API**: 1–20 steps, no target
+  twice, every target in this workspace, five-field cron only. Valid → the
+  workflow takes it ("Workflow updated from your repo"); anything else is
+  **refused**: the row is left alone and one notification says why ("step 2
+  names pipeline "ordrs", which does not exist in this workspace …"), once per
+  commit.
+- **A new file** (no id, or an id this database does not know) creates the
+  workflow, keeping the id when there is one. A file that cannot be taken is
+  left in place and refused with a notification.
+- **A moved file** (a file elsewhere carries the id of a workflow whose
+  rendered file is gone) is a rename: adopted as an edit, not a delete plus a
+  create. Paths follow names, though, so the next save renders it back at its
+  slug.
+- **A removed file** deletes the workflow and its run history, as
+  `DeleteWorkflow` does, with a notification — never when the repository
+  lists no files at all (a reset or unreadable repo, not anyone's intent).
+
+New files and deletions are adopted only where the repository is the source
+of truth — the box, with `WORKSPACE_IMPORT_FROM_REPO` on (the default); with
+it `off` only edits to rendered files are. That goes further than the
+pipeline and transformation passes, which leave creation and deletion to the
+Console: a workflow holds no credentials and no data, only references, so a
+file in git is allowed to be the whole of it.
+
+**The write side** mirrors `TransformationService`: create, update,
+enable/disable and delete converge the repository on the request path, and a
+failed commit fails the save with the row put back. Saving a pipeline or a
+transformation re-renders the workflow files too (best-effort), because a
+renamed target moves its key and a deleted one takes its step with it. A save
+overwrites an out-of-band edit the sweep has not adopted yet and says so
+("Workflow file changed outside the Console"); the overwritten version stays
+in git history. A converge deletes only files that are provably a workflow's
+own (its id, or for an id-less hand-written file its name, belongs to a
+workflow this database has or just deleted), so a refused or not-yet-adopted
+file is never collected.
+
+**Loop safety.** Each mirror write and each adopted commit is recorded as the
+file's blob sha (`workflow_definition_renders`), so the next pass sees nothing
+foreign; re-rendering an adopted file into the canonical form is the mirror's
+own write and raises no drift.
 
 ## Worker contract
 
@@ -161,10 +250,14 @@ real outcome.
 
 ## PoC shortcuts and known gaps
 
-- **Not mirrored to git.** Pipelines and transformations live as files in the
-  box's repositories and the database is a cache over them; workflows are
-  rows only. A database rebuilt from the repositories loses them, and they do
-  not travel with an exported repository.
+- **Files: the edges.** Workflows that existed before the mirror are written
+  out at the next save of any workflow, pipeline or transformation (the
+  transformation mirror's bootstrap rule). A pipeline renamed *by a git edit*
+  leaves workflow files naming its old slug until the next save re-renders
+  them; editing such a file before then is refused with the old key named.
+  The once-per-commit guard for refused *new* files is in memory, so a restart
+  reports them again. Agents should prefer the API tools — see
+  [mcp.md](./mcp.md#authoring-a-workflow-tool-or-file).
 - **Linear only.** No branching, fan-out, conditional steps, retries per step,
   or parameters.
 - **Double runs.** A pipeline or transformation used as a step keeps its own

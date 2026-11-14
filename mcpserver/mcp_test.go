@@ -313,7 +313,8 @@ func TestMCP_WorkspaceStatus(t *testing.T) {
 	if p := out.Pipelines[0]; p.LastRunStatus != "failed" || !strings.Contains(p.LastError, "refused") || !strings.Contains(p.LastError, "[redacted]") {
 		t.Errorf("failed pipeline = %+v", p)
 	}
-	if w := out.Workflows[0]; !strings.HasPrefix(w.LastError, `step 1 (pipeline "orders") failed`) {
+	// The step's own error is dlt-shaped: its cause, not its preamble.
+	if w := out.Workflows[0]; !strings.HasPrefix(w.LastError, `step 1 (pipeline "orders") failed: connect `) || !strings.HasSuffix(w.LastError, "refused") {
 		t.Errorf("failed workflow = %+v", w)
 	}
 	if out.Transformations[0].LastError != "" {

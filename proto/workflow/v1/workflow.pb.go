@@ -122,9 +122,10 @@ type Workflow struct {
 	// Status of the most recent run ("pending", "running", "success",
 	// "failed"), empty if never run.
 	LastRunStatus string `protobuf:"bytes,11,opt,name=last_run_status,json=lastRunStatus,proto3" json:"last_run_status,omitempty"`
-	// When the most recent run failed: the first line of its error (the
-	// failed step's error, else the run's), at most 200 characters. Empty
-	// otherwise.
+	// When the most recent run failed: the line of its error that names the
+	// cause (introductory lines such as one ending in "exception:", and
+	// traceback frames, are skipped), from the failed step's error, else the
+	// run's; at most 200 characters. Empty otherwise.
 	LastRunError string `protobuf:"bytes,12,opt,name=last_run_error,json=lastRunError,proto3" json:"last_run_error,omitempty"`
 	// When the most recent run failed at a step: that step's zero-based
 	// position and name (snapshot at run time). Unset otherwise — position 0

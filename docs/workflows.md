@@ -49,8 +49,9 @@ Violations come back as `InvalidArgument` with one `FieldViolation` whose
 optional `enabled` to false. `SetWorkflowEnabled{id, enabled}` flips the flag
 without resending the definition (the Console toggle; MCP `update_workflow`
 uses it when only `enabled` is given). `ListWorkflows` / `GetWorkflow` carry,
-when the latest run failed, `last_run_error` (first line, at most 200
-characters, the failed step's error before the run's) and
+when the latest run failed, `last_run_error` (one line naming the cause, at
+most 200 characters, the failed step's error before the run's; see
+[one-line error summaries](#one-line-error-summaries)) and
 `last_failed_step_position` / `last_failed_step_name` — so a list row can say
 which step failed without a call of its own.
 
@@ -70,6 +71,20 @@ Authorization mirrors `TransformationService` method for method: user RPCs
 need an authenticated caller and act only on their workspace (another
 workspace's workflow is `NotFound`); worker RPCs are served on the internal
 port only, with a tenant-bound service token.
+
+### One-line error summaries
+
+`last_run_error`, the "workflow failed" notification body and MCP
+`workspace_status`'s `last_error` show one line of an error that may run to
+a traceback. It is `workspace.ErrorSummary`: the first non-empty line that is
+not merely an introduction — lines ending in `:` (dlt's "Pipeline execution
+failed at `step=extract` … with exception:", a traceback header, "The above
+exception was the direct cause of the following exception:"), a bare
+`<class '…'>` and indented traceback frames are skipped, so a chained Python
+traceback yields its innermost exception. Redaction (MCP) runs before it, the
+cut after it. The full text stays on the step run, and pipeline and
+transformation run notifications keep carrying it in full (the Console's bell
+scrolls a long body).
 
 ## Workflows as files
 
@@ -209,7 +224,7 @@ overwrites status, `completed_at` and `error_message`, keeps the stored
 a run id that already belongs to another workflow is refused (`NotFound`).
 Send the full step list every time; positions not sent are left as they were.
 The in-app "workflow failed" notification fires once, on the transition into
-`failed`; its body names the failed step and the first line of its error.
+`failed`; its body names the failed step and the summary line of its error.
 
 Error codes of `ReportWorkflowRun`, for the worker's retry decision:
 

@@ -72,7 +72,7 @@ func agentSQL(ctx context.Context, b Backends) SQLSafety {
 		return SQLSafety{EnforcedBy: "unknown"}
 	}
 	s := b.SQLSafety(ctx)
-	s.Detail = workspace.FirstLine(redactString(s.Detail), statusErrorLen)
+	s.Detail = workspace.ErrorSummary(redactString(s.Detail), statusErrorLen)
 	return s
 }
 
@@ -88,9 +88,9 @@ func (st *statusBuilder) add(items []statusItem, kind string, it statusItem, las
 	if it.LastRunStatus == runFailed && st.budget > 0 {
 		st.budget--
 		// Redact before cutting, so a cut cannot split a credential from
-		// the "@" that identifies it; the first line is the message, the
-		// rest is usually a traceback.
-		it.LastError = workspace.FirstLine(redactString(lastError()), statusErrorLen)
+		// the "@" that identifies it; the summary is the line naming the
+		// cause, the rest is usually a preamble or a traceback.
+		it.LastError = workspace.ErrorSummary(redactString(lastError()), statusErrorLen)
 	}
 	switch {
 	case it.LastRunStatus == runFailed:
@@ -164,7 +164,10 @@ func (st *statusBuilder) workflows(ctx context.Context, b WorkflowBackend) ([]st
 const runFailed = "failed"
 
 // workflowRunError names the failed step, which says more than the run's own
-// message alone.
+// message alone. The step's message is summarised (redacted first) before
+// the prefix goes on: dlt's first line is a preamble ending in "with
+// exception:", and summarising the prefixed text would skip the prefix with
+// it. add summarises again, which leaves a summary unchanged.
 func workflowRunError(r *workflowv1.WorkflowRun) string {
 	for _, sr := range r.StepRuns {
 		if sr.Status == runFailed {
@@ -172,6 +175,7 @@ func workflowRunError(r *workflowv1.WorkflowRun) string {
 			if msg == "" {
 				msg = r.ErrorMessage
 			}
+			msg = workspace.ErrorSummary(redactString(msg), statusErrorLen)
 			return fmt.Sprintf("step %d (%s %q) failed: %s", sr.Position+1, sr.Kind, sr.Name, msg)
 		}
 	}

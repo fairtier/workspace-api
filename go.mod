@@ -14,7 +14,7 @@ require (
 	github.com/MicahParks/jwkset v0.11.3
 	github.com/MicahParks/keyfunc/v3 v3.8.2
 	github.com/anthropics/anthropic-sdk-go v1.84.0
-	github.com/apache/arrow-go/v18 v18.8.0
+	github.com/apache/arrow-go/v18 v18.9.0
 	github.com/casdoor/casdoor-go-sdk v1.59.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.20.1
@@ -33,7 +33,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -43,10 +43,10 @@ require (
 	connectrpc.com/connect/v2 v2.0.1 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/RoaringBitmap/roaring/v2 v2.26.0 // indirect
-	github.com/andybalholm/brotli v1.2.7 // indirect
+	github.com/andybalholm/brotli v1.2.8 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/apache/iceberg-go v0.7.0 // indirect
-	github.com/apache/thrift v0.24.0 // indirect
+	github.com/apache/thrift v0.25.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.45.1 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.33.1 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.1 // indirect
@@ -72,7 +72,7 @@ require (
 	github.com/geoarrow/geoarrow-go v0.0.0-20260403143023-f54751c3e3a1 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/goccy/go-json v0.12.0 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
@@ -85,14 +85,14 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/klauspost/compress v1.20.2 // indirect
-	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
+	github.com/klauspost/compress v1.20.3 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.2 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-runewidth v0.0.28 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/pb33f/go-yaml v0.1.1 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.2 // indirect
-	github.com/pierrec/lz4/v4 v4.1.29 // indirect
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
@@ -102,8 +102,8 @@ require (
 	github.com/tidwall/gjson v1.20.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.2 // indirect
-	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/twmb/avro v1.8.0 // indirect
+	github.com/tidwall/sjson v1.2.7 // indirect
+	github.com/twmb/avro v1.9.0 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	github.com/twpayne/go-geom v1.6.1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
@@ -115,7 +115,7 @@ require (
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect

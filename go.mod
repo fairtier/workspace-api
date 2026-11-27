@@ -15,7 +15,7 @@ require (
 	github.com/MicahParks/keyfunc/v3 v3.9.2
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/apache/arrow-go/v18 v18.9.0
-	github.com/casdoor/casdoor-go-sdk v1.59.0
+	github.com/casdoor/casdoor-go-sdk v1.60.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/uuid v1.6.0
